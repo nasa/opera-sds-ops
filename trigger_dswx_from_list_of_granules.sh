@@ -1,12 +1,22 @@
 #! /bin/bash
 
-########################################################################
-# loop through HLS granules and submit download jobs for them          #
-#                   												   #
-# usage: ./trigger_dswx_from_list_of_granules.sh <hls list> [--dryrun] #
-# - hls_list is a list of HLS granules                                 #
-# - use --dryrun or -d to only print the command that will be run      #
-########################################################################
+# loop through HLS granules and submit download jobs for them 
+# 
+# usage: ./trigger_dswx_from_list_of_granules.sh <hls list> [--dryrun]
+# - hls_list is a list of HLS granules ids                     
+# - use --dryrun or -d to only print the command that will be run 
+#																
+# ex: ./trigger_dswx_from_list_of_granules.sh f	
+#   - where f is a file containing:	
+#										
+#		HLS.S30.T11SNT.2022335T182731.v2.0
+#		HLS.S30.T11SPS.2022335T182731.v2.0
+#		HLS.S30.T11SNS.2022335T182731.v2.0
+
+if [[ $# < 1 || $# > 2 ]]; then
+	sed -n '3,14p' $0
+	exit 1
+fi
 
 HLS_LIST=$1
 DRYRUN=false
