@@ -44,4 +44,4 @@ if __name__ == '__main__':
                 prods.add(prod)
 
     for prod in prods:
-        print(f's3://opera-pst-rs-pop1/products/{prod}/')
+        print(f's3://{RS_BUCKET}/products/{prod}/')
