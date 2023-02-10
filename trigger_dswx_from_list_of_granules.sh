@@ -24,7 +24,7 @@ if [[ $2 == "--dryrun" || $2 == "-d" ]]; then
 	DRYRUN=true
 fi
 
-RELEASE_VERSION="1.0.0-rc.7.0"
+RELEASE_VERSION="1.0.0-rc.8.0"
 
 for granule in $( cat $HLS_LIST ); do 
 
