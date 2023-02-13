@@ -40,4 +40,4 @@ logging.info(res)
 
 # Print the document IDs that were affected by the query
 doc_ids = [hit["_id"] for hit in res["hits"]["hits"]]
-print("Affected document IDs:", doc_ids)
+print(doc_ids)
