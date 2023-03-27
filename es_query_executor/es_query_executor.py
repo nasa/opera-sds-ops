@@ -34,14 +34,14 @@ with open(args.query_file, "r") as f:
 
 # Execute the query on Elasticsearch with specified index per action requested
 if (args.action == "search"):
-    res = es.search(index=args.index, body=query)
+    res = es.search(index=args.index, **query)
 
     # Log the detailed results
     logging.info(res)
 
     print("Affected documents:", res['hits']['total']['value'])
 elif (args.action == "delete"):
-    res = es.delete_by_query(index=args.index, body=query)
+    res = es.delete_by_query(index=args.index, **query)
 
     # Log the detailed results
     logging.info(res)
