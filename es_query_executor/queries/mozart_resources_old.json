@@ -1,0 +1,20 @@
+{
+    "query": {
+      "bool": {
+        "must": [
+          {
+            "match": {
+              "resource": ["task", "event", "worker"]
+            }
+          },
+          {
+            "range": {
+              "@timestamp": {
+                "lt": "now-7d/d"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }

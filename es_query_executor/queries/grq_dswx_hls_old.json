@@ -1,0 +1,20 @@
+{
+    "query": {
+      "bool": {
+        "must": [
+          {
+            "match": {
+              "metadata.accountability.L3_DSWx_HLS.input_data_type": ["L2_HLS_L30", "L2_HLS_S30"]
+            }
+          },
+          {
+            "range": {
+              "@timestamp": {
+                "lt": "now-14d/d"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }

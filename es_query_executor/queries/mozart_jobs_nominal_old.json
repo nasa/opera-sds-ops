@@ -1,0 +1,20 @@
+{
+    "query": {
+      "bool": {
+        "must": [
+          {
+            "match": {
+              "status": ["job-completed", "job-revoked", "job-deduped", "job-failed"]
+            }
+          },
+          {
+            "range": {
+              "@timestamp": {
+                "lt": "now-14d/d"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
