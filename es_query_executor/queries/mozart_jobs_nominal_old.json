@@ -1,20 +1,41 @@
 {
-    "query": {
-      "bool": {
-        "must": [
-          {
-            "match": {
-              "status": ["job-completed", "job-revoked", "job-deduped", "job-failed"]
-            }
-          },
-          {
-            "range": {
-              "@timestamp": {
-                "lt": "now-14d/d"
+  "query": {
+    "bool": {
+      "must": [
+        {
+          "bool": {
+            "should": [
+              {
+                "match": {
+                  "status": "job-completed"
+                }
+              },
+              {
+                "match": {
+                  "status": "job-revoked"
+                }
+              },
+              {
+                "match": {
+                  "status": "job-deduped"
+                }
+              },
+              {
+                "match": {
+                  "status": "job-failed"
+                }
               }
+            ]
+          }
+        },
+        {
+          "range": {
+            "@timestamp": {
+              "gt": "now-14d/d"
             }
           }
-        ]
-      }
+        }
+      ]
     }
   }
+}

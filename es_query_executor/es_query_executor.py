@@ -8,7 +8,7 @@ from elasticsearch import Elasticsearch
 
 # Set up configuration
 logging_level = logging.INFO
-log_folder = "es_query_executor"
+log_folder = "."
 
 # Set up command-line arguments
 parser = argparse.ArgumentParser()
