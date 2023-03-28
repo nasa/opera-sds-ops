@@ -22,7 +22,12 @@ This is a simple script meant to execute an Elasticsearch query specified in an 
 * Logs the transaction to a log file (daily)
 * Prints the number of documents affected by the query
   
-<!-- ☝️ Replace with a bullet-point list of your features ☝️ -->
+This script includes a number of pre-configured Elasticsearch queries described below:
+- [queries/mozart_jobs_nominal_old.json](queries/mozart_jobs_nominal_old.json) - (Mozart) if status in {completed, revoked, deduped, failed} AND creation timestamp > 14 days old 
+- [queries/mozart_jobs_failed_old.json](queries/mozart_jobs_failed_old.json) - (Mozart) if status = failed AND creation timestamp > 30 days old
+- [queries/mozart_resources_old.json](queries/mozart_resources_old.json) - (Mozart) if resource in {task, event, worker} AND creation timestamp > 7 days old 
+- [queries/grq_dswx_hls_old.json](queries/grq_dswx_hls_old.json) - (GRQ) if dataset in {L2_HLS_L30, L2_HLS_S30} AND creation timestamp > 14 days old 
+- [queries/grq_triaged_jobs_old.json](queries/grq_triaged_jobs_old.json) - (GRQ) triaged jobs dataset AND creation timestamp > 30 days old
 
 ## Contents
 
