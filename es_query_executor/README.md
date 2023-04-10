@@ -81,7 +81,8 @@ python es_query_executor.py --host [HOST] --index [ES_INDEX] --query_file [PATH_
 
 ## Frequently Asked Questions (FAQ)
 
-No questions yet. Propose a question to be added here by reaching out to our contributors! See support section below.
+Q: How do I change the logging level?
+A: Open the script `es_query_executor.py` and find the line marked `logging_level = logging.INFO` and change it to one of the values specified in https://docs.python.org/3/library/logging.html#logging-levels
 
 ## License
 

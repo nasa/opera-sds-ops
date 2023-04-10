@@ -33,22 +33,30 @@ with open(args.query_file, "r") as f:
     query = json.load(f)
 
 # Execute the query on Elasticsearch with specified index per action requested
+logging.info("Executing [" + args.action + "] with query file [" + args.query_file + "]")
 if (args.action == "search"):
     res = es.search(index=args.index, **query)
 
     # Log the detailed results
-    logging.info(res)
+    logging.debug(res)
 
-    print("Affected documents:", res['hits']['total']['value'])
+    # Log and print the confirmation info
+    confirm_message = "Found documents: " + str(res['hits']['total']['value'])
+    print(confirm_message)
+    logging.info(confirm_message)
 elif (args.action == "delete"):
     res = es.delete_by_query(index=args.index, **query)
 
     # Log the detailed results
-    logging.info(res)
+    logging.debug(res)
 
-    print("Affected documents:", res['deleted'])
+    # Log and print the confirmation info
+    confirm_message = "Affected documents: " + str(res['deleted'])
+    print(confirm_message)
+    logging.info(confirm_message)
 else:
-    print("Invalid --action value. Choose from 'search' or 'delete'")
+    print("Invalid --action value [" + args.action + "]. Choose from 'search' or 'delete'")
+    logging.critical("Invalid --action value [" + args.action + "]. Choose from 'search' or 'delete'")
     sys.exit(1)
 
 
