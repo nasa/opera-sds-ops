@@ -1,14 +1,17 @@
 import argparse
 import json
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import sys
 from datetime import datetime
 
 from elasticsearch import Elasticsearch
 
-# Set up configuration
+# Set up logging configuration
 logging_level = logging.INFO
-log_folder = "."
+logging_formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+logging_file = 'es_query_executor.log'
+logging_num_backup_files = 14 # means keep 14 days of logs
 
 # Set up command-line arguments
 parser = argparse.ArgumentParser()
@@ -19,11 +22,11 @@ parser.add_argument("--action", help="Action to invoke for query, i.e. 'search' 
 args = parser.parse_args()
 
 # Set up logging to a rolling file, within a new logs sub-folder
-logging.basicConfig(
-    filename=f"{log_folder}/{datetime.now().strftime('%Y%m%d')}.log",
-    level=logging_level,
-    format="%(asctime)s %(message)s"
-)
+logging_handler = TimedRotatingFileHandler(logging_file, when='midnight', backupCount=logging_num_backup_files)
+logging_handler.setFormatter(logging_formatter)
+logger = logging.getLogger()
+logger.addHandler(logging_handler)
+logger.setLevel(logging_level)
 
 # Connect to Elasticsearch
 es = Elasticsearch([args.host])
