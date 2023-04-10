@@ -35,7 +35,7 @@ with open(args.query_file, "r") as f:
 # Execute the query on Elasticsearch with specified index per action requested
 logging.info("Executing [" + args.action + "] with query file [" + args.query_file + "]")
 if (args.action == "search"):
-    res = es.search(index=args.index, **query)
+    res = es.search(index=args.index, body=query)
 
     # Log the detailed results
     logging.debug(res)
@@ -45,7 +45,7 @@ if (args.action == "search"):
     print(confirm_message)
     logging.info(confirm_message)
 elif (args.action == "delete"):
-    res = es.delete_by_query(index=args.index, **query)
+    res = es.delete_by_query(index=args.index, body=query)
 
     # Log the detailed results
     logging.debug(res)
