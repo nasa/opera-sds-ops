@@ -23,11 +23,13 @@ This is a simple script meant to execute an Elasticsearch query specified in an 
 * Prints the number of documents affected by the query
   
 This script includes a number of pre-configured Elasticsearch queries described below:
-- [queries/mozart_jobs_nominal_old.json](queries/mozart_jobs_nominal_old.json) - (Mozart) if status in {completed, revoked, deduped, failed} AND creation timestamp > 14 days old 
-- [queries/mozart_jobs_failed_old.json](queries/mozart_jobs_failed_old.json) - (Mozart) if status = failed AND creation timestamp > 30 days old
-- [queries/mozart_resources_old.json](queries/mozart_resources_old.json) - (Mozart) if resource in {task, event, worker} AND creation timestamp > 7 days old 
-- [queries/grq_dswx_hls_old.json](queries/grq_dswx_hls_old.json) - (GRQ) if dataset in {L2_HLS_L30, L2_HLS_S30} AND creation timestamp > 14 days old 
-- [queries/grq_triaged_jobs_old.json](queries/grq_triaged_jobs_old.json) - (GRQ) triaged jobs dataset AND creation timestamp > 30 days old
+- [queries/mozart/job_status-current/jobs_nominal_old.json](queries/mozart/job_status-current/jobs_nominal_old.json) - (Mozart) if status in {completed, revoked, deduped, failed} AND creation timestamp > 14 days old 
+- [queries/mozart/job_status-current/jobs_failed_old.json](queries/mozart/job_status-current/jobs_failed_old.json) - (Mozart) if status = failed AND creation timestamp > 30 days old
+- [queries/mozart/task_status-current/resources_old.json](queries/mozart/task_status-current/resources_old.json) - (Mozart) if resource in {task, event, worker} AND creation timestamp > 7 days old 
+- [queries/grq/grq_v1.0_l3_dswx_hls/old.json](queries/grq_v1.0_l3_dswx_hls/old.json) - (GRQ) if dataset in {L2_HLS_L30, L2_HLS_S30} AND creation timestamp > 14 days old 
+- [queries/grq/grq_v2.0_l2_hls_l30/old.json](queries/grq_v2.0_l2_hls_l30/old.json) - (GRQ) if dataset L2_HLS_L30 AND creation timestamp > 14 days old 
+- [queries/grq/grq_v2.0_l2_hls_s30/old.json](queries/grq_v2.0_l2_hls_s30/old.json) - (GRQ) if dataset L2_HLS_S30 AND creation timestamp > 14 days old 
+- [queries/grq/grq_v1.1.10_triaged_job/old.json](queries/grq_v1.1.10_triaged_job/old.json) - (GRQ) triaged jobs dataset AND creation timestamp > 30 days old
 
 ## Contents
 
@@ -48,7 +50,7 @@ This guide provides a quick way to get started with our project.
 
 ### Requirements
 
-* Python 2.7+
+* Python 3.9+
 * Elasticsearch Python SDK 
 * Elasticsearch 7+
   
