@@ -37,14 +37,14 @@ with open(args.query_file, "r") as f:
 
 # Execute the query on Elasticsearch with specified index per action requested
 logging.info("Executing [" + args.action + "] with query file [" + args.query_file + "]")
-if (args.action == "search"):
-    res = es.search(index=args.index, body=query)
+if (args.action == "count"):
+    res = es.count(index=args.index, body=query)
 
     # Log the detailed results
     logging.debug(res)
 
     # Log and print the confirmation info
-    confirm_message = "Found documents: " + str(res['hits']['total']['value'])
+    confirm_message = "Found documents: " + str(res['count'])
     print(confirm_message)
     logging.info(confirm_message)
 elif (args.action == "delete"):
@@ -58,8 +58,8 @@ elif (args.action == "delete"):
     print(confirm_message)
     logging.info(confirm_message)
 else:
-    print("Invalid --action value [" + args.action + "]. Choose from 'search' or 'delete'")
-    logging.critical("Invalid --action value [" + args.action + "]. Choose from 'search' or 'delete'")
+    print("Invalid --action value [" + args.action + "]. Choose from 'count' or 'delete'")
+    logging.critical("Invalid --action value [" + args.action + "]. Choose from 'count' or 'delete'")
     sys.exit(1)
 
 

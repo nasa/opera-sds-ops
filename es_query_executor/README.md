@@ -18,11 +18,11 @@ This is a simple script meant to execute an Elasticsearch query specified in an 
 ## Features
 
 * Contains static set of pre-configured Elasticsearch queries for the HySDS system
-* Executes static queries against a specified Elasticsearch instance, either in "search" mode (find docs) or "delete" mode (delete docs)
+* Executes static queries against a specified Elasticsearch instance, either in "count" mode (find docs) or "delete" mode (delete docs)
 * Logs the transaction to a log file (daily)
 * Prints the number of documents affected by the query
   
-This script includes a number of pre-configured Elasticsearch queries described below:
+This script includes a number of pre-configured Elasticsearch queries described below. Note the folder structure: `queries/[mozart|grq]/[index_name]/*.json`
 - [queries/mozart/job_status-current/jobs_nominal_old.json](queries/mozart/job_status-current/jobs_nominal_old.json) - (Mozart) if status in {completed, revoked, deduped, failed} AND creation timestamp > 14 days old 
 - [queries/mozart/job_status-current/jobs_failed_old.json](queries/mozart/job_status-current/jobs_failed_old.json) - (Mozart) if status = failed AND creation timestamp > 30 days old
 - [queries/mozart/task_status-current/resources_old.json](queries/mozart/task_status-current/resources_old.json) - (Mozart) if resource in {task, event, worker} AND creation timestamp > 7 days old 
@@ -65,7 +65,7 @@ This guide provides a quick way to get started with our project.
 ### Run Instructions
 
 ```
-python es_query_executor.py --host [HOST] --index [ES_INDEX] --query_file [PATH_TO_QUERY_FILE] --action [search|delete]
+python es_query_executor.py --host [HOST] --index [ES_INDEX] --query_file [PATH_TO_QUERY_FILE] --action [count|delete]
 ```
 
 <!-- ☝️ Replace with a numbered list of your run instructions, including expected results ☝️ -->
@@ -74,17 +74,23 @@ python es_query_executor.py --host [HOST] --index [ES_INDEX] --query_file [PATH_
 
 * Search for old Mozart jobs considered nominal, print the number of docs found and log the results to a log file
   ```
-  python es_query_executor.py --host http://localhost:9200 --index job_status-current --query_file queries/mozart_jobs_nominal_old.json --action search
+  python es_query_executor.py --host http://localhost:9200 --index job_status-current --query_file queries/mozart/job_status-current/jobs_nominal_old.json --action count
   ```
 * Delete / clean-up old Mozart jobs considered nominal, print the number of docs deleted and log the results of the transaction to a log file
   ```
-  python es_query_executor.py --host http://localhost:9200 --index job_status-current --query_file queries/mozart_jobs_nominal_old.json --action delete
+  python es_query_executor.py --host http://localhost:9200 --index job_status-current --query_file queries/mozart/job_status-current/jobs_nominal_old.json --action delete
   ```  
 
 ## Frequently Asked Questions (FAQ)
 
 Q: How do I change the logging level?
 A: Open the script `es_query_executor.py` and find the line marked `logging_level = logging.INFO` and change it to one of the values specified in https://docs.python.org/3/library/logging.html#logging-levels
+
+Q: How do I know which index to specify for a given query file when using the `--index` parameter?
+A: The archive query files have a folder structure that embeds the index name within their paths, i.e. `queries/[mozart|grq]/[index_name]/*.json`.
+
+Q: How do I add a new query file?
+A: Create a new Elasticsearch-compliant JSON query body, place it in a file and put that file within this repository's folder for queries - paying close attention to the folder structure as it is relevant for your query. Example: `queries/[mozart|grq]/[index_name]/my_new_query.json`.
 
 ## License
 
