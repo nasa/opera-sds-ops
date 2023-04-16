@@ -103,7 +103,7 @@ To ensure not errors when running the crontab, you may need to customize:
 Q: How do I change the logging level?
 A: Open the script `es_query_executor.py` and find the line marked `logging_level = logging.INFO` and change it to one of the values specified in https://docs.python.org/3/library/logging.html#logging-levels
 
-Q: How do I know which index to specify for a given query file when using the `--index` parameter?
+Q: How do I know which index a query file is going to be run against?
 A: The archive query files have a folder structure that embeds the index name within their paths, i.e. `queries/[index_name]/*.json`.
 
 Q: How do I add a new query file?
