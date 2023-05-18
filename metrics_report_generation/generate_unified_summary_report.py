@@ -60,11 +60,11 @@ PT_COLS = ['OPERA Product Short Name',
 #        files.  That would make it robust against files having overlapping
 #        coverages (e.g. mixing weekly reports with daily reports, or if a daily
 #        report gets double-loaded somehow).
-def read_all_csv_files(pattern, skip=0):
-    """Read all CSV files matching the given pattern.
+def read_all_csv_files(all_files, skip=0):
+    """Read all CSV files in `all_files`, and combine into a single dataframe.
 
     Args:
-        pattern (str): Pattern for matching CSV files.
+        all_files (list): List of strings, where each is a path to a CSV file to ingest.
         skip (int): Number of rows to skip while reading the CSV files.
 
     Returns:
@@ -72,8 +72,6 @@ def read_all_csv_files(pattern, skip=0):
         start (datetime.datetime): Earliest date and time among all files.
         end (datetime.datetime): Latest date and time among all files.
     """
-    all_files = glob.glob(pattern)
-
     df = pd.DataFrame()
 
     start = datetime.datetime(3000, 1, 1)
@@ -346,12 +344,12 @@ def calculate_mean(sub_df, column='Retrieval Time'):
 
 
 
-def generate_retrieval_time_report(pattern, column='Retrieval Time', skip=0, save_unified_detailed_report=True, outdir='.'):
+def generate_retrieval_time_report(input_list, column='Retrieval Time', skip=0, save_unified_detailed_report=True, outdir='.'):
     """
-    Generates a retrieval time summary report based on detailed retrieval time reports identified by the provided pattern string (for use with the `glob` module).
+    Generates a retrieval time summary report based on detailed retrieval time reports identified by the `input_list`.
 
     Args:
-        pattern (str): A pattern specifying the CSV files to read.  Will be parsed by `glob` to get a list of files to ingest.
+        input_list (list): List of strings, where each is a path to a CSV file to ingest.
         column (str, optional): The column name representing the retrieval time. Defaults to 'Retrieval Time'.
         skip (int, optional): The number of rows to skip when reading the CSV files. Defaults to 0.
         save_unified_detailed_report (bool, optional): Flag indicating whether to save the detailed retrieval time report.
@@ -362,7 +360,7 @@ def generate_retrieval_time_report(pattern, column='Retrieval Time', skip=0, sav
         pandas.DataFrame: The summary DataFrame containing retrieval time statistics.
 
     """
-    df, start, end = read_all_csv_files(pattern, skip)
+    df, start, end = read_all_csv_files(input_list, skip)
 
     gen_datetime_utc = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
     fname_format_str = '%Y-%m-%dT%H%M%S'
@@ -438,6 +436,7 @@ def generate_retrieval_time_report(pattern, column='Retrieval Time', skip=0, sav
                                                                                  'L3_DSWx_HLS',
                                                                                  'L2_HLS_L30',
                                                                                  column='Retrieval Time',
+                                                                                 outdir=outdir,
     )
     
     sub_df_in = df.loc[(df['OPERA Product Short Name'] == 'L3_DSWx_HLS') & (df['Input Product Type'] == 'L2_HLS_S30')]
@@ -460,6 +459,7 @@ def generate_retrieval_time_report(pattern, column='Retrieval Time', skip=0, sav
                                                                                  'L3_DSWx_HLS',
                                                                                  'L2_HLS_S30',
                                                                                  column='Retrieval Time',
+                                                                                 outdir=outdir,
     )
     
     sub_df_in = df.loc[(df['OPERA Product Short Name'] == 'L3_DSWx_HLS')]
@@ -482,6 +482,7 @@ def generate_retrieval_time_report(pattern, column='Retrieval Time', skip=0, sav
                                                                                  'L3_DSWx_HLS',
                                                                                  'ALL',
                                                                                  column='Retrieval Time',
+                                                                                 outdir=outdir,
     )
 
     
@@ -506,12 +507,12 @@ def generate_retrieval_time_report(pattern, column='Retrieval Time', skip=0, sav
 
 
 # TODO:  this function is essentially a copy of the one above.  Probably a way to consolidate without too much complication/abstraction.
-def generate_production_time_report(pattern, column='Production Time', skip=0, save_unified_detailed_report=True, outdir='.'):
+def generate_production_time_report(input_list, column='Production Time', skip=0, save_unified_detailed_report=True, outdir='.'):
     """
-    Generates a production time summary report based on detailed production time reports identified by the provided pattern string (for use with the `glob` module).
+    Generates a production time summary report based on detailed production time reports identified by the `input_list`.
 
     Args:
-        pattern (str): A pattern specifying the CSV files to read.  Will be parsed by `glob` to get a list of files to ingest.
+        input_list (list): List of strings, where each is a path to a CSV file to ingest.
         column (str, optional): The column name representing the production time. Defaults to 'Production Time'.
         skip (int, optional): The number of rows to skip when reading the CSV files. Defaults to 0.
         save_unified_detailed_report (bool, optional): Flag indicating whether to save the detailed retrieval time report.
@@ -522,7 +523,7 @@ def generate_production_time_report(pattern, column='Production Time', skip=0, s
         pandas.DataFrame: The summary DataFrame containing retrieval time statistics.
 
     """
-    df, start, end = read_all_csv_files(pattern, skip)
+    df, start, end = read_all_csv_files(input_list, skip)
 
     gen_datetime_utc = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
     fname_format_str = '%Y-%m-%dT%H%M%S'
@@ -576,6 +577,7 @@ def generate_production_time_report(pattern, column='Production Time', skip=0, s
                                                                                   end.strftime("%Y-%m-%dT%H:%M:%SZ"),
                                                                                   'L3_DSWx_HLS',
                                                                                   column='Production Time',
+                                                                                  outdir=outdir,
     )
 
     # This goes in the metadata header of the CSV
@@ -615,18 +617,21 @@ if __name__ == '__main__':
         # Make this one directory up from PATTERN
         outdir = osp.dirname(osp.abspath(osp.dirname(args.pattern)))
 
+    # Use glob on the provided pattern to generate the list of inputs
+    input_files = glob.glob(args.pattern)
+
     if args.report_type == 'rt':
         if args.col is None:
             args.col = 'Retrieval Time'
         
-        generate_retrieval_time_report(args.pattern, args.col, args.skip, outdir)
+        generate_retrieval_time_report(input_files, args.col, args.skip, outdir=outdir)
 
         
     if args.report_type == 'pt':
         if args.col is None:
             args.col = 'Production Time'
 
-        generate_production_time_report(args.pattern, args.col, args.skip, outdir)
+        generate_production_time_report(input_files, args.col, args.skip, outdir=outdir)
 
         
 
