@@ -19,11 +19,6 @@
                 "match": {
                   "status": "job-deduped"
                 }
-              },
-              {
-                "match": {
-                  "status": "job-failed"
-                }
               }
             ]
           }
