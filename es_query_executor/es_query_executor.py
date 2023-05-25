@@ -35,8 +35,8 @@ es = Elasticsearch([args.host])
 # Extract the index name out of the query file folder structure
 query_file_path_components = os.path.normpath(args.query_file).split(os.sep)
 query_file_path_folders = [component for component in query_file_path_components if component]
-if (len(query_file_path_folders) == 3):
-    index_name = query_file_path_folders[1] # always at index position two given expected folder structure
+if (len(query_file_path_folders) >= 3):
+    index_name = query_file_path_folders[-2] # always at index position two given expected folder structure
 else:
     error_msg = "Invalid --query_file value [" + args.query_file + "]. Must follow expected folder structure: `queries/[index_name]/*.json`"
     print(error_msg)
