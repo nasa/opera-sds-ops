@@ -58,7 +58,8 @@ with open(file+".result.csv", "w") as outfile:
             outfile.write(id+',')
             for sr in events.subs_revisions:
                 timedelta_secs = (sr - events.initial_revision).total_seconds()
-                outfile.write(str(timedelta_secs))
+                timedelta_mins = round(timedelta_secs / 60)
+                outfile.write(str(timedelta_mins))
                 outfile.write(',')
             outfile.write('\n')
             #print(id)
