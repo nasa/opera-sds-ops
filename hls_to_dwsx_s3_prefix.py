@@ -21,7 +21,7 @@ def format_prefix(hls_id):
     date_str = date.strftime('%Y%m%d') + time_of_day
     
     # filename subject to change during cal/val
-    return f'products/OPERA_L3_DSWx-HLS_{tile}_{date_str}Z_'   
+    return f'products/DSWx_HLS/OPERA_L3_DSWx-HLS_{tile}_{date_str}Z_'   
 
 
 if __name__ == '__main__':
@@ -40,8 +40,8 @@ if __name__ == '__main__':
             prefix = format_prefix(hls)
 
             for obj in bucket.objects.filter(Prefix=prefix):
-                prod = obj.key.split('/')[1] # just want prefix, not individual files
+                prod = obj.key.split('/')[2] # just want prefix, not individual files
                 prods.add(prod)
 
     for prod in prods:
-        print(f's3://{RS_BUCKET}/products/{prod}/')
+        print(f's3://{RS_BUCKET}/products/DSWx_HLS/{prod}/')
