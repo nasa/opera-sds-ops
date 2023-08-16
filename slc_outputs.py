@@ -41,62 +41,25 @@ def get_body(slc) -> dict:
     }
 
 
-# TODO
-def gt_timestamp(doc, ts):
-    '''
-    parse filename in output filename and
-        - return True if product is older than given timestamp
-        - return False otherwise
-    '''
-    pass
-
-
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='get output products from list of SLC granules')
     parser.add_argument('file')
-    parser.add_argument('-s', 
-                        '-start-time', 
-                        required=False, 
-                        help='filter by processing start time')
-    parser.add_argument('-v', 
-                        '--verbose',
-                        required=False,
-                        action='store_true',
-                        help='verbose mode')
-    parser.add_argument('--missing-only',
-                        required=False,
-                        default=False,
-                        action='store_true',
-                        help='only output SLC inputs with no downstream products')
     args = parser.parse_args()
 
     with open(args.file, 'r') as f:
-
-        docs = []
         for granule in f.readlines():
-            
             granule = granule.strip('\n')
             body = get_body(granule)
-
-            if args.verbose:
-                print(f'\n>>> {granule}: ')
-
-            # indices should be parameterized 
-            cslc_res = es.search(index='grq_v0.1_l2_cslc_s1', body=body, size=500)
-            # rtc_res = es.search(index='grq_v0.1_l2_rtc_s1', body=body, size=500)
-            # res = cslc_res['hits']['hits'] + rtc_res['hits']['hits']
-            res = cslc_res['hits']['hits']
-
-            # print SLC if no products asssociated with it and missing-only flag set
-            if args.missing_only:
-                if len(res) == 0:
-                    print(granule)
-                continue
-            
-            docs.extend(res)
-
-            for hit in docs:
+            # print(f'>>> {granule}: ')
+            # cslc_res = es.search(index='grq_v0.0_l2_cslc_s1', body=body, size=500)
+            rtc_res = es.search(index='grq_v0.4_l2_rtc_s1', body=body, size=500)
+            # for hit in cslc_res['hits']['hits']:
+            #     print(hit['_id'])
+            for hit in rtc_res['hits']['hits']:
                 print(hit['_id'])
+            # if len(rtc_res['hits']['hits']) == 0:
+                # print(granule)
+            # print()
 
 
