@@ -7,7 +7,7 @@ import multiprocessing as mp
 
 RS_BUCKET = 'opera-pst-rs-pop1'
 PREFIXES = {
-    'cslc' : 'products/CSLC_S1/OPERA_L2_CSLC-S1A_IW_',
+    'cslc' : 'products/CSLC_S1/OPERA_L2_CSLC-S1-STATIC_',
     'rtc'  : 'products/RTC_S1/' 
 }
 
@@ -20,12 +20,13 @@ def get_burst_ids(product_type : str, version : str) -> Set[str]:
     burst_ids = set()
     
     for obj in bucket.objects.filter(Prefix=PREFIXES.get(product_type)):
-        
-        prod = obj.key.split('/')[2]
-        prod_version = prod[58:61]
-        burst_id = prod[21:36]
 
-        if prod_version == version and 'static_layers' in prod:
+
+        prod = obj.key.split('/')[2]
+        prod_version = prod[71:74]
+        burst_id = prod[24:39]
+
+        if prod_version == version:
             burst_ids.add(burst_id)
 
     return burst_ids
@@ -62,14 +63,15 @@ def cleanup(product_type : str, version : str, burst_id : str, dryrun : bool) ->
 
     for obj in bucket.objects.filter(Prefix=prefix):
         prod = obj.key.split('/')[2]
-        prd_version = prod[58:61]
+        prd_version = prod[71:74]
 
-        if prd_version == version and 'static_layers' in prod:
+        if prd_version == version:
             static_layers.add(path.join(prefix_path, prod))
 
     static_layers = list(static_layers)
-    sort = lambda prod : prod[79:95]
+    sort = lambda prod : prod[66:81]
     static_layers.sort(key=sort)
+
 
     for prefix in static_layers[:-1]:
         if args.dryrun:
@@ -77,7 +79,6 @@ def cleanup(product_type : str, version : str, burst_id : str, dryrun : bool) ->
         else:
             bucket.objects.filter(Prefix=prefix).delete()
 
-    print()
     print(f'KEEP: {static_layers[-1]}')
 	
 if __name__ == '__main__':
@@ -87,7 +88,7 @@ if __name__ == '__main__':
                         choices=['cslc', 'rtc'], 
                         help='static layer product type')
     parser.add_argument('version', 
-                        choices=['0.0', '0.1'], 
+                        choices=['0.0', '0.1', '0.2'], 
                         help='static layer version number')
     parser.add_argument('--file',
                         required=False,
@@ -104,7 +105,6 @@ if __name__ == '__main__':
     else:
         burst_ids = get_burst_ids(args.product_type, args.version)
 
-    # TODO: this step should be parallelized 
+    # # TODO: this step should be parallelized 
     for burst_id in burst_ids:
         cleanup(args.product_type, args.version, burst_id, args.dryrun)
-        break
