@@ -34,6 +34,7 @@ if [[ $2 == "--dryrun" || $2 == "-d" ]]; then
 fi
 
 RELEASE_VERSION="2.0.0"
+processing_mode=""
 
 for granule in $( cat $LIST ); do 
 
@@ -53,11 +54,13 @@ for granule in $( cat $LIST ); do
 	## SLC PROCESSING
 	elif [[ ${granule:0:3} == "S1A" ]]; then
 		collection="SENTINEL-1A_SLC"
+		processing_mode="--processing-mode=reprocessing"
 		job_queue="opera-job_worker-slc_data_download"
 		granule+="*"
 	
 	elif [[ ${granule:0:3} == "S1B" ]]; then
                 collection="SENTINEL-1B_SLC"
+		processing_mode="--processing-mode=reprocessing"
 		job_queue="opera-job_worker-slc_data_download"
 		granule+="*"
 
@@ -67,9 +70,9 @@ for granule in $( cat $LIST ); do
 
 
 	if $DRYRUN; then
-		echo "~/mozart/ops/opera-pcm/data_subscriber/daac_data_subscriber.py query -c $collection --release-version=$RELEASE_VERSION --job-queue=$job_queue --chunk-size=1 --native-id=$granule"
+		echo "~/mozart/ops/opera-pcm/data_subscriber/daac_data_subscriber.py query -c $collection $processing_mode --release-version=$RELEASE_VERSION --job-queue=$job_queue --chunk-size=1 --native-id=$granule"
 	else
-		~/mozart/ops/opera-pcm/data_subscriber/daac_data_subscriber.py query -c $collection  --release-version=$RELEASE_VERSION --job-queue=$job_queue --chunk-size=1 --native-id=$granule
+		~/mozart/ops/opera-pcm/data_subscriber/daac_data_subscriber.py query -c $collection $processing_mode --release-version=$RELEASE_VERSION --job-queue=$job_queue --chunk-size=1 --native-id=$granule
 	fi
 
 done
