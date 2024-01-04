@@ -47,15 +47,15 @@ class StaticLayersValidator:
         Driver method to execute the validation
         """
 
-        burst_id_to_slc_frame_from_file = self._getBurstIdsFromFile()
+        burst_id_to_slc_frame_from_file = self._get_burst_ids_from_file()
 
-        burst_id_to_static_layer = self._getBurstIdsFromCMR()
+        burst_id_to_static_layer = self._get_burst_ids_from_cmr()
 
-        self._identifyDuplicateStaticLayers(burst_id_to_static_layer)
+        self._identify_duplicate_static_layers(burst_id_to_static_layer)
 
-        self._identifyMissingBurstsAndFrames(burst_id_to_slc_frame_from_file, burst_id_to_static_layer)
+        self._identify_missing_bursts_and_frames(burst_id_to_slc_frame_from_file, burst_id_to_static_layer)
 
-    def _getBurstIdsFromFile(self) -> dict:
+    def _get_burst_ids_from_file(self) -> dict:
         """
         Method to read the list of static bursts IDs that should have been generated.
         The burst list is retrieved from GitHub.
@@ -81,7 +81,7 @@ class StaticLayersValidator:
 
         return burst_id_to_slc_frame
 
-    def _getBurstIdsFromCMR(self) -> dict:
+    def _get_burst_ids_from_cmr(self) -> dict:
         """
         Method to query CMR for all the static layer granules in the given collection,
         and parse the burst ids from them.
@@ -109,7 +109,8 @@ class StaticLayersValidator:
 
         return burst_id_to_static_layer
 
-    def _identifyDuplicateStaticLayers(self, burst_id_to_static_layer):
+    @staticmethod
+    def _identify_duplicate_static_layers(burst_id_to_static_layer):
         """
         Method to count and identify how many static layers in CMR correspond to the same burst ID.
         These may be due to computing the static layer with input SLC granule from S1A and S1B.
@@ -130,7 +131,7 @@ class StaticLayersValidator:
                         logging.info("\tStatic Layer Granule: %s" % g)
         logging.info("# of bursts IDs with duplicate static layers: %d" % num_duplicates)
 
-    def _identifyMissingBurstsAndFrames(self, burst_id_to_slc_frame_from_file, burst_id_to_static_layer):
+    def _identify_missing_bursts_and_frames(self, burst_id_to_slc_frame_from_file, burst_id_to_static_layer):
         """
         Method to compare the list of static layers that should have been generated
         to the static layers in CMR and identify any missing bursts and frames.
@@ -183,4 +184,3 @@ if __name__ == "__main__":
 
     validator = StaticLayersValidator(args.product)
     validator.main()
-
