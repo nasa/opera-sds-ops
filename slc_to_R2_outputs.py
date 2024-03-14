@@ -51,13 +51,14 @@ if __name__ == '__main__':
         for granule in f.readlines():
             granule = granule.strip('\n')
             body = get_body(granule)
-            # print(f'>>> {granule}: ')
+            print(f'>>> {granule}: ')
             # cslc_res = es.search(index='grq_v0.0_l2_cslc_s1*', body=body, size=500)
             rtc_res = es.search(index='grq_v0.4_l2_rtc_s1*', body=body, size=500)
             # for hit in cslc_res['hits']['hits']:
             #     print(hit['_id'])
-            for hit in rtc_res['hits']['hits']:
-                print(hit['_id'])
+            # for hit in rtc_res['hits']['hits']:
+            #     print(hit['_id'])
+            print(len(rtc_res['hits']['hits']))
             # if len(rtc_res['hits']['hits']) == 0:
                 # print(granule)
             # print()

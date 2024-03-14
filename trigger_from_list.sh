@@ -14,7 +14,7 @@
 #		S1A_IW_SLC__1SDV_20170213T122240_20170213T122309_015265_019030_32C3
 #   - where release is the PCM release version such as 2.0.0-rc.10.0
 
-if [[ $# < 2 || $# > 3 ]]; then
+if [[ $# < 1 || $# > 3 ]]; then
 	sed -n '3,14p' $0
 	exit 1
 fi
@@ -29,9 +29,12 @@ bad_granule () {
 source /export/home/hysdsops/.bash_profile
 
 LIST=$1
-RELEASE_VERSION=$2
+#RELEASE_VERSION=$2
+RELEASE_VERSION="3.0.0"
+
+
 DRYRUN=false
-if [[ $3 == "--dryrun" || $3 == "-d" ]]; then
+if [[ $2 == "--dryrun" || $3 == "-d" ]]; then
 	DRYRUN=true
 fi
 
