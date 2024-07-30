@@ -60,8 +60,8 @@ def check_slc(slc) -> dict:
 
 
 RTC_INDEX = 'grq_v1.0_l2_rtc_s1-*'
-CSLC_INDEX = 'grq_v1.0_l2_cslc_s1-2023.10'
-SLC_INDEX = 'grq_1_l1_s1_slc-2024.04'
+CSLC_INDEX = 'grq_v1.0_l2_cslc_s1-2024*'
+SLC_INDEX = 'grq_1_l1_s1_slc-2024*'
 
 
 if __name__ == '__main__':
