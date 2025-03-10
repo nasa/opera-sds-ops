@@ -108,7 +108,7 @@ def find_missing_granules(granule_list, bucket='opera-int-rs-pop1', output_file=
         # print("checking granule: ", granule)
         # get s3 prefix
         prefix = get_prefix(granule)
-        s3_found = check_granule_s3(granule, prefix)
+        s3_found = check_granule_s3(granule, prefix, bucket=bucket)
 
         grq_found = check_granule_grq(granule, venue=venue)
 
