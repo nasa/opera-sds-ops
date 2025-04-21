@@ -1,0 +1,8 @@
+requests
+mgrs
+shapely
+pyproj
+geopandas
+matplotlib
+contextily
+folium
