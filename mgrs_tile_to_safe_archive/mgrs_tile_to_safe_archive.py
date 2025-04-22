@@ -9,26 +9,36 @@ import folium
 from folium.plugins import MarkerCluster
 
 # === INPUT PARAMETERS ===
-# === INPUT PARAMETERS ===
 # Define a dictionary of MGRS tiles over the U.S. with descriptions
 mgrs_tiles = {
-    "11SLT": "Southern California (Los Angeles)",
-    "15TWL": "Midwest (Minnesota)",
-    "13SDA": "Colorado (Denver)",         # ✅ Replaces 14SPT
-    "17RMP": "Florida (Orlando)",         # ✅ Replaces 17SPQ
-    "18SUJ": "Mid-Atlantic (Washington, D.C.)",
-    "16TDM": "Texas (Dallas)",
-    "12SVC": "Arizona (Phoenix)",
-    "10TET": "Oregon (Portland)",
-    "19TCE": "Northeast (Boston)",
+    "35LKG": "35LKG", "43WFS": "43WFS", "19QBB": "19QBB", "18UXA": "18UXA", "22KDG": "22KDG",
+    "30NTN": "30NTN", "48MYC": "48MYC", "33KYQ": "33KYQ", "37MEV": "37MEV", "50UQD": "50UQD",
+    "36PYQ": "36PYQ", "54KVE": "54KVE", "30STE": "30STE", "22MHC": "22MHC", "18SUG": "18SUG",
+    "48PUS": "48PUS", "43VDJ": "43VDJ", "16PFA": "16PFA", "22MCB": "22MCB", "18NYK": "18NYK",
+    "19PFK": "19PFK", "13SER": "13SER", "20UPE": "20UPE", "18NUL": "18NUL", "19MBR": "19MBR",
+    "21LZC": "21LZC", "33LXE": "33LXE", "52LHL": "52LHL", "37VEK": "37VEK", "30PXT": "30PXT",
+    "51UWQ": "51UWQ", "44WME": "44WME", "34LFR": "34LFR", "44QPF": "44QPF", "49MET": "49MET",
+    "30TVM": "30TVM", "37MBN": "37MBN", "14SMF": "14SMF", "10TES": "10TES", "14SMJ": "14SMJ",
+    "21KVT": "21KVT", "20LKH": "20LKH", "20LQK": "20LQK", "47NRA": "47NRA", "15QZC": "15QZC",
+    "21KTU": "21KTU", "22LDL": "22LDL", "21KTQ": "21KTQ", "16QDJ": "16QDJ", "48MWC": "48MWC",
+    "36VVM": "36VVM", "37VCG": "37VCG", "12TVM": "12TVM", "34LCK": "34LCK", "18MUU": "18MUU",
+    "21MZT": "21MZT", "21KXT": "21KXT", "34LGP": "34LGP", "50NNJ": "50NNJ", "48SUC": "48SUC",
+    "21JVG": "21JVG", "35LML": "35LML", "47QKU": "47QKU", "40WFC": "40WFC", "34MFC": "34MFC",
+    "51VVG": "51VVG", "53WMQ": "53WMQ", "51PVM": "51PVM", "32UMC": "32UMC", "37TCN": "37TCN",
+    "18TXL": "18TXL", "38TMP": "38TMP", "16TGM": "16TGM", "30UWC": "30UWC", "22JCR": "22JCR",
+    "33UVS": "33UVS", "37TGN": "37TGN", "16TFL": "16TFL", "23KKP": "23KKP", "50SPF": "50SPF",
+    "20LNJ": "20LNJ", "50UME": "50UME", "51VUG": "51VUG", "10WFT": "10WFT", "10TFK": "10TFK",
+    "54WVD": "54WVD", "11VLE": "11VLE", "50VNK": "50VNK", "55WFP": "55WFP", "22MBT": "22MBT",
+    "37LBH": "37LBH", "53MRS": "53MRS", "48RTQ": "48RTQ", "07VFJ": "07VFJ", "52PBQ": "52PBQ",
+    "44QKK": "44QKK", "49UCQ": "49UCQ", "56MPV": "56MPV", "13UDV": "13UDV", "56HLH": "56HLH"
 }
-
 
 start_date = "2021-01-01"
 end_date = "2021-12-31"
 platforms = ["Sentinel-1A", "Sentinel-1B"]
 product_type = "SLC"
 csv_output = "s1_slc_results.csv"
+csv_output_2 = "s1_slc_ids.csv"
 geojson_output = "s1_slc_results.geojson"
 map_output = "s1_slc_map.html"
 
@@ -75,9 +85,17 @@ def search_asf_s1_slc(minx, miny, maxx, maxy, start_date, end_date, platform):
         "intersectsWith": f"POLYGON(({minx} {miny}, {maxx} {miny}, {maxx} {maxy}, {minx} {maxy}, {minx} {miny}))",
         "output": "json"
     }
-    response = requests.get(url, params=params)
-    response.raise_for_status()
-    return response.json()
+    for attempt in range(3):
+        try:
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"Attempt {attempt + 1} failed: {e}")
+            if attempt == 2:
+                print("All attempts failed.")
+                raise e
+
 
 all_results = []
 features = []
@@ -136,6 +154,14 @@ if all_results:
         writer.writeheader()
         writer.writerows(all_results)
     print(f"\n📁 CSV saved: {csv_output}")
+
+    # write out granule id only
+    with open(csv_output_2, "w", newline="\n") as f:
+        for result in all_results:
+            filename = result['download_url'].split("/")[-1].replace(".zip", "")
+            f.write(f"{filename}\n")
+    print(f"\n📁 CSV saved: {csv_output_2}")
+
 else:
     print("\n⚠️ No results to write to CSV.")
 
