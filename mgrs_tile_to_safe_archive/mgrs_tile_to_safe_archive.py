@@ -7,6 +7,7 @@ from pyproj import Transformer
 from collections.abc import Iterable
 import folium
 from folium.plugins import MarkerCluster
+import re
 
 # === INPUT PARAMETERS ===
 # Define a dictionary of MGRS tiles over the U.S. with descriptions
@@ -74,6 +75,11 @@ def get_mgrs_tile_bounds(tile):
     lon_max, lat_max = transformer_to_latlon.transform(x_max, y_max)
 
     return (lon_min, lat_min, lon_max, lat_max)
+
+
+# regular expression to filter out any SAFE file that is not "_IW_"
+# S1B_IW_SLC__1SDV_20210325T190648_20210325T190715_026175_031FB3_744C.zip
+PATTERN = re.compile(r'^S1[AB]_IW_SLC__\d{1}[A-Z]{3}_\d{8}T\d{6}_\d{8}T\d{6}_\d{6}_[A-Z0-9]{6}_[A-Z0-9]{4}$')
 
 def search_asf_s1_slc(minx, miny, maxx, maxy, start_date, end_date, platform):
     url = "https://api.daac.asf.alaska.edu/services/search/param"
@@ -159,7 +165,8 @@ if all_results:
     with open(csv_output_2, "w", newline="\n") as f:
         for result in all_results:
             filename = result['download_url'].split("/")[-1].replace(".zip", "")
-            f.write(f"{filename}\n")
+            if PATTERN.match(filename):
+                f.write(f"{filename}\n")
     print(f"\n📁 CSV saved: {csv_output_2}")
 
 else:
