@@ -34,14 +34,23 @@ mgrs_tiles = {
     "44QKK": "44QKK", "49UCQ": "49UCQ", "56MPV": "56MPV", "13UDV": "13UDV", "56HLH": "56HLH"
 }
 
-start_date = "2021-01-01"
-end_date = "2021-12-31"
-platforms = ["Sentinel-1A", "Sentinel-1B"]
+
 product_type = "SLC"
 csv_output = "s1_slc_results.csv"
 csv_output_2 = "s1_slc_ids.csv"
 geojson_output = "s1_slc_results.geojson"
 map_output = "s1_slc_map.html"
+
+# Use these settings for Sentinel-1a/B
+# start_date = "2021-01-01"
+# end_date = "2021-12-31"
+# platforms = ["Sentinel-1A", "Sentinel-1B"]
+
+# Use these settings for Sentinel-1C
+start_date = "2024-12-01"
+end_date = "2025-04-24"
+platforms = ["Sentinel-1C"]
+
 
 def flatten(items):
     for x in items:
@@ -79,7 +88,7 @@ def get_mgrs_tile_bounds(tile):
 
 # regular expression to filter out any SAFE file that is not "_IW_"
 # S1B_IW_SLC__1SDV_20210325T190648_20210325T190715_026175_031FB3_744C.zip
-PATTERN = re.compile(r'^S1[AB]_IW_SLC__\d{1}[A-Z]{3}_\d{8}T\d{6}_\d{8}T\d{6}_\d{6}_[A-Z0-9]{6}_[A-Z0-9]{4}$')
+PATTERN = re.compile(r'^S1[ABC]_IW_SLC__\d{1}[A-Z]{3}_\d{8}T\d{6}_\d{8}T\d{6}_\d{6}_[A-Z0-9]{6}_[A-Z0-9]{4}$')
 
 def search_asf_s1_slc(minx, miny, maxx, maxy, start_date, end_date, platform):
     url = "https://api.daac.asf.alaska.edu/services/search/param"
