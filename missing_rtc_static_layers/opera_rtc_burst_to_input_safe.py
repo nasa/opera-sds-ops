@@ -1,13 +1,17 @@
+"""
+Instructions:
+- Edit the custom parameters section, incusing start/stop count to break up the number of queries.
+- nohup python -u opera_rtc_burst_to_input_safe.py &
+"""
 import requests
 import re
 
 # parameters
 url = "https://api.daac.asf.alaska.edu/services/search/param"
 input_file = "rtc_bursts_without_static_bursts.txt"
-start_count = 1
-stop_count = 1000
+start_count = 2001
+stop_count = 3000
 output_file = f"safe_file_ids_{start_count}_{stop_count}.txt"
-# Optional: Define a time window (can be omitted or customized)
 start_time = "2017-01-01T00:00:00Z"
 end_time = "2018-01-01T00:00:00Z"
 
@@ -47,16 +51,21 @@ with open(output_file, "w") as fout:
 
             print(f"\n🔍 Granule count: {count} Searching for burst ID: {burst_id} (Track {relative_orbit}, Swath {swath})")
 
-            try:
-                response = requests.get(url, params=params)
-                response.raise_for_status()
-                granules = response.json()[0]
-                print(f"Number of results: {len(granules)}")
-                if not granules:
-                    print("  No results found.")
-                else:
-                    for granule in granules:
-                        # print(granule["product_file_id"], granule["absoluteOrbit"])
-                        fout.write(f"{burst_id}, {granule['product_file_id']}, {granule['absoluteOrbit']}\n")
-            except requests.RequestException as e:
-                print(f"  ❌ Request failed: {e}")
+            attempts = 0
+            while attempts < 3:
+                try:
+                    response = requests.get(url, params=params)
+                    response.raise_for_status()
+                    granules = response.json()[0]
+                    print(f"Number of results: {len(granules)}")
+                    if not granules:
+                        print("  No results found.")
+                    else:
+                        for granule in granules:
+                            # print(granule["product_file_id"], granule["absoluteOrbit"])
+                            fout.write(f"{burst_id}, {granule['product_file_id']}, {granule['absoluteOrbit']}\n")
+                    # no more attempts for this granule
+                    break
+                except requests.RequestException as e:
+                    attempts += 1
+                    print(f"  ❌ Attempt #: {attempts} Request failed: {e}")
