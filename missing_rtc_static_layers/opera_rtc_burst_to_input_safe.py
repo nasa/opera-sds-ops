@@ -9,8 +9,8 @@ import re
 # parameters
 url = "https://api.daac.asf.alaska.edu/services/search/param"
 input_file = "rtc_bursts_without_static_bursts.txt"
-start_count = 2001
-stop_count = 3000
+start_count = 1001
+stop_count = 2000
 output_file = f"safe_file_ids_{start_count}_{stop_count}.txt"
 start_time = "2017-01-01T00:00:00Z"
 end_time = "2018-01-01T00:00:00Z"
