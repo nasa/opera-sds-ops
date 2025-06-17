@@ -11,6 +11,10 @@ url = "https://api.daac.asf.alaska.edu/services/search/param"
 input_file = "rtc_bursts_without_static_bursts.txt"
 start_count = 11001
 stop_count = 11392
+# Australia setup
+# input_file = "rtc_bursts_without_static_bursts_au.txt"
+# start_count = 1
+# stop_count = 10
 output_file = f"safe_file_ids_{start_count}_{stop_count}.txt"
 start_time = "2017-01-01T00:00:00Z"
 end_time = "2018-01-01T00:00:00Z"
