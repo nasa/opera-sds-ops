@@ -1,27 +1,38 @@
 """
 Instructions:
-- Edit the custom parameters section, incusing start/stop count to break up the number of queries.
+- Edit the custom parameters section, including start/stop count to break up the number of queries.
 - nohup python -u opera_rtc_burst_to_input_safe.py &
 """
 import requests
 import re
+import geopandas as gpd
 
-# parameters
+# Parameters
 url = "https://api.daac.asf.alaska.edu/services/search/param"
+burst_geometry_file = "https://github.com/opera-adt/burst_db/releases/download/v0.9.0/burst-id-geometries-simple-0.9.0.geojson.zip"
+start_time = "2017-01-01T00:00:00Z"
+end_time = "2025-01-01T00:00:00Z"
+
+# Global scope
 input_file = "rtc_bursts_without_static_bursts.txt"
-start_count = 11001
-stop_count = 11392
-# Australia setup
+start_count = 1
+stop_count = 1000
+
+# Australia scope
 # input_file = "rtc_bursts_without_static_bursts_au.txt"
 # start_count = 1
-# stop_count = 10
+# stop_count = 4
 output_file = f"safe_file_ids_{start_count}_{stop_count}.txt"
-start_time = "2017-01-01T00:00:00Z"
-end_time = "2018-01-01T00:00:00Z"
+
+# Read the Sentinel-1 geometry file from GitHub
+print(f"Reading burst geometry file: {burst_geometry_file}")
+burst_grid = gpd.read_file(burst_geometry_file)
+# print(burst_grid)
+# print(burst_grid.columns)
 
 # Open output file for writing
 with open(output_file, "w") as fout:
-    fout.write("RTC-S1 Burst ID, SAFE file ID, Absolute Orbit\n")
+    fout.write("RTC-S1 Burst ID, SAFE file ID, Absolute Orbit, Relative Orbit, Polygon\n")
     
     # --- Load burst IDs from a local file
     with open(input_file) as f:
@@ -41,6 +52,14 @@ with open(output_file, "w") as fout:
             relative_orbit = int(match.group(1))
             swath = f"IW{match.group(3)}"
 
+            # "T174-372072-IW1" --> "t174_372072_iw1"
+            burst_id_converted = burst_id.lower().replace('-', '_')
+            burst_geom = burst_grid[burst_grid['burst_id_jpl'] == burst_id_converted]
+            # print(burst_geom)
+            (minx, miny, maxx, maxy) = burst_geom.geometry.iloc[0].bounds
+            # print(minx, miny, maxx, maxy)
+            polygon = f"POLYGON(({minx} {miny}, {maxx} {miny}, {maxx} {maxy}, {minx} {maxy}, {minx} {miny}))"
+
             params = {
                 "platform": "Sentinel-1",
                 "processingLevel": "SLC",
@@ -50,6 +69,8 @@ with open(output_file, "w") as fout:
                 "end": end_time,
                 "output": "json",
                 "maxResults": 1,
+                "intersectsWith": polygon,
+                # "burst": burst_id,
                 # "absoluteOrbit": "15301",
             }
 
@@ -64,10 +85,11 @@ with open(output_file, "w") as fout:
                     print(f"Number of results: {len(granules)}")
                     if not granules:
                         print("  No results found.")
+                        fout.write(f"{burst_id}, None, None, None, {polygon}\n")
                     else:
                         for granule in granules:
-                            # print(granule["product_file_id"], granule["absoluteOrbit"])
-                            fout.write(f"{burst_id}, {granule['product_file_id']}, {granule['absoluteOrbit']}\n")
+                            fout.write(f"{burst_id}, {granule['product_file_id']}, "
+                                       f"{granule['absoluteOrbit']}, {granule['relativeOrbit']}, {polygon}\n")
                     # no more attempts for this granule
                     break
                 except requests.RequestException as e:
