@@ -35,12 +35,21 @@ def csv_to_geojson(input_csv, output_geojson):
             print(f"  rel_orbit   = {rel_orbit}")
             print(f"  polygon_wkt = {polygon_wkt[:60]}...")
 
+            # Determine color based on 'SAFE file' field
+            if burst_id.lower() != 'none':
+                color = '#1f78b4'  # e.g. blue for valid files
+            else:
+                color = '#e31a1c'  # e.g. red for missing/None
+
             geom = wkt.loads(polygon_wkt)
             props = {
                 "burst_id": burst_id,
                 "safe_file_id": safe_id,
                 "absolute_orbit": abs_orbit,
-                "relative_orbit": rel_orbit
+                "relative_orbit": rel_orbit,
+                "marker-color": color,
+                "marker-symbol": "circle",
+                "marker-size": "medium"
             }
             features.append({
                 "geometry": geom,
