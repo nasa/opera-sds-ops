@@ -1,0 +1,333 @@
+#!/bin/bash
+# run_cmr_audit.sh
+# Purpose: Run CMR audit scripts from opera-sds-pcm/tools/ops/cmr_audit
+# Date created: June 24, 2025
+# Usage: ./run_cmr_audit.sh -f <script_name> [additional options]
+#        Where script_name is one of:
+#        - hls (for cmr_audit_hls.py)
+#        - slc (for cmr_audit_slc.py)
+#        - disp_s1 (for cmr_audit_disp_s1.py)
+#        - dswx_s1 (for cmr_audit_dswx_s1.py)
+
+set -e
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cmdname=$(basename $0)
+
+######################################################################
+# Default values and constants
+######################################################################
+
+# Default values
+processing_mode="forward"  # Default processing mode for DISP-S1
+output_format="txt"        # Default output format for DSWX-S1
+k_value=15                 # Default K value for DISP-S1
+log_level="INFO"           # Default log level
+dry_run=false              # Default to actually run the command
+start_weeks=5              # Default start point in weeks (5 weeks ago)
+max_gap_weeks=1            # Maximum allowed gap between start and end dates in weeks
+
+# PCM repository path
+PCM_REPO_PATH="/export/home/hysdsops/scheduled_tasks/opera-sds-pcm"
+
+######################################################################
+# Functions
+######################################################################
+
+# Display usage
+usage() {
+  cat << USAGE >&2
+Usage:
+  $cmdname [options]
+
+Required options:
+  -f, --filename <name>  Script to run (required)
+                         Valid values: hls, slc, disp_s1, dswx_s1
+
+Optional parameters:
+  -m, --mode <mode>      Processing mode for DISP-S1 (forward, reprocessing, historical)
+                         Default: $processing_mode
+  -o, --output <file>    Output filepath for audit results (for DSWX-S1)
+  -k, --k-value <num>    K-value for DISP-S1 (default: $k_value)
+  -s, --start <weeks>    Starting point in weeks ago (default: $start_weeks)
+                         Audit will run from <weeks> ago to 1 week ago
+  --format <format>      Output format for DSWX-S1 (txt, json) (default: $output_format)
+  --frames-only <list>   Restrict validation to specific frame numbers (comma-separated)
+  --validate-with-grq    Use GRQ database instead of CMR for DISP-S1
+  --log-level <level>    Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) (default: $log_level)
+  -n, --dry-run          Show the command that would be executed without running it
+  -h, --help             Show this help message
+
+Examples:
+  $cmdname --filename hls
+  $cmdname -f slc
+  $cmdname -f disp_s1 -m historical -k 15
+  $cmdname -f dswx_s1 --format json -o results.json
+  $cmdname -f hls --dry-run
+  $cmdname -f slc -s 8  # Run from 8 weeks ago to 1 week ago
+USAGE
+}
+
+# Log messages
+echoerr() { echo "$@" 1>&2; }
+log_info() { echo "[INFO] $@"; }
+log_error() { echoerr "[ERROR] $@"; }
+
+# Exit with error
+exit_with_error() {
+  log_error "$1"
+  exit 1
+}
+
+# Map shorthand name to full script name
+get_full_script_name() {
+  local shorthand=$1
+  case $shorthand in
+    hls)
+      echo "cmr_audit_hls"
+      ;;
+    slc)
+      echo "cmr_audit_slc"
+      ;;
+    disp_s1)
+      echo "cmr_audit_disp_s1"
+      ;;
+    dswx_s1)
+      echo "cmr_audit_dswx_s1"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Execute a single audit command
+execute_audit_command() {
+  local start_date=$1
+  local end_date=$2
+  local cmd_base=$3
+
+  local cmd="${cmd_base} --start-datetime=${start_date} --end-datetime=${end_date}"
+
+  # Execute or display command based on dry run flag
+  if [ "$dry_run" = true ]; then
+    log_info "DRY RUN: Command that would be executed:"
+    echo "$cmd"
+  else
+    log_info "Executing: $cmd"
+    eval "$cmd"
+  fi
+}
+
+######################################################################
+# Parse arguments
+######################################################################
+
+# If no arguments provided, show usage
+if [ $# -eq 0 ]; then
+  usage
+  exit 1
+fi
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  key="$1"
+  case $key in
+    -f|--filename)
+      script_shorthand="$2"
+      shift 2
+      ;;
+    # Legacy support for old-style flags
+    --hls)
+      script_shorthand="hls"
+      shift
+      ;;
+    --slc)
+      script_shorthand="slc"
+      shift
+      ;;
+    --disp_s1)
+      script_shorthand="disp_s1"
+      shift
+      ;;
+    --dswx_s1)
+      script_shorthand="dswx_s1"
+      shift
+      ;;
+    -m|--mode)
+      processing_mode="$2"
+      shift 2
+      ;;
+    -o|--output)
+      output_file="$2"
+      shift 2
+      ;;
+    -k|--k-value)
+      k_value="$2"
+      shift 2
+      ;;
+    -s|--start|-p|--period)  # Support both -s/--start and -p/--period for backward compatibility
+      start_weeks="$2"
+      shift 2
+      ;;
+    --format)
+      output_format="$2"
+      shift 2
+      ;;
+    --frames-only)
+      frames_only="$2"
+      shift 2
+      ;;
+    --validate-with-grq)
+      validate_with_grq="--validate-with-grq"
+      shift
+      ;;
+    --log-level)
+      log_level="$2"
+      shift 2
+      ;;
+    -n|--dry-run)
+      dry_run=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echoerr "Unsupported argument $1. Exiting."
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+
+######################################################################
+# Argument validation
+######################################################################
+
+if [[ ! -v script_shorthand ]]; then
+  log_error "Script name is required"
+  usage
+  exit 1
+fi
+
+# Convert shorthand to full script name
+cmr_audit_filename=$(get_full_script_name "$script_shorthand")
+if [[ $? -ne 0 ]]; then
+  exit_with_error "Invalid script shorthand: $script_shorthand. Must be one of: hls, slc, disp_s1, dswx_s1"
+fi
+
+# For DISP-S1, ensure processing-mode is valid
+if [[ "$script_shorthand" == "disp_s1" ]]; then
+  valid_modes=("forward" "reprocessing" "historical")
+  if [[ ! " ${valid_modes[*]} " =~ " ${processing_mode} " ]]; then
+    exit_with_error "Invalid processing mode: $processing_mode. Must be one of: ${valid_modes[*]}"
+  fi
+fi
+
+# Validate that start_weeks is a positive integer
+if ! [[ "$start_weeks" =~ ^[0-9]+$ ]]; then
+  exit_with_error "Start weeks must be a positive integer: $start_weeks"
+fi
+
+# Enforce minimum for start_weeks to be at least 1 week
+if [ "$start_weeks" -lt 1 ]; then
+  log_info "Start weeks must be at least 1, setting to 1"
+  start_weeks=1
+fi
+
+
+######################################################################
+# Main script body
+######################################################################
+
+# Only activate Python environment if not in dry run mode
+if [ "$dry_run" = false ]; then
+  # deactivate any existing python virtual environments (typically "metrics")
+  set +e
+  deactivate 2>/dev/null || true
+  set -e
+
+  # Set up Python environment
+  source $PCM_REPO_PATH/venv_cmr_audit/bin/activate
+
+  # Make sure the opera-sds-pcm modules can be found by adding to PYTHONPATH
+  export PYTHONPATH="$PCM_REPO_PATH:$PYTHONPATH"
+fi
+
+# Build base command (without start and end dates)
+cmd_base="python $PCM_REPO_PATH/tools/ops/cmr_audit/${cmr_audit_filename}.py --log-level=$log_level"
+
+# Add script-specific arguments
+case $script_shorthand in
+  "disp_s1")
+    cmd_base="$cmd_base --processing-mode=$processing_mode"
+    # Add optional DISP-S1 specific arguments
+    [[ -v k_value ]] && cmd_base="$cmd_base --k=$k_value"
+    [[ -v frames_only ]] && cmd_base="$cmd_base --frames-only=$frames_only"
+    [[ -v validate_with_grq ]] && cmd_base="$cmd_base $validate_with_grq"
+    ;;
+
+  "dswx_s1")
+    # Add optional DSWX-S1 specific arguments
+    [[ -v output_file ]] && cmd_base="$cmd_base --output=$output_file"
+    [[ -v output_format ]] && cmd_base="$cmd_base --format=$output_format"
+    ;;
+esac
+
+# Calculate date ranges
+now=$(date --iso-8601=d)
+end_date=$(date --iso-8601=s -d "$now - 1 weeks")  # Always 1 week ago
+start_date=$(date --iso-8601=s -d "$now - ${start_weeks} weeks")
+
+# Calculate the total weeks between start and end
+total_weeks=$((start_weeks - 1))  # End date is fixed at 1 week ago
+
+log_info "Running CMR audit for: $cmr_audit_filename"
+log_info "Total time range: $start_date to $end_date"
+
+# Break down into chunks if needed
+if [ $total_weeks -gt $max_gap_weeks ]; then
+  log_info "Time range exceeds maximum allowed gap of $max_gap_weeks weeks. Breaking down into multiple calls."
+
+  # Calculate how many chunks we need
+  num_chunks=$(( (total_weeks + max_gap_weeks - 1) / max_gap_weeks ))
+  log_info "Will execute $num_chunks separate audit calls."
+
+  # Process each chunk
+  for (( i=0; i<$num_chunks; i++ )); do
+    if [ $i -eq $((num_chunks-1)) ]; then
+      # Last chunk ends at the fixed end date (1 week ago)
+      chunk_end_date=$end_date
+    else
+      # Earlier chunks have their own end dates
+      chunk_end_weeks=$((start_weeks - i*max_gap_weeks - max_gap_weeks))
+      if [ $chunk_end_weeks -lt 1 ]; then
+        chunk_end_weeks=1
+      fi
+      chunk_end_date=$(date --iso-8601=s -d "$now - ${chunk_end_weeks} weeks")
+    fi
+
+    # Calculate start date for this chunk
+    if [ $i -eq 0 ]; then
+      # First chunk starts at the original start date
+      chunk_start_date=$start_date
+    else
+      # Other chunks start where the previous chunk ended
+      chunk_start_weeks=$((start_weeks - (i-1)*max_gap_weeks - max_gap_weeks))
+      chunk_start_date=$(date --iso-8601=s -d "$now - ${chunk_start_weeks} weeks")
+    fi
+
+    log_info "Processing chunk $((i+1)) of $num_chunks: $chunk_start_date to $chunk_end_date"
+    execute_audit_command "$chunk_start_date" "$chunk_end_date" "$cmd_base"
+  done
+else
+  # Single execution for small ranges
+  execute_audit_command "$start_date" "$end_date" "$cmd_base"
+fi
+
+# Return success
+log_info "CMR audit completed successfully"
+exit 0
