@@ -37,7 +37,7 @@ import re
 
 # or read the list from a CSV file
 mgrs_tiles = {}
-with open('MGRS_selected.csv', 'r') as f:
+with open('mgrs_from_umd_20260625.txt', 'r') as f:
     for line in f:
         tile = line.strip()
         if tile:
@@ -50,15 +50,15 @@ csv_output_2 = "s1_slc_ids.csv"
 geojson_output = "s1_slc_results.geojson"
 map_output = "s1_slc_map.html"
 
-# Use these settings for Sentinel-1a/B
-# start_date = "2021-01-01"
-# end_date = "2021-12-31"
-# platforms = ["Sentinel-1A", "Sentinel-1B"]
+# Use these settings for Sentinel-1A/B
+start_date = "2021-01-01"
+end_date = "2021-12-31"
+platforms = ["Sentinel-1A", "Sentinel-1B"]
 
 # Use these settings for Sentinel-1C
-start_date = "2024-12-01"
-end_date = "2025-04-24"
-platforms = ["Sentinel-1C"]
+# start_date = "2021-01-01"
+# end_date = "2021-12-01"
+# platforms = ["Sentinel-1C"]
 
 
 def flatten(items):
