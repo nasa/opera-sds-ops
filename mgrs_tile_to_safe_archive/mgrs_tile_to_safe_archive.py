@@ -49,6 +49,7 @@ csv_output = "s1_slc_results.csv"
 csv_output_2 = "s1_slc_ids.csv"
 geojson_output = "s1_slc_results.geojson"
 map_output = "s1_slc_map.html"
+no_safe_output = "mgrs_with_no_safe_coverage.txt"
 
 # Use these settings for Sentinel-1A/B
 start_date = "2021-01-01"
@@ -123,11 +124,13 @@ def search_asf_s1_slc(minx, miny, maxx, maxy, start_date, end_date, platform):
 
 all_results = []
 features = []
+no_safe = []
 
 for tile, description in mgrs_tiles.items():
     print(f"\n🔍 Searching MGRS tile: {tile} — {description}")
     try:
         minx, miny, maxx, maxy = get_mgrs_tile_bounds(tile)
+        safe_found = False
         for platform in platforms:
             print(f"   → Searching {platform}")
             try:
@@ -163,10 +166,14 @@ for tile, description in mgrs_tiles.items():
                         count += 1
                 if count > 0:
                     print(f"   ✅ {count} results from {platform}")
+                    safe_found = True
                 else:
                     print(f"   ⚠️ No usable results from {platform}")
             except Exception as e:
                 print(f"   ❌ Error querying {platform}: {e}")
+            # record tiles for which no platform yield results
+            if not safe_found:
+                no_safe.append(tile)
     except Exception as e:
         print(f"❌ Error processing tile {tile}: {e}")
 
@@ -189,6 +196,13 @@ if all_results:
 
 else:
     print("\n⚠️ No results to write to CSV.")
+
+# Write out list of MGRS tiles with no SAFE file acquired over it in 2021
+if no_safe:
+    with open(no_safe_output, "w", newline="") as f:
+        for mgrs_tile in no_safe:
+            f.write(mgrs_tile+"\n")
+    print(f"\n📁 List of MGRS tiles with no SAFE tile completed: {no_safe_output}")
 
 # === Output GeoJSON ===
 if features:
