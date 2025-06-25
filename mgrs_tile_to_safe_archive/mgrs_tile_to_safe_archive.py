@@ -11,29 +11,38 @@ import re
 
 # === INPUT PARAMETERS ===
 # Define a dictionary of MGRS tiles over the U.S. with descriptions
-mgrs_tiles = {
-    "35LKG": "35LKG", "43WFS": "43WFS", "19QBB": "19QBB", "18UXA": "18UXA", "22KDG": "22KDG",
-    "30NTN": "30NTN", "48MYC": "48MYC", "33KYQ": "33KYQ", "37MEV": "37MEV", "50UQD": "50UQD",
-    "36PYQ": "36PYQ", "54KVE": "54KVE", "30STE": "30STE", "22MHC": "22MHC", "18SUG": "18SUG",
-    "48PUS": "48PUS", "43VDJ": "43VDJ", "16PFA": "16PFA", "22MCB": "22MCB", "18NYK": "18NYK",
-    "19PFK": "19PFK", "13SER": "13SER", "20UPE": "20UPE", "18NUL": "18NUL", "19MBR": "19MBR",
-    "21LZC": "21LZC", "33LXE": "33LXE", "52LHL": "52LHL", "37VEK": "37VEK", "30PXT": "30PXT",
-    "51UWQ": "51UWQ", "44WME": "44WME", "34LFR": "34LFR", "44QPF": "44QPF", "49MET": "49MET",
-    "30TVM": "30TVM", "37MBN": "37MBN", "14SMF": "14SMF", "10TES": "10TES", "14SMJ": "14SMJ",
-    "21KVT": "21KVT", "20LKH": "20LKH", "20LQK": "20LQK", "47NRA": "47NRA", "15QZC": "15QZC",
-    "21KTU": "21KTU", "22LDL": "22LDL", "21KTQ": "21KTQ", "16QDJ": "16QDJ", "48MWC": "48MWC",
-    "36VVM": "36VVM", "37VCG": "37VCG", "12TVM": "12TVM", "34LCK": "34LCK", "18MUU": "18MUU",
-    "21MZT": "21MZT", "21KXT": "21KXT", "34LGP": "34LGP", "50NNJ": "50NNJ", "48SUC": "48SUC",
-    "21JVG": "21JVG", "35LML": "35LML", "47QKU": "47QKU", "40WFC": "40WFC", "34MFC": "34MFC",
-    "51VVG": "51VVG", "53WMQ": "53WMQ", "51PVM": "51PVM", "32UMC": "32UMC", "37TCN": "37TCN",
-    "18TXL": "18TXL", "38TMP": "38TMP", "16TGM": "16TGM", "30UWC": "30UWC", "22JCR": "22JCR",
-    "33UVS": "33UVS", "37TGN": "37TGN", "16TFL": "16TFL", "23KKP": "23KKP", "50SPF": "50SPF",
-    "20LNJ": "20LNJ", "50UME": "50UME", "51VUG": "51VUG", "10WFT": "10WFT", "10TFK": "10TFK",
-    "54WVD": "54WVD", "11VLE": "11VLE", "50VNK": "50VNK", "55WFP": "55WFP", "22MBT": "22MBT",
-    "37LBH": "37LBH", "53MRS": "53MRS", "48RTQ": "48RTQ", "07VFJ": "07VFJ", "52PBQ": "52PBQ",
-    "44QKK": "44QKK", "49UCQ": "49UCQ", "56MPV": "56MPV", "13UDV": "13UDV", "56HLH": "56HLH"
-}
+# mgrs_tiles = {
+#
+#     "35LKG": "35LKG", "43WFS": "43WFS", "19QBB": "19QBB", "18UXA": "18UXA", "22KDG": "22KDG",
+#     "30NTN": "30NTN", "48MYC": "48MYC", "33KYQ": "33KYQ", "37MEV": "37MEV", "50UQD": "50UQD",
+#     "36PYQ": "36PYQ", "54KVE": "54KVE", "30STE": "30STE", "22MHC": "22MHC", "18SUG": "18SUG",
+#     "48PUS": "48PUS", "43VDJ": "43VDJ", "16PFA": "16PFA", "22MCB": "22MCB", "18NYK": "18NYK",
+#     "19PFK": "19PFK", "13SER": "13SER", "20UPE": "20UPE", "18NUL": "18NUL", "19MBR": "19MBR",
+#     "21LZC": "21LZC", "33LXE": "33LXE", "52LHL": "52LHL", "37VEK": "37VEK", "30PXT": "30PXT",
+#     "51UWQ": "51UWQ", "44WME": "44WME", "34LFR": "34LFR", "44QPF": "44QPF", "49MET": "49MET",
+#     "30TVM": "30TVM", "37MBN": "37MBN", "14SMF": "14SMF", "10TES": "10TES", "14SMJ": "14SMJ",
+#     "21KVT": "21KVT", "20LKH": "20LKH", "20LQK": "20LQK", "47NRA": "47NRA", "15QZC": "15QZC",
+#     "21KTU": "21KTU", "22LDL": "22LDL", "21KTQ": "21KTQ", "16QDJ": "16QDJ", "48MWC": "48MWC",
+#     "36VVM": "36VVM", "37VCG": "37VCG", "12TVM": "12TVM", "34LCK": "34LCK", "18MUU": "18MUU",
+#     "21MZT": "21MZT", "21KXT": "21KXT", "34LGP": "34LGP", "50NNJ": "50NNJ", "48SUC": "48SUC",
+#     "21JVG": "21JVG", "35LML": "35LML", "47QKU": "47QKU", "40WFC": "40WFC", "34MFC": "34MFC",
+#     "51VVG": "51VVG", "53WMQ": "53WMQ", "51PVM": "51PVM", "32UMC": "32UMC", "37TCN": "37TCN",
+#     "18TXL": "18TXL", "38TMP": "38TMP", "16TGM": "16TGM", "30UWC": "30UWC", "22JCR": "22JCR",
+#     "33UVS": "33UVS", "37TGN": "37TGN", "16TFL": "16TFL", "23KKP": "23KKP", "50SPF": "50SPF",
+#     "20LNJ": "20LNJ", "50UME": "50UME", "51VUG": "51VUG", "10WFT": "10WFT", "10TFK": "10TFK",
+#     "54WVD": "54WVD", "11VLE": "11VLE", "50VNK": "50VNK", "55WFP": "55WFP", "22MBT": "22MBT",
+#     "37LBH": "37LBH", "53MRS": "53MRS", "48RTQ": "48RTQ", "07VFJ": "07VFJ", "52PBQ": "52PBQ",
+#     "44QKK": "44QKK", "49UCQ": "49UCQ", "56MPV": "56MPV", "13UDV": "13UDV", "56HLH": "56HLH"
+# }
 
+# or read the list from a CSV file
+mgrs_tiles = {}
+with open('MGRS_selected.csv', 'r') as f:
+    for line in f:
+        tile = line.strip()
+        if tile:
+            mgrs_tiles[tile] = tile
+print(mgrs_tiles)
 
 product_type = "SLC"
 csv_output = "s1_slc_results.csv"
