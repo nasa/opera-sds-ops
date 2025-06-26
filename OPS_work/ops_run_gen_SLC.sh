@@ -16,13 +16,9 @@ do
    data_date_yesterday=$(date -d "${data_year}-01-01 +${data_doy} days -2 day" +%F)
    data_date_tomorrow=$(date -d "${data_year}-01-01 +${data_doy} days -0 day" +%F)
 
-   cmd="python /export/home/hysdsops/mozart/ops/opera-pcm/data_subscriber/daac_data_subscriber.py query -c SENTINEL-1A_SLC --job-queue=opera-job_worker-slc_data_download  --chunk-size=1 --native-id="$file"*"
+   cmd="python /export/home/hysdsops/mozart/ops/opera-pcm/data_subscriber/daac_data_subscriber.py query -c SENTINEL-1A_SLC --job-queue=opera-job_worker-slc_data_download --processing-mode=historical  --chunk-size=1 --native-id="$file"*"
 
 
-##   echo $file_type
-##   echo $data_year
-##   echo $data_doy
-##   echo $data_date
    echo $cmd
 
 done < $1
