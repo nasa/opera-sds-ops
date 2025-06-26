@@ -11,12 +11,12 @@ import geopandas as gpd
 url = "https://api.daac.asf.alaska.edu/services/search/param"
 burst_geometry_file = "https://github.com/opera-adt/burst_db/releases/download/v0.9.0/burst-id-geometries-simple-0.9.0.geojson.zip"
 start_time = "2017-01-01T00:00:00Z"
-end_time = "2025-01-01T00:00:00Z"
+end_time = "2018-01-01T00:00:00Z"
 
 # Global scope
 input_file = "rtc_bursts_without_static_bursts.txt"
-start_count = 1
-stop_count = 1000
+start_count = 10001
+stop_count = 12000
 
 # Australia scope
 # input_file = "rtc_bursts_without_static_bursts_au.txt"
