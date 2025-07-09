@@ -26,9 +26,11 @@ log_level="INFO"           # Default log level
 dry_run=false              # Default to actually run the command
 start_weeks=5              # Default start point in weeks (5 weeks ago)
 max_gap_weeks=1            # Maximum allowed gap between start and end dates in weeks
+push_to_git=false          # Default to not push results to git
 
 # PCM repository path
 PCM_REPO_PATH="/export/home/hysdsops/scheduled_tasks/opera-sds-pcm"
+OPS_REPO_PATH="/export/home/hysdsops/scheduled_tasks/opera-sds-ops"
 
 ######################################################################
 # Functions
@@ -56,6 +58,7 @@ Optional parameters:
   --validate-with-grq    Use GRQ database instead of CMR for DISP-S1
   --log-level <level>    Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) (default: $log_level)
   -n, --dry-run          Show the command that would be executed without running it
+  --push-to-git          Push generated files to opera-sds-ops git repository (default: false)
   -h, --help             Show this help message
 
 Examples:
@@ -163,6 +166,112 @@ execute_audit_command() {
   fi
 }
 
+# Push generated files to git repository
+push_to_git_repo() {
+  if [ "$push_to_git" = false ]; then
+    return 0
+  fi
+
+  log_info "Preparing to push results to git repository..."
+
+  # Get git token from environment or SDS config
+  GIT_TOKEN=${GIT_OAUTH_TOKEN:-$(grep "^GIT_OAUTH_TOKEN:" ~/.sds/config | awk '{print $2}')}
+  
+  if [[ -z "$GIT_TOKEN" ]]; then
+    log_error "Git token not found. Cannot push to repository."
+    log_error "Please ensure GIT_OAUTH_TOKEN environment variable is set or ~/.sds/config contains the token."
+    return 1
+  fi
+
+  # Check if we're in a git repository or if opera-sds-ops exists
+  if [ ! -d "$OPS_REPO_PATH" ]; then
+    log_info "Cloning opera-sds-ops repository..."
+    if [ "$dry_run" = true ]; then
+      log_info "DRY RUN: Would clone https://github.com/nasa/opera-sds-ops.git to $OPS_REPO_PATH"
+    else
+      git clone "https://${GIT_TOKEN}@github.com/nasa/opera-sds-ops.git" "$OPS_REPO_PATH"
+      if [ $? -ne 0 ]; then
+        log_error "Failed to clone opera-sds-ops repository"
+        return 1
+      fi
+    fi
+  fi
+
+  # Copy generated files to the ops repo
+  local current_dir=$(pwd)
+  local timestamp=$(date +"%Y%m%d_%H%M%S")
+  local branch_name="cmr_audit_results_${timestamp}"
+
+  if [ "$dry_run" = true ]; then
+    log_info "DRY RUN: Would copy files from $current_dir to $OPS_REPO_PATH/scheduled_tasks/"
+    log_info "DRY RUN: Would create branch $branch_name and push changes"
+    return 0
+  fi
+
+  # Navigate to ops repo
+  cd "$OPS_REPO_PATH" || {
+    log_error "Failed to navigate to $OPS_REPO_PATH"
+    return 1
+  }
+
+  # Update repository
+  log_info "Updating repository..."
+  git fetch origin
+  git checkout main
+  git pull origin main
+
+  # Create new branch
+  log_info "Creating branch: $branch_name"
+  git checkout -b "$branch_name"
+
+  # Copy files
+  log_info "Copying generated files..."
+  cp -r "$current_dir"/* scheduled_tasks/ 2>/dev/null || true
+
+  # Add and commit files
+  git add scheduled_tasks/
+  
+  # Check if there are changes to commit
+  if git diff --staged --quiet; then
+    log_info "No changes to commit"
+    git checkout main
+    git branch -D "$branch_name"
+    cd "$current_dir"
+    return 0
+  fi
+
+  # Commit changes
+  local commit_message="Add CMR audit results for $(date +"%Y-%m-%d %H:%M:%S")"
+  git commit -m "$commit_message"
+
+  # Push branch
+  log_info "Pushing branch $branch_name to remote repository..."
+  git push "https://${GIT_TOKEN}@github.com/nasa/opera-sds-ops.git" "$branch_name"
+
+  if [ $? -eq 0 ]; then
+    log_info "Successfully pushed results to git repository in branch: $branch_name"
+    log_info "You can create a pull request to merge these changes to main"
+  else
+    log_error "Failed to push to git repository"
+    cd "$current_dir"
+    return 1
+  fi
+
+  # Return to original directory
+  cd "$current_dir"
+  
+  # Clean up the cloned repository
+  log_info "Cleaning up cloned repository..."
+  rm -rf "$OPS_REPO_PATH"
+  if [ $? -eq 0 ]; then
+    log_info "Successfully cleaned up cloned repository"
+  else
+    log_error "Warning: Failed to clean up cloned repository at $OPS_REPO_PATH"
+  fi
+  
+  return 0
+}
+
 ######################################################################
 # Parse arguments
 ######################################################################
@@ -232,6 +341,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -n|--dry-run)
       dry_run=true
+      shift
+      ;;
+    --push-to-git)
+      push_to_git=true
       shift
       ;;
     -h|--help)
@@ -371,6 +484,9 @@ else
   # Single execution for small ranges
   execute_audit_command "$start_date" "$end_date" "$cmd_base"
 fi
+
+# Push generated files to git repository
+push_to_git_repo
 
 # Return success
 log_info "CMR audit completed successfully"
