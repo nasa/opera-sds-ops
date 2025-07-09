@@ -125,9 +125,9 @@ execute_audit_command() {
     return 1
   fi
 
-  # Format dates for directory name (remove timezone and special characters)
-  local start_dir=$(echo "$start_date" | sed 's/[T:+-]//g' | sed 's/Z$//')
-  local end_dir=$(echo "$end_date" | sed 's/[T:+-]//g' | sed 's/Z$//')
+  # Format dates for directory name (only keep YYYYMMDD)
+  local start_dir=$(echo "$start_date" | cut -d'T' -f1 | sed 's/-//g')
+  local end_dir=$(echo "$end_date" | cut -d'T' -f1 | sed 's/-//g')
   
   # Create directory structure: product_type/start_date-end_date
   local output_dir="${product_type}/${start_dir}-${end_dir}"
