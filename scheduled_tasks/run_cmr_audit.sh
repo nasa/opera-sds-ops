@@ -263,17 +263,17 @@ push_to_git_repo() {
     return 1
   fi
 
-  # Return to original directory
-  cd "$current_dir"
+  # # Return to original directory
+  # cd "$current_dir"
   
-  # Clean up the cloned repository
-  log_info "Cleaning up cloned repository..."
-  rm -rf "$OPS_REPO_PATH"
-  if [ $? -eq 0 ]; then
-    log_info "Successfully cleaned up cloned repository"
-  else
-    log_error "Warning: Failed to clean up cloned repository at $OPS_REPO_PATH"
-  fi
+  # # Clean up the cloned repository
+  # log_info "Cleaning up cloned repository..."
+  # rm -rf "$OPS_REPO_PATH"
+  # if [ $? -eq 0 ]; then
+  #   log_info "Successfully cleaned up cloned repository"
+  # else
+  #   log_error "Warning: Failed to clean up cloned repository at $OPS_REPO_PATH"
+  # fi
   
   return 0
 }
