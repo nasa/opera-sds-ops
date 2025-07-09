@@ -164,10 +164,17 @@ execute_audit_command() {
       return $exit_code
     fi
   fi
+
+  # Push generated files to git repository
+  push_to_git_repo "$product_type" "$start_dir" "$end_dir"
 }
 
 # Push generated files to git repository
 push_to_git_repo() {
+  local product_type=$1
+  local start_dir=$2
+  local end_dir=$3
+  
   if [ "$push_to_git" = false ]; then
     return 0
   fi
@@ -199,8 +206,7 @@ push_to_git_repo() {
 
   # Copy generated files to the ops repo
   local current_dir=$(pwd)
-  local timestamp=$(date +"%Y%m%d_%H%M%S")
-  local branch_name="cmr_audit_results_${timestamp}"
+  local branch_name="cmr_audit_results_${product_type}_${start_dir}_${end_dir}"
 
   if [ "$dry_run" = true ]; then
     log_info "DRY RUN: Would copy files from $current_dir to $OPS_REPO_PATH/scheduled_tasks/"
@@ -485,8 +491,17 @@ else
   execute_audit_command "$start_date" "$end_date" "$cmd_base"
 fi
 
-# Push generated files to git repository
-push_to_git_repo
+# Push results to git if requested
+if [ "$push_to_git" = true ]; then
+  # Use the overall date range for branch naming
+  overall_start_dir=$(echo "$start_date" | cut -d'T' -f1 | sed 's/-//g')
+  overall_end_dir=$(echo "$end_date" | cut -d'T' -f1 | sed 's/-//g')
+  
+  push_to_git_repo "$script_shorthand" "$overall_start_dir" "$overall_end_dir"
+  if [ $? -ne 0 ]; then
+    log_error "Git push failed, but audit completed successfully"
+  fi
+fi
 
 # Return success
 log_info "CMR audit completed successfully"
