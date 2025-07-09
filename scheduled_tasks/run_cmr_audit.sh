@@ -107,15 +107,59 @@ execute_audit_command() {
   local end_date=$2
   local cmd_base=$3
 
+  # Extract product type from command base (look for the script name pattern)
+  local product_type=""
+  if [[ "$cmd_base" == *"cmr_audit_hls"* ]]; then
+    product_type="hls"
+  elif [[ "$cmd_base" == *"cmr_audit_slc"* ]]; then
+    product_type="slc"
+  elif [[ "$cmd_base" == *"cmr_audit_disp_s1"* ]]; then
+    product_type="disp_s1"
+  elif [[ "$cmd_base" == *"cmr_audit_dswx_s1"* ]]; then
+    product_type="dswx_s1"
+  else
+    log_error "Unable to determine product type from command: $cmd_base"
+    return 1
+  fi
+
+  # Format dates for directory name (remove timezone and special characters)
+  local start_dir=$(echo "$start_date" | sed 's/[T:+-]//g' | sed 's/Z$//')
+  local end_dir=$(echo "$end_date" | sed 's/[T:+-]//g' | sed 's/Z$//')
+  
+  # Create directory structure: product_type/start_date-end_date
+  local output_dir="${product_type}/${start_dir}-${end_dir}"
+  
+  if [ "$dry_run" = true ]; then
+    log_info "DRY RUN: Would create directory: $output_dir"
+  else
+    log_info "Creating output directory: $output_dir"
+    mkdir -p "$output_dir"
+    if [ $? -ne 0 ]; then
+      log_error "Failed to create directory: $output_dir"
+      return 1
+    fi
+  fi
+
   local cmd="${cmd_base} --start-datetime=${start_date} --end-datetime=${end_date}"
 
   # Execute or display command based on dry run flag
   if [ "$dry_run" = true ]; then
-    log_info "DRY RUN: Command that would be executed:"
-    echo "$cmd"
+    log_info "DRY RUN: Command that would be executed in directory $output_dir:"
+    echo "cd $output_dir && $cmd"
   else
-    log_info "Executing: $cmd"
-    eval "$cmd"
+    log_info "Executing command in directory: $output_dir"
+    log_info "Command: $cmd"
+    
+    # Change to output directory and execute command
+    (cd "$output_dir" && eval "$cmd")
+    local exit_code=$?
+    
+    if [ $exit_code -eq 0 ]; then
+      log_info "Command completed successfully in $output_dir"
+    else
+      log_error "Command failed with exit code $exit_code in $output_dir"
+      return $exit_code
+    fi
   fi
 }
 
