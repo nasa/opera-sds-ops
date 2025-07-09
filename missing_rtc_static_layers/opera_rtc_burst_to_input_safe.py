@@ -2,6 +2,15 @@
 Instructions:
 - Edit the custom parameters section, including start/stop count to break up the number of queries.
 - nohup python -u opera_rtc_burst_to_input_safe.py &
+
+The input files contain the burst ids with missing static products, in the form:
+T174-372337-IW3
+
+where:
+- T174: absolute Track number
+- 372337: globally unique burst id assigned by ASF
+- IW3: polarization
+
 """
 import requests
 import re
@@ -14,14 +23,20 @@ start_time = "2017-01-01T00:00:00Z"
 end_time = "2018-01-01T00:00:00Z"
 
 # Global scope
-input_file = "rtc_bursts_without_static_bursts.txt"
-start_count = 10001
-stop_count = 12000
+# input_file = "rtc_bursts_without_static_bursts.txt"
+# start_count = 10001
+# stop_count = 12000
+
+# Missing RTC/CSLC static layers from DISP-S1-STATIC and Tropo System Tests
+input_file = "rtc_cslc_missing_static_layers.txt"
+start_count = 1
+stop_count = 1000
 
 # Australia scope
 # input_file = "rtc_bursts_without_static_bursts_au.txt"
 # start_count = 1
 # stop_count = 4
+
 output_file = f"safe_file_ids_{start_count}_{stop_count}.txt"
 
 # Read the Sentinel-1 geometry file from GitHub
