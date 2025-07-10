@@ -2,7 +2,7 @@
 # run_cmr_audit.sh
 # Purpose: Run CMR audit scripts from opera-sds-pcm/tools/ops/cmr_audit
 # Date created: June 24, 2025
-# Usage: ./run_cmr_audit.sh -f <script_name> [additional options]
+# Usage: source cmr_audit.env && ./run_cmr_audit.sh -f <script_name> [additional options]
 #        Where script_name is one of:
 #        - hls (for cmr_audit_hls.py)
 #        - slc (for cmr_audit_slc.py)
@@ -28,9 +28,12 @@ start_weeks=5              # Default start point in weeks (5 weeks ago)
 max_gap_weeks=1            # Maximum allowed gap between start and end dates in weeks
 push_to_git=false          # Default to not push results to git
 
-# PCM repository path
-PCM_REPO_PATH="/export/home/hysdsops/scheduled_tasks/opera-sds-pcm"
-OPS_REPO_PATH="/export/home/hysdsops/scheduled_tasks/opera-sds-ops"
+# Repository paths - use environment variables with fallback defaults
+PCM_REPO_PATH="${PCM_REPO_PATH:-/export/home/hysdsops/scheduled_tasks/opera-sds-pcm}"
+OPS_REPO_PATH="${OPS_REPO_PATH:-/export/home/hysdsops/scheduled_tasks/opera-sds-ops}"
+
+# Virtual environment path - use environment variable with fallback default
+CMR_AUDIT_VENV_PATH="${CMR_AUDIT_VENV_PATH:-$PCM_REPO_PATH/venv_cmr_audit/bin/activate}"
 
 ######################################################################
 # Functions
@@ -62,12 +65,12 @@ Optional parameters:
   -h, --help             Show this help message
 
 Examples:
-  $cmdname --filename hls
-  $cmdname -f slc
-  $cmdname -f disp_s1 -m historical -k 15
-  $cmdname -f dswx_s1 --format json -o results.json
-  $cmdname -f hls --dry-run
-  $cmdname -f slc -s 8  # Run from 8 weeks ago to 1 week ago
+  source cmr_audit.env && $cmdname --filename hls
+  source cmr_audit.env && $cmdname -f slc
+  source cmr_audit.env && $cmdname -f disp_s1 -m historical -k 15
+  source cmr_audit.env && $cmdname -f dswx_s1 --format json -o results.json
+  source cmr_audit.env && $cmdname -f hls --dry-run
+  source cmr_audit.env && $cmdname -f slc -s 8  # Run from 8 weeks ago to 1 week ago
 USAGE
 }
 
@@ -261,10 +264,10 @@ push_to_git_repo() {
     return 1
   fi
 
-  # # Return to original directory
-  # cd "$current_dir"
+  # Return to original directory
+  cd "$current_dir"
   
-  # # Clean up the cloned repository
+  # Clean up the cloned repository
   # log_info "Cleaning up cloned repository..."
   # rm -rf "$OPS_REPO_PATH"
   # if [ $? -eq 0 ]; then
@@ -412,7 +415,7 @@ if [ "$dry_run" = false ]; then
   set -e
 
   # Set up Python environment
-  source $PCM_REPO_PATH/venv_cmr_audit/bin/activate
+  source "$CMR_AUDIT_VENV_PATH"
 
   # Make sure the opera-sds-pcm modules can be found by adding to PYTHONPATH
   export PYTHONPATH="$PCM_REPO_PATH:$PYTHONPATH"
