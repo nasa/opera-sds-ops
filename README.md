@@ -76,3 +76,14 @@ Activates the CMR audit virtual environment
 Sets up the correct PYTHONPATH for accessing opera-sds-pcm modules
 Note
 This script is part of the OPERA SDS PCM toolkit and is designed to run on systems with the correct environment setup.
+
+
+
+
+
+side note
+ cat ~/.github_token   git hub token is here
+
+
+
+ 
