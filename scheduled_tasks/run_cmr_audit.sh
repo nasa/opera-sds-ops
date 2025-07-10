@@ -146,6 +146,28 @@ execute_audit_command() {
     fi
   fi
 
+  # Create symlink for geojson file if running SLC audit
+  if [ "$product_type" = "slc" ]; then
+    local geojson_source="$PCM_REPO_PATH/geo/data/north_america_opera_2023-09-14.geojson"
+    local geojson_target="$output_dir/north_america_opera.geojson"
+    
+    if [ "$dry_run" = true ]; then
+      log_info "DRY RUN: Would create symlink: $geojson_target -> $geojson_source"
+    else
+      if [ -f "$geojson_source" ]; then
+        log_info "Creating symlink for geojson file: $geojson_target -> $geojson_source"
+        ln -sf "$geojson_source" "$geojson_target"
+        if [ $? -ne 0 ]; then
+          log_error "Failed to create symlink for geojson file"
+          return 1
+        fi
+      else
+        log_error "Source geojson file not found: $geojson_source"
+        return 1
+      fi
+    fi
+  fi
+
   local cmd="${cmd_base} --start-datetime=${start_date} --end-datetime=${end_date}"
 
   # Execute or display command based on dry run flag
