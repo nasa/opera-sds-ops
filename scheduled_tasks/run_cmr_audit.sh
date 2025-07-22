@@ -5,7 +5,8 @@
 # Usage: source cmr_audit.env && ./run_cmr_audit.sh -f <script_name> [additional options]
 #        Where script_name is one of:
 #        - hls (for cmr_audit_hls.py)
-#        - slc (for cmr_audit_slc.py)
+#        - rtc_s1 (for cmr_audit_slc.py with RTC audit)
+#        - cslc_s1 (for cmr_audit_slc.py with CSLC audit)
 #        - disp_s1 (for cmr_audit_disp_s1.py)
 #        - dswx_s1 (for cmr_audit_dswx_s1.py)
 
@@ -46,8 +47,8 @@ Usage:
   $cmdname [options]
 
 Required options:
-  -f, --filename <name>  Script to run (required)
-                         Valid values: hls, slc, disp_s1, dswx_s1
+  -f, --filename <n>  Script to run (required)
+                         Valid values: hls, rtc_s1, cslc_s1, disp_s1, dswx_s1
 
 Optional parameters:
   -m, --mode <mode>      Processing mode for DISP-S1 (forward, reprocessing, historical)
@@ -66,11 +67,12 @@ Optional parameters:
 
 Examples:
   source cmr_audit.env && $cmdname --filename hls
-  source cmr_audit.env && $cmdname -f slc
+  source cmr_audit.env && $cmdname -f rtc_s1
+  source cmr_audit.env && $cmdname -f cslc_s1
   source cmr_audit.env && $cmdname -f disp_s1 -m historical -k 15
   source cmr_audit.env && $cmdname -f dswx_s1 --format json -o results.json
   source cmr_audit.env && $cmdname -f hls --dry-run
-  source cmr_audit.env && $cmdname -f slc -s 8  # Run from 8 weeks ago to 1 week ago
+  source cmr_audit.env && $cmdname -f rtc_s1 -s 8  # Run from 8 weeks ago to 1 week ago
 USAGE
 }
 
@@ -92,7 +94,10 @@ get_full_script_name() {
     hls)
       echo "cmr_audit_hls"
       ;;
-    slc)
+    rtc_s1)
+      echo "cmr_audit_slc"
+      ;;
+    cslc_s1)
       echo "cmr_audit_slc"
       ;;
     disp_s1)
@@ -118,7 +123,15 @@ execute_audit_command() {
   if [[ "$cmd_base" == *"cmr_audit_hls"* ]]; then
     product_type="hls"
   elif [[ "$cmd_base" == *"cmr_audit_slc"* ]]; then
-    product_type="slc"
+    # Determine if it's RTC or CSLC based on the script_shorthand
+    if [[ "$script_shorthand" == "rtc_s1" ]]; then
+      product_type="rtc_s1"
+    elif [[ "$script_shorthand" == "cslc_s1" ]]; then
+      product_type="cslc_s1"
+    else
+      log_error "Unable to determine SLC product type from script_shorthand: $script_shorthand"
+      return 1
+    fi
   elif [[ "$cmd_base" == *"cmr_audit_disp_s1"* ]]; then
     product_type="disp_s1"
   elif [[ "$cmd_base" == *"cmr_audit_dswx_s1"* ]]; then
@@ -146,8 +159,8 @@ execute_audit_command() {
     fi
   fi
 
-  # Create symlink for geojson file if running SLC audit
-  if [ "$product_type" = "slc" ]; then
+  # Create symlink for geojson file if running SLC audit (both RTC and CSLC)
+  if [ "$product_type" = "rtc_s1" ] || [ "$product_type" = "cslc_s1" ]; then
     local geojson_source="$PCM_REPO_PATH/geo/data/north_america_opera_2023-09-14.geojson"
     local geojson_target="$output_dir/north_america_opera.geojson"
     
@@ -255,6 +268,7 @@ push_to_git_repo() {
 
   # Copy files
   log_info "Copying generated files..."
+  mkdir -p scheduled_tasks
   cp -r "$current_dir"/* scheduled_tasks/ 2>/dev/null || true
 
   # Add and commit files
@@ -324,8 +338,12 @@ while [[ $# -gt 0 ]]; do
       script_shorthand="hls"
       shift
       ;;
-    --slc)
-      script_shorthand="slc"
+    --rtc_s1)
+      script_shorthand="rtc_s1"
+      shift
+      ;;
+    --cslc_s1)
+      script_shorthand="cslc_s1"
       shift
       ;;
     --disp_s1)
@@ -402,7 +420,7 @@ fi
 # Convert shorthand to full script name
 cmr_audit_filename=$(get_full_script_name "$script_shorthand")
 if [[ $? -ne 0 ]]; then
-  exit_with_error "Invalid script shorthand: $script_shorthand. Must be one of: hls, slc, disp_s1, dswx_s1"
+  exit_with_error "Invalid script shorthand: $script_shorthand. Must be one of: hls, rtc_s1, cslc_s1, disp_s1, dswx_s1"
 fi
 
 # For DISP-S1, ensure processing-mode is valid
@@ -460,6 +478,16 @@ case $script_shorthand in
     # Add optional DSWX-S1 specific arguments
     [[ -v output_file ]] && cmd_base="$cmd_base --output=$output_file"
     [[ -v output_format ]] && cmd_base="$cmd_base --format=$output_format"
+    ;;
+
+  "rtc_s1")
+    # Enable RTC audit and disable CSLC audit
+    cmd_base="$cmd_base --do_rtc=true --do_cslc=false"
+    ;;
+
+  "cslc_s1")
+    # Enable CSLC audit and disable RTC audit
+    cmd_base="$cmd_base --do_cslc=true --do_rtc=false"
     ;;
 esac
 
