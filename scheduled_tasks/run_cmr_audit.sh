@@ -36,6 +36,9 @@ OPS_REPO_PATH="${OPS_REPO_PATH:-/export/home/hysdsops/scheduled_tasks/opera-sds-
 # Virtual environment path - use environment variable with fallback default
 CMR_AUDIT_VENV_PATH="${CMR_AUDIT_VENV_PATH:-$PCM_REPO_PATH/venv_cmr_audit/bin/activate}"
 
+# GeoJSON file path - use environment variable with fallback default
+GEOJSON_FILE_PATH="${GEOJSON_FILE_PATH}"
+
 ######################################################################
 # Functions
 ######################################################################
@@ -161,7 +164,7 @@ execute_audit_command() {
 
   # Create symlink for geojson file if running SLC audit (both RTC and CSLC)
   if [ "$product_type" = "rtc_s1" ] || [ "$product_type" = "cslc_s1" ]; then
-    local geojson_source="$PCM_REPO_PATH/geo/data/north_america_opera_2023-09-14.geojson"
+    local geojson_source="$GEOJSON_FILE_PATH"
     local geojson_target="$output_dir/north_america_opera.geojson"
     
     if [ "$dry_run" = true ]; then
