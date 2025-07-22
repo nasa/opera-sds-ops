@@ -248,7 +248,7 @@ push_to_git_repo() {
   local branch_name="cmr_audit_results_${product_type}_${today_date}"
 
   if [ "$dry_run" = true ]; then
-    log_info "DRY RUN: Would copy files from $current_dir to $OPS_REPO_PATH/scheduled_tasks/"
+    log_info "DRY RUN: Would copy .txt files from $current_dir to $OPS_REPO_PATH/scheduled_tasks/"
     log_info "DRY RUN: Would create branch $branch_name and push changes"
     return 0
   fi
@@ -269,13 +269,21 @@ push_to_git_repo() {
   log_info "Creating branch: $branch_name"
   git checkout -b "$branch_name"
 
-  # Copy files
-  log_info "Copying generated files..."
+  # Copy files (only .txt files)
+  log_info "Copying generated .txt files..."
   mkdir -p scheduled_tasks
-  cp -r "$current_dir"/* scheduled_tasks/ 2>/dev/null || true
+  
+  # Find and copy only .txt files, preserving directory structure
+  find "$current_dir" -name "*.txt" -type f | while read txt_file; do
+    # Get relative path from current_dir
+    rel_path="${txt_file#$current_dir/}"
+    target_dir="scheduled_tasks/$(dirname "$rel_path")"
+    mkdir -p "$target_dir"
+    cp "$txt_file" "scheduled_tasks/$rel_path"
+  done
 
-  # Add and commit files
-  git add scheduled_tasks/
+  # Add only .txt files
+  find scheduled_tasks -name "*.txt" -type f -exec git add {} + 2>/dev/null || true
   
   # Check if there are changes to commit
   if git diff --staged --quiet; then
@@ -287,7 +295,7 @@ push_to_git_repo() {
   fi
 
   # Commit changes
-  local commit_message="Add CMR audit results for $(date +"%Y-%m-%d %H:%M:%S")"
+  local commit_message="Add CMR audit results (.txt files) for $(date +"%Y-%m-%d %H:%M:%S")"
   git commit -m "$commit_message"
 
   # Push branch
