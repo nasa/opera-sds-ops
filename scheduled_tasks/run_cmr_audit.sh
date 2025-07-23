@@ -229,6 +229,7 @@ push_to_git_repo() {
   fi
 
   # Check if we're in a git repository or if opera-sds-ops exists
+  local cloned_repo=false
   if [ ! -d "$OPS_REPO_PATH" ]; then
     log_info "Cloning opera-sds-ops repository..."
     if [ "$dry_run" = true ]; then
@@ -239,6 +240,7 @@ push_to_git_repo() {
         log_error "Failed to clone opera-sds-ops repository"
         return 1
       fi
+      cloned_repo=true
     fi
   fi
 
@@ -250,6 +252,9 @@ push_to_git_repo() {
   if [ "$dry_run" = true ]; then
     log_info "DRY RUN: Would copy .txt files from $current_dir to $OPS_REPO_PATH/scheduled_tasks/"
     log_info "DRY RUN: Would create branch $branch_name and push changes"
+    if [ ! -d "$OPS_REPO_PATH" ]; then
+      log_info "DRY RUN: Would clean up cloned repository at $OPS_REPO_PATH after push"
+    fi
     return 0
   fi
 
@@ -314,14 +319,23 @@ push_to_git_repo() {
   # Return to original directory
   cd "$current_dir"
   
-  # Clean up the cloned repository
-  # log_info "Cleaning up cloned repository..."
-  # rm -rf "$OPS_REPO_PATH"
-  # if [ $? -eq 0 ]; then
-  #   log_info "Successfully cleaned up cloned repository"
-  # else
-  #   log_error "Warning: Failed to clean up cloned repository at $OPS_REPO_PATH"
-  # fi
+  # Clean up the cloned repository (only if we cloned it)
+  if [ "$cloned_repo" = true ]; then
+    log_info "Cleaning up cloned repository at $OPS_REPO_PATH..."
+    # Double-check that the path contains 'opera-sds-ops' for safety
+    if [[ "$OPS_REPO_PATH" == *"opera-sds-ops"* ]]; then
+      rm -rf "$OPS_REPO_PATH"
+      if [ $? -eq 0 ]; then
+        log_info "Successfully cleaned up cloned repository"
+      else
+        log_error "Warning: Failed to clean up cloned repository at $OPS_REPO_PATH"
+      fi
+    else
+      log_error "Safety check failed: Repository path doesn't contain 'opera-sds-ops'. Skipping cleanup."
+    fi
+  else
+    log_info "Repository was not cloned by this script, skipping cleanup"
+  fi
   
   return 0
 }
