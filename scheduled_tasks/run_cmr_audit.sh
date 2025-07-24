@@ -251,9 +251,15 @@ push_to_git_repo() {
 
   if [ "$dry_run" = true ]; then
     log_info "DRY RUN: Would copy .txt files from $current_dir to $OPS_REPO_PATH/scheduled_tasks/"
+    log_info "DRY RUN: Would clean up product folders from working directory:"
+    for product_folder in hls rtc_s1 cslc_s1 disp_s1 dswx_s1; do
+      if [ -d "$current_dir/$product_folder" ]; then
+        log_info "DRY RUN: Would remove folder: $current_dir/$product_folder"
+      fi
+    done
     log_info "DRY RUN: Would create branch $branch_name and push changes"
-    if [ ! -d "$OPS_REPO_PATH" ]; then
-      log_info "DRY RUN: Would clean up cloned repository at $OPS_REPO_PATH after push"
+    if [ "$cloned_repo" = true ]; then
+      log_info "DRY RUN: Would clean up cloned repository at $OPS_REPO_PATH"
     fi
     return 0
   fi
@@ -286,6 +292,24 @@ push_to_git_repo() {
     mkdir -p "$target_dir"
     cp "$txt_file" "scheduled_tasks/$rel_path"
   done
+
+  # Clean up product folders from the working directory after copying
+  log_info "Cleaning up product folders from working directory..."
+  cd "$current_dir"
+  for product_folder in hls rtc_s1 cslc_s1 disp_s1 dswx_s1; do
+    if [ -d "$product_folder" ]; then
+      log_info "Removing product folder: $product_folder"
+      rm -rf "$product_folder"
+      if [ $? -eq 0 ]; then
+        log_info "Successfully removed $product_folder folder"
+      else
+        log_error "Warning: Failed to remove $product_folder folder"
+      fi
+    fi
+  done
+
+  # Return to ops repo directory
+  cd "$OPS_REPO_PATH"
 
   # Add only .txt files
   find scheduled_tasks -name "*.txt" -type f -exec git add {} + 2>/dev/null || true
@@ -577,6 +601,20 @@ if [ "$push_to_git" = true ]; then
   if [ $? -ne 0 ]; then
     log_error "Git push failed, but audit completed successfully"
   fi
+else
+  # Clean up product folders when not pushing to git
+  log_info "Cleaning up product folders from working directory..."
+  for product_folder in hls rtc_s1 cslc_s1 disp_s1 dswx_s1; do
+    if [ -d "$product_folder" ]; then
+      log_info "Removing product folder: $product_folder"
+      rm -rf "$product_folder"
+      if [ $? -eq 0 ]; then
+        log_info "Successfully removed $product_folder folder"
+      else
+        log_error "Warning: Failed to remove $product_folder folder"
+      fi
+    fi
+  done
 fi
 
 # Return success
