@@ -309,6 +309,22 @@ push_to_git_repo() {
   log_info "Creating branch: $branch_name"
   git checkout -b "$branch_name"
 
+# Ensure remote is up to date
+git fetch --prune
+
+# If branch has no upstream set, set it to origin/branch_name
+if ! git rev-parse --abbrev-ref --symbolic-full-name "@{u}" >/dev/null 2>&1; then
+  git branch --set-upstream-to="origin/$branch_name" "$branch_name" || true
+fi
+
+# Fast-forward only (fails if local has diverged)
+git pull --ff-only || {
+  echo "Local branch has diverged from origin/$branch_name. Resetting to match remote..."
+  git reset --hard "origin/$branch_name"
+  git clean -fd
+}
+
+
   # Copy files (only .txt files for the specific product type)
   log_info "Copying generated .txt files for product type: $product_type..."
   
