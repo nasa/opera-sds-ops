@@ -27,7 +27,7 @@ log_level="INFO"           # Default log level
 dry_run=false              # Default to actually run the command
 start_days=28              # Default start point in days (28 days ago)
 end_days=7                 # Default end point in days (7 days ago)
-max_gap_days=7             # Maximum allowed gap between start and end dates in days
+max_gap_days=1             # Maximum allowed gap between start and end dates in days
 push_to_git=false          # Default to not push results to git
 
 # Repository paths - use environment variables with fallback defaults
@@ -152,8 +152,17 @@ execute_audit_command() {
   local end_dir=$(echo "$end_date" | cut -d'T' -f1 | sed 's/-//g')
   
   # Create directory structure: product_type/start_date-end_date
-  local output_dir="${product_type}/${start_dir}-${end_dir}"
-  
+  local output_dir=""
+  # Create directory structure
+  if [ "$max_gap_days" -eq 1 ]; then
+  # Special case: if max_gap_days is 1, only use start day
+    output_dir="${product_type}/${start_dir}"
+  else
+    # Default: use both start and end
+    output_dir="${product_type}/${start_dir}-${end_dir}"
+  fi
+
+
   if [ "$dry_run" = true ]; then
     log_info "DRY RUN: Would create directory: $output_dir"
   else
@@ -579,12 +588,13 @@ if [ "$dry_run" = false ]; then
   source "$CMR_AUDIT_VENV_PATH"
 
   # Make sure the opera-sds-pcm modules can be found by adding to PYTHONPATH
-  export PYTHONPATH="$PCM_REPO_PATH:$PCM_REPO_PATH/tools/ops/cmr_audit:$PYTHONPATH"
+  export PYTHONPATH="$PCM_REPO_PATH:$PCM_REPO_PATH/opera_commons:$PYTHONPATH"
 fi
 
 # Build base command (without start and end dates)
 # Prefer running as a module so intra-repo imports (e.g., rtc_utils) resolve via PYTHONPATH
-cmd_base="PYTHONPATH=$PCM_REPO_PATH:$PYTHONPATH python -m tools.ops.cmr_audit.${cmr_audit_filename} --log-level=$log_level"
+cmd_base="PYTHONPATH=$PCM_REPO_PATH:$PCM_REPO_PATH/tools/ops/cmr_audit:$PYTHONPATH python -m tools.ops.cmr_audit.${cmr_audit_filename} --log-level=$log_level"
+
 
 # Add script-specific arguments
 case $script_shorthand in
@@ -685,3 +695,4 @@ fi
 # Return success
 log_info "CMR audit completed successfully"
 exit 0
+
