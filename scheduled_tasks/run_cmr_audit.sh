@@ -275,7 +275,8 @@ push_to_git_repo() {
   # Copy generated files to the ops repo
   local current_dir=$(pwd)
   local today_date=$(date +"%Y-%m-%d")
-  local branch_name="cmr_audit_results_${product_type}_${today_date}"
+  # local branch_name="cmr_audit_results_${product_type}_${today_date}"
+  local branch_name="feature/schedule_tasks"
 
   if [ "$dry_run" = true ]; then
     log_info "DRY RUN: Would copy .txt files from $current_dir to $OPS_REPO_PATH/scheduled_tasks/"
