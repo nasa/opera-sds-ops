@@ -252,13 +252,13 @@ push_to_s3_bucket() {
   local dest_prefix="$S3_REPORTS_PREFIX/$product_type/"
 
   if [ "$dry_run" = true ]; then
-    log_info "DRY RUN: Would sync $product_dir to $dest_prefix (only *.txt)"
-    log_info "DRY RUN: aws s3 sync --exclude \"*\" --include \"*.txt\" \"$product_dir/\" \"$dest_prefix\""
+    log_info "DRY RUN: Would sync $product_dir to $dest_prefix (only *.txt) with delete"
+    log_info "DRY RUN: aws s3 sync --delete --exclude \"*\" --include \"*.txt\" \"$product_dir/\" \"$dest_prefix\""
     return 0
   fi
 
-  log_info "Uploading audit results to S3..."
-  aws s3 sync --only-show-errors --exclude "*" --include "*.txt" "$product_dir/" "$dest_prefix"
+  log_info "Uploading audit results to S3 (with delete to match local state)..."
+  aws s3 sync --delete --only-show-errors --exclude "*" --include "*.txt" "$product_dir/" "$dest_prefix"
   local exit_code=$?
   if [ $exit_code -ne 0 ]; then
     log_error "Failed to upload results to S3 (exit code $exit_code)"
