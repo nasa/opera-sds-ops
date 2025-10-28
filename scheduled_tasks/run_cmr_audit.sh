@@ -248,24 +248,39 @@ push_to_s3_bucket() {
     return 0
   fi
 
-  # Sync only .txt files preserving directory structure
-  local dest_prefix="$S3_REPORTS_PREFIX/$product_type/"
+  # Process each subfolder individually
+  for subfolder in "$product_dir"/*; do
+    if [ -d "$subfolder" ]; then
+      local folder_name=$(basename "$subfolder")
+      local dest_prefix="$S3_REPORTS_PREFIX/$product_type/$folder_name/"
+      
+      if [ "$dry_run" = true ]; then
+        log_info "DRY RUN: Would sync $subfolder to $dest_prefix (only *.txt) with delete"
+        log_info "DRY RUN: aws s3 sync --delete --exclude \"*\" --include \"*.txt\" \"$subfolder/\" \"$dest_prefix\""
+        # Generate JSON for dry run
+        generate_json_metadata "$product_type" "$subfolder" "$dest_prefix"
+      else
+        log_info "Uploading audit results for $folder_name to S3 (with delete to match local state)..."
+        aws s3 sync --delete --only-show-errors --exclude "*" --include "*.txt" "$subfolder/" "$dest_prefix"
+        local exit_code=$?
+        if [ $exit_code -ne 0 ]; then
+          log_error "Failed to upload results to S3 for $folder_name (exit code $exit_code)"
+          return $exit_code
+        fi
+        
+        log_info "Successfully uploaded results for $folder_name to $dest_prefix"
+        
+        # Generate JSON metadata for this specific folder
+        generate_json_metadata "$product_type" "$subfolder" "$dest_prefix"
+      fi
+    fi
+  done
 
-  if [ "$dry_run" = true ]; then
-    log_info "DRY RUN: Would sync $product_dir to $dest_prefix (only *.txt) with delete"
-    log_info "DRY RUN: aws s3 sync --delete --exclude \"*\" --include \"*.txt\" \"$product_dir/\" \"$dest_prefix\""
-    return 0
-  fi
+  
 
-  log_info "Uploading audit results to S3 (with delete to match local state)..."
-  aws s3 sync --delete --only-show-errors --exclude "*" --include "*.txt" "$product_dir/" "$dest_prefix"
-  local exit_code=$?
-  if [ $exit_code -ne 0 ]; then
-    log_error "Failed to upload results to S3 (exit code $exit_code)"
-    return $exit_code
-  fi
 
-  log_info "Successfully uploaded results to $dest_prefix"
+
+
 
   # Optional: clean up local product folder after upload
   log_info "Cleaning up $product_type folder from working directory..."
@@ -274,8 +289,68 @@ push_to_s3_bucket() {
   return 0
 }
 
-
+# Generate JSON metadata for audit results
+generate_json_metadata() {
+  local product_type=$1
+  local product_dir=$2
+  local s3_prefix=$3
   
+  # Extract timestamp from folder name (format: YYYYMMDD or YYYYMMDD-YYYYMMDD)
+  local folder_name=$(basename "$product_dir")
+  local timestamp=""
+  
+  # Handle different folder name formats
+  if [[ "$folder_name" =~ ^[0-9]{8}$ ]]; then
+    # Single date format: YYYYMMDD
+    timestamp="$folder_name"
+  elif [[ "$folder_name" =~ ^([0-9]{8})-([0-9]{8})$ ]]; then
+    # Date range format: YYYYMMDD-YYYYMMDD, use the start date
+    timestamp="${BASH_REMATCH[1]}"
+  else
+    # Fallback: use current date
+    timestamp=$(date +"%Y%m%d")
+  fi
+  
+  # Generate run_id (current timestamp in ISO format)
+  local run_id=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  
+  # Count lines in the single .txt file in this folder
+  local missing_granules=0
+  local txt_file=$(find "$product_dir" -name "*.txt" -type f | head -1)
+  if [ -n "$txt_file" ] && [ -f "$txt_file" ]; then
+    missing_granules=$(wc -l < "$txt_file" 2>/dev/null || echo "0")
+  fi
+  
+  # Get the .txt file path for report_path
+  local report_path=""
+  if [ -n "$txt_file" ]; then
+    local relative_path="${txt_file#$product_dir/}"
+    report_path="$s3_prefix$relative_path"
+  else
+    report_path="$s3_prefix"
+  fi
+  
+  # Create JSON
+  local json_metadata=$(cat << EOF
+{
+  "timestamp": "$timestamp",
+  "run_id": "$run_id",
+  "product_id": "$product_type",
+  "missing_granules": $missing_granules,
+  "report_path": "$report_path",
+  "notes": ""
+}
+EOF
+)
+  curl -s -XPOST "http://localhost:9200/audit_results/_doc" -H "Content-Type: application/json" -d "$json_metadata"
+  if [ $? -ne 0 ]; then
+    log_error "Failed to post JSON metadata to Elasticsearch"
+    return 1
+  fi
+
+  log_info "Generated JSON metadata for $product_type:"
+  echo "$json_metadata"
+}
 
 ######################################################################
 # Parse arguments
