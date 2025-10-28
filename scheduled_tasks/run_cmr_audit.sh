@@ -299,16 +299,22 @@ generate_json_metadata() {
   local folder_name=$(basename "$product_dir")
   local timestamp=""
   
-  # Handle different folder name formats
-  if [[ "$folder_name" =~ ^[0-9]{8}$ ]]; then
-    # Single date format: YYYYMMDD
-    timestamp="$folder_name"
-  elif [[ "$folder_name" =~ ^([0-9]{8})-([0-9]{8})$ ]]; then
-    # Date range format: YYYYMMDD-YYYYMMDD, use the start date
-    timestamp="${BASH_REMATCH[1]}"
+  # Handle different folder name formats and convert to ISO date format
+  if [[ "$folder_name" =~ ^([0-9]{4})([0-9]{2})([0-9]{2})$ ]]; then
+    # Single date format: YYYYMMDD -> YYYY-MM-DD
+    local year="${BASH_REMATCH[1]}"
+    local month="${BASH_REMATCH[2]}"
+    local day="${BASH_REMATCH[3]}"
+    timestamp="$year-$month-$day"
+  elif [[ "$folder_name" =~ ^([0-9]{4})([0-9]{2})([0-9]{2})-([0-9]{4})([0-9]{2})([0-9]{2})$ ]]; then
+    # Date range format: YYYYMMDD-YYYYMMDD, use the start date -> YYYY-MM-DD
+    local year="${BASH_REMATCH[1]}"
+    local month="${BASH_REMATCH[2]}"
+    local day="${BASH_REMATCH[3]}"
+    timestamp="$year-$month-$day"
   else
-    # Fallback: use current date
-    timestamp=$(date +"%Y%m%d")
+    # Fallback: use current date in ISO format
+    timestamp=$(date +"%Y-%m-%d")
   fi
   
   # Generate run_id (current timestamp in ISO format)
