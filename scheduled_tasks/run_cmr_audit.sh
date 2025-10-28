@@ -29,6 +29,10 @@ start_days=28              # Default start point in days (28 days ago)
 end_days=7                 # Default end point in days (7 days ago)
 max_gap_days=1             # Maximum allowed gap between start and end dates in days
 push_to_git=false          # Default to not push results to git
+push_to_s3=false           # Default to not push results to S3
+
+# S3 reports prefix (can be overridden via env)
+S3_REPORTS_PREFIX="${S3_REPORTS_PREFIX:-s3://opera-int-lts-fwd/reports}"
 
 # Repository paths - use environment variables with fallback defaults
 PCM_REPO_PATH="${PCM_REPO_PATH:-/export/home/hysdsops/scheduled_tasks/opera-sds-pcm}"
@@ -68,7 +72,9 @@ Optional parameters:
   --validate-with-grq    Use GRQ database instead of CMR for DISP-S1
   --log-level <level>    Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) (default: $log_level)
   -n, --dry-run          Show the command that would be executed without running it
-  --push-to-git          Push generated files to opera-sds-ops git repository (default: false)
+  --push-to-s3           Push generated files to S3 (default: false)
+                         Destination: $S3_REPORTS_PREFIX
+  --push-to-git          Deprecated alias for --push-to-s3 (default: false)
   -h, --help             Show this help message
 
 Examples:
@@ -324,6 +330,57 @@ git pull --ff-only || {
   git clean -fd
 }
 
+# Push generated files to S3 bucket
+push_to_s3_bucket() {
+  local product_type=$1
+
+  # Determine working directory for product type
+  local current_dir=$(pwd)
+  local product_dir="$current_dir/$product_type"
+
+  if [ "$push_to_s3" = false ] && [ "$push_to_git" = false ]; then
+    return 0
+  fi
+
+  log_info "Preparing to push results to S3: $S3_REPORTS_PREFIX"
+
+  # Ensure aws cli is available
+  if ! command -v aws >/dev/null 2>&1; then
+    log_error "AWS CLI not found. Please install and configure AWS CLI."
+    return 1
+  fi
+
+  if [ ! -d "$product_dir" ]; then
+    log_info "No product folder found for $product_type, nothing to upload"
+    return 0
+  fi
+
+  # Sync only .txt files preserving directory structure
+  local dest_prefix="$S3_REPORTS_PREFIX/$product_type/"
+
+  if [ "$dry_run" = true ]; then
+    log_info "DRY RUN: Would sync $product_dir to $dest_prefix (only *.txt)"
+    log_info "DRY RUN: aws s3 sync --exclude \"*\" --include \"*.txt\" \"$product_dir/\" \"$dest_prefix\""
+    return 0
+  fi
+
+  log_info "Uploading audit results to S3..."
+  aws s3 sync --only-show-errors --exclude "*" --include "*.txt" "$product_dir/" "$dest_prefix"
+  local exit_code=$?
+  if [ $exit_code -ne 0 ]; then
+    log_error "Failed to upload results to S3 (exit code $exit_code)"
+    return $exit_code
+  fi
+
+  log_info "Successfully uploaded results to $dest_prefix"
+
+  # Optional: clean up local product folder after upload
+  log_info "Cleaning up $product_type folder from working directory..."
+  rm -rf "$product_dir" || log_error "Warning: Failed to remove $product_dir"
+
+  return 0
+}
+
 
   # Copy files (only .txt files for the specific product type)
   log_info "Copying generated .txt files for product type: $product_type..."
@@ -513,7 +570,13 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --push-to-git)
+      # Backward compatibility: treat as S3 push
       push_to_git=true
+      push_to_s3=true
+      shift
+      ;;
+    --push-to-s3)
+      push_to_s3=true
       shift
       ;;
     -h|--help)
@@ -692,17 +755,14 @@ else
 fi
 
 # Push results to git if requested
-if [ "$push_to_git" = true ]; then
-  # Use the overall date range for branch naming
-  overall_start_dir=$(echo "$start_date" | cut -d'T' -f1 | sed 's/-//g')
-  overall_end_dir=$(echo "$end_date" | cut -d'T' -f1 | sed 's/-//g')
-  
-  push_to_git_repo "$script_shorthand" "$overall_start_dir" "$overall_end_dir"
+if [ "$push_to_s3" = true ] || [ "$push_to_git" = true ]; then
+  # Backward compatibility: if either flag set, push to S3
+  push_to_s3_bucket "$script_shorthand"
   if [ $? -ne 0 ]; then
-    log_error "Git push failed, but audit completed successfully"
+    log_error "S3 push failed, but audit completed successfully"
   fi
 else
-  # Keep the generated files when not pushing to git
+  # Keep the generated files when not pushing
   log_info "Generated files are available in the $script_shorthand folder in the current working directory"
   if [ -d "$script_shorthand" ]; then
     log_info "Results saved locally in: $(pwd)/$script_shorthand"
