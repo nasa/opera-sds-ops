@@ -27,16 +27,14 @@ log_level="INFO"           # Default log level
 dry_run=false              # Default to actually run the command
 start_days=28              # Default start point in days (28 days ago)
 end_days=7                 # Default end point in days (7 days ago)
-max_gap_days=1             # Maximum allowed gap between start and end dates in days
-push_to_git=false          # Default to not push results to git
-push_to_s3=false           # Default to not push results to S3
+ max_gap_days=1             # Maximum allowed gap between start and end dates in days
+ push_to_s3=false           # Default to not push results to S3
 
 # S3 reports prefix (can be overridden via env)
 S3_REPORTS_PREFIX="${S3_REPORTS_PREFIX:-s3://opera-int-lts-fwd/reports}"
 
 # Repository paths - use environment variables with fallback defaults
 PCM_REPO_PATH="${PCM_REPO_PATH:-/export/home/hysdsops/scheduled_tasks/opera-sds-pcm}"
-OPS_REPO_PATH="${OPS_REPO_PATH:-/export/home/hysdsops/scheduled_tasks/opera-sds-ops}"
 
 # Virtual environment path - use environment variable with fallback default
 CMR_AUDIT_VENV_PATH="${CMR_AUDIT_VENV_PATH:-$PCM_REPO_PATH/venv_cmr_audit/bin/activate}"
@@ -74,7 +72,6 @@ Optional parameters:
   -n, --dry-run          Show the command that would be executed without running it
   --push-to-s3           Push generated files to S3 (default: false)
                          Destination: $S3_REPORTS_PREFIX
-  --push-to-git          Deprecated alias for --push-to-s3 (default: false)
   -h, --help             Show this help message
 
 Examples:
@@ -225,111 +222,7 @@ execute_audit_command() {
   fi
 }
 
-# Push generated files to git repository
-push_to_git_repo() {
-  local product_type=$1
-  local start_dir=$2
-  local end_dir=$3
-  
-  if [ "$push_to_git" = false ]; then
-    return 0
-  fi
-
-  log_info "Preparing to push results to git repository..."
-
-  # Get git token from ~/.github_token file, environment variable, or SDS config
-  if [[ -f ~/.github_token ]]; then
-    GIT_TOKEN=$(cat ~/.github_token | tr -d '\n\r')
-    log_info "Using GitHub token from ~/.github_token file"
-  else
-    GIT_TOKEN=${GIT_OAUTH_TOKEN:-$(grep "^GIT_OAUTH_TOKEN:" ~/.sds/config | awk '{print $2}' 2>/dev/null)}
-    if [[ -n "$GIT_TOKEN" ]]; then
-      log_info "Using GitHub token from environment variable or SDS config"
-    fi
-  fi
-  
-  if [[ -z "$GIT_TOKEN" ]]; then
-    log_error "Git token not found. Cannot push to repository."
-    log_error "Please ensure one of the following:"
-    log_error "  1. Create ~/.github_token file with your GitHub personal access token"
-    log_error "  2. Set GIT_OAUTH_TOKEN environment variable"
-    log_error "  3. Add GIT_OAUTH_TOKEN to ~/.sds/config file"
-    return 1
-  fi
-
-  # Configure git to use the token for authentication
-  git config --global user.name "CMR Audit Script"
-  git config --global user.email "hysdsops@jpl.nasa.gov"
-
-  # Check if we're in a git repository or if opera-sds-ops exists
-  local cloned_repo=false
-  if [ ! -d "$OPS_REPO_PATH" ]; then
-    log_info "Cloning opera-sds-ops repository..."
-    if [ "$dry_run" = true ]; then
-      log_info "DRY RUN: Would clone https://github.com/nasa/opera-sds-ops.git to $OPS_REPO_PATH"
-    else
-      # Use token directly in the URL for cloning
-      git clone "https://${GIT_TOKEN}:@github.com/nasa/opera-sds-ops.git" "$OPS_REPO_PATH"
-              if [ $? -ne 0 ]; then
-          log_error "Failed to clone opera-sds-ops repository"
-          return 1
-        fi
-      cloned_repo=true
-    fi
-  fi
-
-  # Copy generated files to the ops repo
-  local current_dir=$(pwd)
-  local today_date=$(date +"%Y-%m-%d")
-  # local branch_name="cmr_audit_results_${product_type}_${today_date}"
-  local branch_name="feature/schedule_tasks"
-
-  if [ "$dry_run" = true ]; then
-    log_info "DRY RUN: Would copy .txt files from $current_dir to $OPS_REPO_PATH/scheduled_tasks/"
-    log_info "DRY RUN: Would clean up product folders from working directory:"
-    for product_folder in hls rtc_s1 cslc_s1 disp_s1 dswx_s1; do
-      if [ -d "$current_dir/$product_folder" ]; then
-        log_info "DRY RUN: Would remove folder: $current_dir/$product_folder"
-      fi
-    done
-    log_info "DRY RUN: Would create branch $branch_name and push changes"
-    if [ "$cloned_repo" = true ]; then
-      log_info "DRY RUN: Would clean up cloned repository at $OPS_REPO_PATH"
-    fi
-    return 0
-  fi
-
-  # Navigate to ops repo
-  cd "$OPS_REPO_PATH" || {
-    log_error "Failed to navigate to $OPS_REPO_PATH"
-    return 1
-  }
-
-  # Update repository
-  log_info "Updating repository..."
-  git fetch origin
-  git checkout main
-  git pull origin main
-
-  # Create new branch
-  log_info "Creating branch: $branch_name"
-  git checkout -b "$branch_name"
-
-# Ensure remote is up to date
-git fetch --prune
-
-# If branch has no upstream set, set it to origin/branch_name
-if ! git rev-parse --abbrev-ref --symbolic-full-name "@{u}" >/dev/null 2>&1; then
-  git branch --set-upstream-to="origin/$branch_name" "$branch_name" || true
-fi
-
-# Fast-forward only (fails if local has diverged)
-git pull --ff-only || {
-  echo "Local branch has diverged from origin/$branch_name. Resetting to match remote..."
-  git reset --hard "origin/$branch_name"
-  git clean -fd
-}
-
+ 
 # Push generated files to S3 bucket
 push_to_s3_bucket() {
   local product_type=$1
@@ -338,7 +231,7 @@ push_to_s3_bucket() {
   local current_dir=$(pwd)
   local product_dir="$current_dir/$product_type"
 
-  if [ "$push_to_s3" = false ] && [ "$push_to_git" = false ]; then
+  if [ "$push_to_s3" = false ]; then
     return 0
   fi
 
@@ -382,109 +275,7 @@ push_to_s3_bucket() {
 }
 
 
-  # Copy files (only .txt files for the specific product type)
-  log_info "Copying generated .txt files for product type: $product_type..."
   
-  # Check if the product folder exists in current directory
-  if [ -d "$current_dir/$product_type" ]; then
-    # Create target directory structure in opera-sds-ops repo
-    target_product_dir="scheduled_tasks/$product_type"
-    mkdir -p "$target_product_dir"
-    
-    # Find and copy only .txt files from the specific product folder
-    find "$current_dir/$product_type" -name "*.txt" -type f | while read txt_file; do
-      # Get relative path from the product folder
-      rel_path="${txt_file#$current_dir/$product_type/}"
-      target_subdir="$target_product_dir/$(dirname "$rel_path")"
-      
-      # Create subdirectory if it doesn't exist
-      if [ "$(dirname "$rel_path")" != "." ]; then
-        mkdir -p "$target_subdir"
-        target_file="$target_subdir/$(basename "$txt_file")"
-      else
-        target_file="$target_product_dir/$(basename "$txt_file")"
-      fi
-      
-      log_info "Copying: $txt_file -> $target_file"
-      cp "$txt_file" "$target_file"
-    done
-  else
-    log_info "No product folder found for $product_type, skipping file copy"
-  fi
-
-  # Clean up the specific product folder from the working directory after copying
-  log_info "Cleaning up $product_type folder from working directory..."
-  cd "$current_dir"
-  if [ -d "$product_type" ]; then
-    log_info "Removing product folder: $product_type"
-    rm -rf "$product_type"
-    if [ $? -eq 0 ]; then
-      log_info "Successfully removed $product_type folder"
-    else
-      log_error "Warning: Failed to remove $product_type folder"
-    fi
-  fi
-
-  # Return to ops repo directory
-  cd "$OPS_REPO_PATH"
-
-  # Add only .txt files from the specific product type folder
-  if [ -d "scheduled_tasks/$product_type" ]; then
-    find "scheduled_tasks/$product_type" -name "*.txt" -type f -exec git add {} + 2>/dev/null || true
-    log_info "Added .txt files from scheduled_tasks/$product_type to git staging"
-  else
-    log_info "No scheduled_tasks/$product_type directory found, nothing to add"
-  fi
-  
-  # Check if there are changes to commit
-  if git diff --staged --quiet; then
-    log_info "No changes to commit"
-    git checkout main
-    git branch -D "$branch_name"
-    cd "$current_dir"
-    return 0
-  fi
-
-  # Commit changes
-  local commit_message="Add CMR audit results for $product_type ($(date +"%Y-%m-%d %H:%M:%S"))"
-  git commit -m "$commit_message"
-
-  # Push branch
-  log_info "Pushing branch $branch_name to remote repository..."
-  git push "https://${GIT_TOKEN}:@github.com/nasa/opera-sds-ops.git" "$branch_name"
-
-  if [ $? -eq 0 ]; then
-    log_info "Successfully pushed results to git repository in branch: $branch_name"
-    log_info "You can create a pull request to merge these changes to main"
-      else
-      log_error "Failed to push to git repository"
-      cd "$current_dir"
-      return 1
-    fi
-
-  # Return to original directory
-  cd "$current_dir"
-  
-  # Clean up the cloned repository (only if we cloned it)
-  if [ "$cloned_repo" = true ]; then
-    log_info "Cleaning up cloned repository at $OPS_REPO_PATH..."
-    # Double-check that the path contains 'opera-sds-ops' for safety
-    if [[ "$OPS_REPO_PATH" == *"opera-sds-ops"* ]]; then
-      rm -rf "$OPS_REPO_PATH"
-      if [ $? -eq 0 ]; then
-        log_info "Successfully cleaned up cloned repository"
-      else
-        log_error "Warning: Failed to clean up cloned repository at $OPS_REPO_PATH"
-      fi
-    else
-      log_error "Safety check failed: Repository path doesn't contain 'opera-sds-ops'. Skipping cleanup."
-    fi
-  else
-    log_info "Repository was not cloned by this script, skipping cleanup"
-  fi
-  
-  return 0
-}
 
 ######################################################################
 # Parse arguments
@@ -567,12 +358,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     -n|--dry-run)
       dry_run=true
-      shift
-      ;;
-    --push-to-git)
-      # Backward compatibility: treat as S3 push
-      push_to_git=true
-      push_to_s3=true
       shift
       ;;
     --push-to-s3)
@@ -754,9 +539,8 @@ else
   execute_audit_command "$start_date" "$end_date" "$cmd_base"
 fi
 
-# Push results to git if requested
-if [ "$push_to_s3" = true ] || [ "$push_to_git" = true ]; then
-  # Backward compatibility: if either flag set, push to S3
+# Push results to S3 if requested
+if [ "$push_to_s3" = true ]; then
   push_to_s3_bucket "$script_shorthand"
   if [ $? -ne 0 ]; then
     log_error "S3 push failed, but audit completed successfully"
