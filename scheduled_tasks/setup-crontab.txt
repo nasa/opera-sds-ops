@@ -1,0 +1,4 @@
+0 1 * * * cd /export/home/hysdsops/scheduled_tasks && source cmr_audit.env && ./run_cmr_audit.sh -f hls --push-to-s3 2>&1 | logger -i -p user.notice -t cmr_audit_hls
+0 2 * * * cd /export/home/hysdsops/scheduled_tasks && source cmr_audit.env && ./run_cmr_audit.sh -f rtc_s1 --push-to-s3 2>&1 | logger -i -p user.notice -t cmr_audit_rtc_s1 
+0 3 * * * cd /export/home/hysdsops/scheduled_tasks && source cmr_audit.env && ./run_cmr_audit.sh -f cslc_s1 --push-to-s3 2>&1 | logger -i -p user.notice -t cmr_audit_cslc_s1
+0 4 * * * cd /export/home/hysdsops/scheduled_tasks && source cmr_audit.env && ./run_cmr_audit.sh -f dswx_s1 --push-to-s3 2>&1 | logger -i -p user.notice -t cmr_audit_dswx_s1
