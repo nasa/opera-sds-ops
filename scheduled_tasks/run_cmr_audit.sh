@@ -538,8 +538,8 @@ if [ "$dry_run" = false ]; then
 fi
 
 # Build base command (without start and end dates)
-# Prefer running as a module so intra-repo imports (e.g., rtc_utils) resolve via PYTHONPATH
-cmd_base="PYTHONPATH=$PCM_REPO_PATH:$PCM_REPO_PATH/tools/ops/cmr_audit:$PYTHONPATH python -m tools.ops.cmr_audit.${cmr_audit_filename} --log-level=$log_level"
+# Prefer running as a module so intra-repo imports (e.g., rtc_utils)
+cmd_base="python -m tools.ops.cmr_audit.${cmr_audit_filename} --log-level=$log_level"
 
 
 # Add script-specific arguments
