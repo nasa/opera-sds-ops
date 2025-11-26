@@ -1,0 +1,5 @@
+2025-04-25   Lala Pashaian
+
+The screenrc file is to format GNU screen tool to be more visually easy and understandable.
+Note this file needs to be in user home directory (Not group user) as a hidden file. 
+To do so just copy the file to your home directory as .screenrc 
