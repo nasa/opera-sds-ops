@@ -1,0 +1,97 @@
+{
+  "grq": [
+  
+    {
+      "creation_time": "2023-10-09T21:36:35Z",
+      "disk_usage": "3GB",
+      "enable_dedup": false,
+      "enabled": true,
+      "job_spec": "job-lw-mozart-retry:v1.2.5",
+      "job_type": "hysds-io-lw-mozart-retry:v1.2.5",
+      "kwargs": "{\"retry_count_max\":\"8\",\"job_priority_increment\":\"0\"}",
+      "modified_time": "2023-10-09T21:36:35Z",
+      "passthru_query": false,
+      "priority": 0,
+      "query_all": false,
+      "query_string": "{\"bool\":{\"must\":[{\"bool\":{\"must\":[{\"term\":{\"status\":\"job-failed\"}},{\"term\":{\"short_error.keyword\":\"Got non-zero exit code: 1\"}},{\"term\":{\"job.type\":\"job-hls_download:2.0.0\"}}]}}]}}",
+      "queue": "system-jobs-queue",
+      "rule_name": "Retry_HLS_Download_ExitCode1",
+      "soft_time_limit": 86400,
+      "tags": [
+        "retry-download-ExitCode1"
+      ],
+      "time_limit": 86700,
+      "username": "ops",
+      "workflow": "hysds-io-lw-mozart-retry:v1.2.5"
+    },
+    {
+      "creation_time": "2023-10-09T21:26:23Z",
+      "disk_usage": "3GB",
+      "enable_dedup": false,
+      "enabled": true,
+      "job_spec": "job-lw-mozart-retry:v1.2.5",
+      "job_type": "hysds-io-lw-mozart-retry:v1.2.5",
+      "kwargs": "{\"retry_count_max\":\"6\",\"job_priority_increment\":\"0\"}",
+      "modified_time": "2023-10-09T21:26:23Z",
+      "passthru_query": false,
+      "priority": 0,
+      "query_all": false,
+      "query_string": "{\"bool\":{\"must\":[{\"bool\":{\"must\":[{\"term\":{\"status\":\"job-failed\"}},{\"term\":{\"job.type\":\"job-SCIFLO_L3_DSWx_HLS:2.0.0\"}}]}}]}}",
+      "queue": "system-jobs-queue",
+      "rule_name": "Retry_Failed_HLS-L3",
+      "soft_time_limit": 86400,
+      "tags": [
+        "retry-HLS-L3"
+      ],
+      "time_limit": 86700,
+      "username": "ops",
+      "workflow": "hysds-io-lw-mozart-retry:v1.2.5"
+    },
+    {
+      "creation_time": "2023-10-09T21:30:09Z",
+      "disk_usage": "3GB",
+      "enable_dedup": false,
+      "enabled": true,
+      "job_spec": "job-lw-mozart-retry:v1.2.5",
+      "job_type": "hysds-io-lw-mozart-retry:v1.2.5",
+      "kwargs": "{\"retry_count_max\":\"8\",\"job_priority_increment\":\"0\"}",
+      "modified_time": "2023-10-09T21:37:09Z",
+      "passthru_query": false,
+      "priority": 0,
+      "query_all": false,
+      "query_string": "{\"bool\":{\"must\":[{\"bool\":{\"must\":[{\"bool\":{\"should\":[{\"terms\":{\"tags.keyword\":[\"trigger-slc_download\"]}}]}},{\"term\":{\"status\":\"job-failed\"}},{\"term\":{\"short_error.keyword\":\"Got non-zero exit code: 1\"}}]}}]}}",
+      "queue": "system-jobs-queue",
+      "rule_name": "Retry_SLC_Download_ExitCode1",
+      "soft_time_limit": 86400,
+      "tags": [
+        "retry-download-ExitCode1"
+      ],
+      "time_limit": 86700,
+      "username": "ops",
+      "workflow": "hysds-io-lw-mozart-retry:v1.2.5"
+    },
+    {
+      "creation_time": "2023-10-09T23:58:34Z",
+      "disk_usage": "3GB",
+      "enable_dedup": false,
+      "enabled": true,
+      "job_spec": "job-lw-mozart-purge:v1.2.5",
+      "job_type": "hysds-io-lw-mozart-purge:v1.2.5",
+      "kwargs": "{}",
+      "modified_time": "2023-10-09T23:58:34Z",
+      "passthru_query": true,
+      "priority": 0,
+      "query_all": false,
+      "query_string": "{\"bool\":{\"must\":[{\"bool\":{\"must\":[{\"term\":{\"status\":\"job-failed\"}},{\"term\":{\"short_error.keyword\":\"Product failed to in.....r is set\\n\\n\"}},{\"term\":{\"job.type\":\"job-hls_download:2.0.0\"}}]}}]}}",
+      "queue": "system-jobs-queue",
+      "rule_name": "Purge-Failed-HLSdownload-NoClobber",
+      "soft_time_limit": 86400,
+      "tags": [
+        "purge-transient"
+      ],
+      "time_limit": 86700,
+      "username": "ops",
+      "workflow": "hysds-io-lw-mozart-purge:v1.2.5"
+    }
+  ]
+}
