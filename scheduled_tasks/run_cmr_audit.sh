@@ -339,7 +339,7 @@ generate_json_metadata() {
   # Create JSON
   local json_metadata=$(cat << EOF
 {
-  "timestamp": "$timestamp",
+  "@timestamp": "$timestamp",
   "run_id": "$run_id",
   "product_id": "$product_type",
   "missing_granules": $missing_granules,
