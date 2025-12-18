@@ -38,10 +38,6 @@ except ImportError:
             return datetime.now()
 
 
-# TODO: Parameterize
-MAX_PLOT_LENGTH = 10
-
-
 def _get_start_end_dates(args: argparse.Namespace):
     if args.start_date is not None or args.end_date is not None:
         if args.start_date is None:
@@ -145,7 +141,13 @@ def get_parser():
         help='Opensearch index name to send accountability data to'
     )
 
-    # TODO: More args are definitely needed here
+    parser.add_argument(
+        '--duplicate-plot-length',
+        default=10,
+        type=_pos_int,
+        dest='plot_length',
+        help='The maximum number of dates in the duplicate plots produced'
+    )
 
     return parser
 
@@ -449,7 +451,7 @@ def main(args):
             logger.warning('Date already exists in plot data')
             plot_data.pop(i)
 
-    plot_data = plot_data[:MAX_PLOT_LENGTH]
+    plot_data = plot_data[:args.plot_length]
     plot_data.sort(key=lambda x: x['date'])
 
     with TemporaryDirectory() as temp_dir:
