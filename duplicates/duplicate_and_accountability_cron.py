@@ -159,6 +159,89 @@ def plot_data_and_save(data, plot_dir, s3_dir):
     s3_bucket = s3_url.netloc
     s3_path = Path(s3_url.path.lstrip('/'))
 
+    start_date = datetime.strptime(data['start_date'], '%Y-%m-%dT%H:%M:%SZ').replace(hour=0, minute=0,
+                                                                                     second=0, microsecond=0)
+    end_date = datetime.strptime(data['end_date'], '%Y-%m-%dT%H:%M:%SZ')
+
+    # If end date is at midnight UTC, it's very likely we'll have no granules in that date, so let's drop it from the
+    # plot.
+    if end_date > end_date.replace(hour=0, minute=0, second=0, microsecond=0):
+        end_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        end_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+
+    report_acquisition_dates = []
+
+    date = start_date
+    while date <= end_date:
+        report_acquisition_dates.append(date.strftime('%Y-%m-%d'))
+        date += timedelta(days=1)
+
+    report_acquisition_dates = set(report_acquisition_dates)
+    product_set = list(data['date_maps'].keys())
+
+    for product in product_set:
+        product_dates = set(data['date_maps'][product].keys())
+        days = list(product_dates | report_acquisition_dates)
+        days.sort()
+
+        x = np.arange(len(days))
+
+        product_data = {
+            'total_products': tuple([data['date_maps'][product].get(date, {}).get('products', 0) for date in days]),
+            'duplicate_products': tuple(
+                [data['date_maps'][product].get(date, {}).get('duplicates', 0) for date in days]
+            ),
+            'duplicate_percent': tuple(
+                [data['date_maps'][product].get(date, {}).get('percent_duplicates', 0) for date in days]
+            )
+        }
+
+        width = 1 / 3
+        multiplier = 0
+
+        fig, ax = plt.subplots(layout='constrained', figsize=(5 + 2 * len(days), 8))
+
+        for measure, color in zip(['total_products', 'duplicate_products'],
+                                  ['tab:blue', 'tab:orange']):
+            count = product_data[measure]
+            offset = width * multiplier
+            rects = ax.bar(x + offset, count, width, label=measure, color=color)
+            if measure == 'total_products':
+                ax.bar_label(rects, padding=3, )
+            else:
+                labels = [f'{c} ({p:0.2f}%)' for c, p in zip(count, product_data['duplicate_percent'])]
+                ax.bar_label(rects, labels, padding=3, )
+
+            multiplier += 1
+
+        ax.set_ylabel('Count')
+        ax.set_xticks(x + (width / 2), days, rotation=90)
+        ax.set_title(f'Product counts for {product} from {days[0]} to {days[-1]}')
+        ymax = max(product_data['total_products'])
+        if ymax > 0:
+            ymax = ceil(ymax * 1.2)
+        else:
+            ymax = 1
+        ax.set_ylim(bottom=0, top=ymax)
+        ax.legend()
+
+        plot_path = plot_dir / f'{product}_counts.png'
+        s3_key = str(s3_path / f'{product}_counts.png').lstrip('/')
+        plt.savefig(plot_path)
+        logger.info(f'Wrote duplicate product counts plot to {str(plot_path)}')
+
+        s3.upload_file(plot_path, s3_bucket, s3_key)
+        logger.info(f'Uploaded total products plot to s3://{s3_bucket}/{s3_key}')
+
+
+def plot_timeseries_data_and_save(data, plot_dir, s3_dir):
+    plot_dir.mkdir(exist_ok=True, parents=True)
+
+    s3_url = urlparse(s3_dir)
+    s3_bucket = s3_url.netloc
+    s3_path = Path(s3_url.path.lstrip('/'))
+
     data.sort(key=lambda x: x['date'])
 
     product_set = []
@@ -185,10 +268,11 @@ def plot_data_and_save(data, plot_dir, s3_dir):
 
         fig, ax = plt.subplots(layout='constrained', figsize=(5 + 2 * len(days), 8))
 
-        for measure in ['total_products', 'duplicate_products']:
+        for measure, color in zip(['total_products', 'duplicate_products'],
+                                  ['tab:blue', 'tab:orange']):
             count = product_data[measure]
             offset = width * multiplier
-            rects = ax.bar(x + offset, count, width, label=measure)
+            rects = ax.bar(x + offset, count, width, label=measure, color=color)
             if measure == 'total_products':
                 ax.bar_label(rects, padding=3,)
             else:
@@ -198,8 +282,9 @@ def plot_data_and_save(data, plot_dir, s3_dir):
             multiplier += 1
 
         ax.set_ylabel('Count')
+        ax.set_xlabel('Date (at 00:00:00Z)')
         ax.set_xticks(x + (width / 2), days, rotation=90)
-        ax.set_title(f'Product counts for {product} for {days[0]} to {days[-1]}')
+        ax.set_title(f'Product counts timeseries for {product} from {days[0]} to {days[-1]}')
         ymax = max(product_data['total_products'])
         if ymax > 0:
             ymax = ceil(ymax * 1.2)
@@ -208,8 +293,8 @@ def plot_data_and_save(data, plot_dir, s3_dir):
         ax.set_ylim(bottom=0, top=ymax)
         ax.legend()
 
-        plot_path = plot_dir / f'{product}_counts.png'
-        s3_key = str(s3_path / f'{product}_counts.png').lstrip('/')
+        plot_path = plot_dir / f'{product}_counts_timeseries.png'
+        s3_key = str(s3_path / f'{product}_counts_timeseries.png').lstrip('/')
         plt.savefig(plot_path)
         logger.info(f'Wrote duplicate product counts plot to {str(plot_path)}')
 
@@ -319,7 +404,7 @@ def main(args):
         logger.info(f'Invoking duplicate search script for product {product}')
         procs.append(subprocess.Popen(
             [sys.executable, 'duplicate_check.py', product, '-o', report_path, '--venue', args.venue,
-             '--start-date', start_date, '--end-date', end_date],
+             '--start-date', start_date, '--end-date', end_date, '--facet', 'dates'],
             stdout=subprocess.PIPE
         ))
 
@@ -348,7 +433,8 @@ def main(args):
         'start_date': start_date,
         'end_date': end_date,
         'venue': args.venue,
-        'product_counts': {}
+        'product_counts': {},
+        'date_maps': {}
     }
 
     for product in args.products:
@@ -357,20 +443,27 @@ def main(args):
 
         if os.path.exists(report_path):
             with open(report_path, 'r') as f:
-                report = json.load(f)
+                report: dict = json.load(f)
 
             logger.info(f'Loaded report for product {product}: {report_path}')
         else:
-            report = {'months': {}, 'summary': {'n_granules': 0}}
+            report: dict = {'months': {}, 'summary': {'n_granules': 0}, 'dates': {}}
             logger.info(f'No report was produced for product {product}, likely because there were no products in the '
                         f'time window. Initializing an empty report')
 
         duplicates = []
+        date_map = {}
 
-        for month in report['months']:
-            report_month = report['months'][month]
-            for duplicate in report_month['duplicates']:
-                duplicates.extend(report_month['duplicates'][duplicate]['duplicate_products'])
+        for date in report['dates']:
+            report_acq_date = report['dates'][date]
+            for duplicate in report_acq_date['duplicates']:
+                duplicates.extend(report_acq_date['duplicates'][duplicate]['duplicate_products'])
+
+            date_map[date] = {
+                'products': report_acq_date['n_granules'],
+                'duplicates': report_acq_date['n_duplicates'],
+                'percent_duplicates': report_acq_date['percent_duplicates'],
+            }
 
         duplicates.sort()
 
@@ -429,6 +522,7 @@ def main(args):
             'percent_duplicates': (len(duplicates) / report['summary']['n_granules'] * 100) if
             report['summary']['n_granules'] > 0 else 0,
         }
+        plot_data['date_maps'][product] = date_map
 
     s3_bucket, root_s3_path = s3_paths
 
@@ -444,27 +538,28 @@ def main(args):
 
         logger.info('Read in existing plot data')
 
-        plot_data = existing_plot_data + [plot_data]
+        timeseries_plot_data = existing_plot_data + [plot_data]
     else:
-        plot_data = [plot_data]
+        timeseries_plot_data = [plot_data]
 
-    for i in range(len(plot_data) - 1):
-        if plot_data[i]['date'] == report_date:
-            logger.warning('Date already exists in plot data')
-            plot_data.pop(i)
+    for i in range(len(timeseries_plot_data) - 1):
+        if timeseries_plot_data[i]['date'] == report_date:
+            logger.warning('Date already exists in timeseries plot data')
+            timeseries_plot_data.pop(i)
 
-    plot_data = plot_data[:args.plot_length]
-    plot_data.sort(key=lambda x: x['date'])
+    timeseries_plot_data = timeseries_plot_data[:args.plot_length]
+    timeseries_plot_data.sort(key=lambda x: x['date'])
 
     with TemporaryDirectory() as temp_dir:
         with open(os.path.join(temp_dir, 'plot_data.json'), 'w') as f:
-            json.dump(plot_data, f, indent=2)
+            json.dump(timeseries_plot_data, f, indent=2)
 
         s3.upload_file(os.path.join(temp_dir, 'plot_data.json'), s3_bucket, plot_data_key)
 
         logger.info(f'Uploaded plot data to s3://{s3_bucket}/{plot_data_key}')
 
     plot_data_and_save(plot_data, args.plot_dir, args.s3_plot_path)
+    plot_timeseries_data_and_save(timeseries_plot_data, args.plot_dir, args.s3_plot_path)
 
     record_dswx_hls_accountability(args, start_date, end_date)
 

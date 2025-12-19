@@ -7,13 +7,11 @@ import backoff
 import logging
 from itertools import chain
 
-
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] [%(name)s::%(lineno)d] %(message)s'
 )
 logger = logging.getLogger(__name__)
-
 
 CMR_URLS = {
     'PROD': 'https://cmr.earthdata.nasa.gov/search/granules.umm_json_v1_4',
@@ -264,6 +262,7 @@ def main(args):
         return
 
     granule_month_map = {}
+    aqc_date_map = {}
     unique_granules = {}
 
     for granule_id in granule_ids:
@@ -275,8 +274,19 @@ def main(args):
         group_dict = match.groupdict()
 
         granule_agg_time = datetime.strptime(group_dict[aggregation_ts], aggregation_ts_fmt)
+        granule_agg_day = granule_agg_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        granule_agg_day = granule_agg_day.strftime('%Y-%m-%d')
+
         granule_agg_month = granule_agg_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         granule_agg_month = granule_agg_month.strftime('%Y-%m')
+
+        if granule_agg_day not in aqc_date_map:
+            aqc_date_map[granule_agg_day] = {
+                'n_granules': 0,
+                'n_duplicates': 0,
+                'percent_duplicates': -1.0,
+                'duplicates': {}
+            }
 
         if granule_agg_month not in granule_month_map:
             granule_month_map[granule_agg_month] = {
@@ -286,18 +296,24 @@ def main(args):
                 'duplicates': {}
             }
 
+        aqc_date_map[granule_agg_day]['n_granules'] += 1
         granule_month_map[granule_agg_month]['n_granules'] += 1
 
         granule_unique_ids = tuple([group_dict[grp] for grp in unique_groups])
 
         if granule_unique_ids in unique_granules:
             granule_month_map[granule_agg_month]['n_duplicates'] += 1
+            aqc_date_map[granule_agg_day]['n_duplicates'] += 1
             first_duplicate = unique_granules[granule_unique_ids]
 
             if first_duplicate[1] not in granule_month_map[granule_agg_month]['duplicates']:
                 granule_month_map[granule_agg_month]['duplicates'][first_duplicate[1]] = [first_duplicate[0]]
 
+            if first_duplicate[1] not in aqc_date_map[granule_agg_day]['duplicates']:
+                aqc_date_map[granule_agg_day]['duplicates'][first_duplicate[1]] = [first_duplicate[0]]
+
             granule_month_map[granule_agg_month]['duplicates'][first_duplicate[1]].append(granule_id)
+            aqc_date_map[granule_agg_day]['duplicates'][first_duplicate[1]].append(granule_id)
         else:
             unique_granules[granule_unique_ids] = (granule_id, repr(granule_unique_ids))
 
@@ -314,20 +330,37 @@ def main(args):
                     'duplicate_products': duplicate_granule_ids[1:],
                 }
 
+        for date in aqc_date_map:
+            for duplicate in aqc_date_map[date]['duplicates']:
+                duplicate_granule_ids = aqc_date_map[date]['duplicates'][duplicate]
+                duplicate_granule_ids.sort(
+                    key=lambda x: pattern.match(x).groupdict()[PRODUCTS[args.product]['CREATE_TS_GROUP']], reverse=True
+                )
+
+                aqc_date_map[date]['duplicates'][duplicate] = {
+                    'latest_product': duplicate_granule_ids[0],
+                    'duplicate_products': duplicate_granule_ids[1:],
+                }
+
     granule_month_map = dict(sorted(granule_month_map.items()))
+    aqc_date_map = dict(sorted(aqc_date_map.items()))
 
     for month in granule_month_map.keys():
         granule_month_map[month]['percent_duplicates'] = (granule_month_map[month]['n_duplicates'] /
                                                           granule_month_map[month]['n_granules']) * 100
 
+    for date in aqc_date_map.keys():
+        aqc_date_map[date]['percent_duplicates'] = (aqc_date_map[date]['n_duplicates'] /
+                                                    aqc_date_map[date]['n_granules']) * 100
+
     n_duplicates = sum([month['n_duplicates'] for month in granule_month_map.values()])
     logger.info(f'Found {n_duplicates} duplicate granule IDs out of {len(granule_ids)} granules '
-                f'({(n_duplicates/len(granule_ids)) * 100:.1f}%)')
+                f'({(n_duplicates / len(granule_ids)) * 100:.1f}%)')
 
     if 'CREATE_TS_GROUP' in PRODUCTS[args.product]:
         duplicate_counts = list(chain.from_iterable(list(map(lambda x: [len(dup['duplicate_products'])
                                                                         for dup in x['duplicates'].values()],
-                                                         granule_month_map.values()))))
+                                                             granule_month_map.values()))))
     else:
         duplicate_counts = list(chain.from_iterable(list(map(lambda x: [len(dup) for dup in x['duplicates'].values()],
                                                              granule_month_map.values()))))
@@ -350,8 +383,12 @@ def main(args):
             'avg_duplicates_per_granule': sum(duplicate_counts) / len(duplicate_counts) if n_duplicates > 0 else None,
             'report_run_time': str(datetime.now() - start_time),
         },
-        'months': granule_month_map,
     }
+
+    if args.facet in {'months', 'both'}:
+        final_report['months'] = granule_month_map
+    if args.facet in {'dates', 'both'}:
+        final_report['dates'] = aqc_date_map
 
     with open(args.output, 'w') as f:
         json.dump(final_report, f, indent=2)
@@ -404,6 +441,13 @@ def get_parser():
         action='store_false',
         dest='use_temporal',
         help='Toggle for using revision date range rather than temporal range in the query.'
+    )
+
+    parser.add_argument(
+        '--facet',
+        choices=['months', 'dates', 'both'],
+        default='months',
+        help=argparse.SUPPRESS
     )
 
     return parser

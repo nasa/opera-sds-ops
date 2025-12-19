@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import re
+from copy import deepcopy
 from datetime import datetime
 from os.path import basename, join
 from pathlib import Path
@@ -173,9 +174,11 @@ def _plot_and_save_counts(counts, directory, filename, title):
 
     fig, ax = plt.subplots(layout='constrained', figsize=(32 - (32 - len(days)) + 1, 8))
 
-    for measure, count in data.items():
+    for (measure, count), color in zip(data.items(), [
+        'tab:green', 'tab:blue', 'tab:orange', 'tab:red'
+    ]):
         offset = width * multiplier
-        rects = ax.bar(x + offset, count, width, label=measure)
+        rects = ax.bar(x + offset, count, width, label=measure, color=color)
         ax.bar_label(rects, padding=3, rotation=90)
         multiplier += 1
 
@@ -335,7 +338,7 @@ def main(args):
         month = datetime.strptime(date.split('/')[0].strip(), '%Y-%m-%d').replace(day=1).strftime('%Y-%m')
 
         if month not in month_counts:
-            month_counts[month] = date_counts[date]
+            month_counts[month] = deepcopy(date_counts[date])
         else:
             month_counts[month]['hls_granules'] += date_counts[date]['hls_granules']
             month_counts[month]['matched_dswx_hls_granules'] += date_counts[date]['matched_dswx_hls_granules']
