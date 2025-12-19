@@ -183,6 +183,7 @@ def _plot_and_save_counts(counts, directory, filename, title):
         multiplier += 1
 
     ax.set_ylabel('Granule Count')
+    ax.set_xlabel('Acquisition date (at 00:00:00Z)')
     ax.set_xticks(x + width, days, rotation=90)
     ax.set_title(title)
     ax.legend()

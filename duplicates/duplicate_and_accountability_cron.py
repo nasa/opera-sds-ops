@@ -216,6 +216,7 @@ def plot_data_and_save(data, plot_dir, s3_dir):
             multiplier += 1
 
         ax.set_ylabel('Count')
+        ax.set_xlabel('Acquisition date (at 00:00:00Z)')
         ax.set_xticks(x + (width / 2), days, rotation=90)
         ax.set_title(f'Product counts for {product} from {days[0]} to {days[-1]}')
         ymax = max(product_data['total_products'])
@@ -282,7 +283,7 @@ def plot_timeseries_data_and_save(data, plot_dir, s3_dir):
             multiplier += 1
 
         ax.set_ylabel('Count')
-        ax.set_xlabel('Date (at 00:00:00Z)')
+        ax.set_xlabel('Acquisition date (at 00:00:00Z)')
         ax.set_xticks(x + (width / 2), days, rotation=90)
         ax.set_title(f'Product counts timeseries for {product} from {days[0]} to {days[-1]}')
         ymax = max(product_data['total_products'])
