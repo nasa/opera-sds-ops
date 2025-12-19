@@ -266,7 +266,7 @@ def record_dswx_hls_accountability(args, start_date, end_date):
             report_key = str(s3_path / 'DSWX_HLS' / f'{report_date}' / report_filename).lstrip('/')
 
             with open(report_path, 'w') as f:
-                for missing in report_data['hls_missing_dswx']:
+                for missing in sorted(report_data['hls_missing_dswx']):
                     f.write(f'{missing}\n')
 
             s3.upload_file(report_path, s3_bucket, report_key)
@@ -371,6 +371,8 @@ def main(args):
             report_month = report['months'][month]
             for duplicate in report_month['duplicates']:
                 duplicates.extend(report_month['duplicates'][duplicate]['duplicate_products'])
+
+        duplicates.sort()
 
         if len(duplicates) > 0:
             s3_bucket, root_s3_path = s3_paths
