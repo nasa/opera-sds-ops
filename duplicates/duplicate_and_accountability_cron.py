@@ -377,7 +377,7 @@ def main(args):
 
             s3_key = (
                     root_s3_path / f'{product}' / f'{report_date}' /
-                    f'OPERA_DUPLICATES_{product}_2025-11-29T00:00:00Z_to_2025-11-30T00:00:00Z_checked_{report_date}.txt'
+                    f'OPERA_DUPLICATES_{product}_{start_date}_to_{end_date}_checked_{report_date}.txt'
             )
             s3_key = str(s3_key).lstrip('/')
 
