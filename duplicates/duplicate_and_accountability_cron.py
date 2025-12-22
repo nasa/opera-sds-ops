@@ -200,7 +200,7 @@ def plot_data_and_save(data, plot_dir, s3_dir):
         width = 1 / 3
         multiplier = 0
 
-        fig, ax = plt.subplots(layout='constrained', figsize=(5 + 2 * len(days), 8))
+        fig, ax = plt.subplots(layout='constrained', figsize=(5 + 1 * len(days), 8))
 
         for measure, color in zip(['total_products', 'duplicate_products'],
                                   ['tab:blue', 'tab:orange']):
@@ -267,7 +267,7 @@ def plot_timeseries_data_and_save(data, plot_dir, s3_dir):
         width = 1 / 3
         multiplier = 0
 
-        fig, ax = plt.subplots(layout='constrained', figsize=(5 + 2 * len(days), 8))
+        fig, ax = plt.subplots(layout='constrained', figsize=(5 + 1 * len(days), 8))
 
         for measure, color in zip(['total_products', 'duplicate_products'],
                                   ['tab:blue', 'tab:orange']):
