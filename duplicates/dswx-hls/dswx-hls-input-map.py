@@ -35,6 +35,8 @@ CMR_TIME_FMT = '%Y-%m-%dT%H:%M:%S.%fZ'
 REPORT_TIME_FMT = '%Y-%m-%dT%H:%M:%S'
 # FACET_DATE_FMT = '%Y-%j'
 
+L9_EARLIEST_DSWX_ACQUISITION_DATE = datetime(2025, 10, 1, 0, 4, 7, 135000)
+
 
 def _format_facet_date(d: datetime) -> str:
     return f'{d.strftime("%Y-%m-%d")} / {d.strftime("%Y-%j")}'
@@ -281,6 +283,7 @@ def main(args):
             ) for i in x
         ]
     )
+    logger.info(f'Found {len(hls_s_granules):,} HLS-S granules')
 
     logger.info(f'Listing HLS-L granules over configured time range')
     hls_l_granules = query_cmr(
@@ -291,24 +294,27 @@ def main(args):
         lambda x: [
             (
                 i['umm']['GranuleUR'],
-                _format_facet_date(datetime.strptime(i['umm']['TemporalExtent']['RangeDateTime']['BeginningDateTime'],
-                                   CMR_TIME_FMT)),
+                datetime.strptime(i['umm']['TemporalExtent']['RangeDateTime']['BeginningDateTime'], CMR_TIME_FMT),
                 [p['ShortName'] for p in i['umm']['Platforms']]
             ) for i in x
         ]
     )
+    n_hls_l_inputs = len(hls_l_granules)
+    logger.info(f'Found {n_hls_l_inputs:,} HLS-L granules')
 
-    # Filter out landsat-9
+    # Filter out HLS granules from Landsat-9 acquired before OPERA began producing DSWx-HLS with L9 data
 
     hls_l_granules = [
-        (g[0], g[1])
+        (g[0], _format_facet_date(g[1]))
         for g in hls_l_granules
-        if 'LANDSAT-9' not in g[2]
+        if ('LANDSAT-9' not in g[2] or g[1] >= L9_EARLIEST_DSWX_ACQUISITION_DATE)
     ]
+
+    logger.info(f'Filtered HLS-L granules from {n_hls_l_inputs:,} to {len(hls_l_granules):,} for a combined '
+                f'{len(hls_s_granules) + len(hls_l_granules):,} HLS granules')
 
     for hls_granule, date in hls_s_granules + hls_l_granules:
         if (hls_granule, date) not in hls_to_dswx:
-            logger.warning((hls_granule, date))
             hls_to_dswx[(hls_granule, date)] = []
 
     logger.info(f'Found {len(hls_to_dswx) - n_dswx_hls_inputs:,} HLS granules not mapped to an OPERA DSWx-HLS product')
