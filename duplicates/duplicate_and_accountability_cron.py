@@ -383,6 +383,7 @@ def record_dswx_hls_accountability(args, start_date, end_date):
 
 
 def main(args):
+    start = datetime.now()
     procs = []
 
     start_date, end_date = _get_start_end_dates(args)
@@ -563,6 +564,8 @@ def main(args):
     plot_timeseries_data_and_save(timeseries_plot_data, args.plot_dir, args.s3_plot_path)
 
     record_dswx_hls_accountability(args, start_date, end_date)
+
+    logger.info(f'Finished all tasks in {datetime.now() - start}')
 
 
 if __name__ == '__main__':
