@@ -172,7 +172,7 @@ def _plot_and_save_counts(counts, directory, filename, title):
     width = 0.25  # the width of the bars
     multiplier = 0
 
-    fig, ax = plt.subplots(layout='constrained', figsize=(32 - (32 - len(days)) + 1, 8))
+    fig, ax = plt.subplots(layout='constrained', figsize=(5 + len(days), 8))
 
     for (measure, count), color in zip(data.items(), [
         'tab:green', 'tab:blue', 'tab:orange', 'tab:red'
