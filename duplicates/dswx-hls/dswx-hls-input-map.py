@@ -2,8 +2,10 @@ import argparse
 import json
 import logging
 import re
+import warnings
 from copy import deepcopy
 from datetime import datetime, timedelta
+from math import ceil
 from os.path import basename, join
 from pathlib import Path
 
@@ -171,7 +173,7 @@ def _plot_and_save_counts(counts, directory, filename, title):
     }
 
     x = np.arange(len(days))
-    width = 0.25  # the width of the bars
+    width = 1 / 5
     multiplier = 0
 
     fig, ax = plt.subplots(layout='constrained', figsize=(5 + len(days), 8))
@@ -181,14 +183,32 @@ def _plot_and_save_counts(counts, directory, filename, title):
     ]):
         offset = width * multiplier
         rects = ax.bar(x + offset, count, width, label=measure, color=color)
-        ax.bar_label(rects, padding=3, rotation=90)
+        ax.bar_label(rects, padding=3, rotation=90, fontsize=12, fmt='{:,.0f}')
         multiplier += 1
 
-    ax.set_ylabel('Granule Count')
-    ax.set_xlabel('Acquisition date (at 00:00:00Z)')
+    ax.set_xlabel('Acquisition date (at 00:00:00Z)', fontsize=12)
+    ax.set_ylabel('Granule Count', fontsize=12)
+
     ax.set_xticks(x + width, days, rotation=90)
-    ax.set_title(title)
-    ax.legend()
+    with warnings.catch_warnings(category=UserWarning, action='ignore'):
+        ax.set_yticklabels([f'{label:,.0f}' for label in ax.get_yticks()])
+
+    ax.set_title(title, fontsize=14)
+
+    ymax = max([max(data[d]) for d in data.keys()])
+    if ymax > 0:
+        ymax = ceil(ymax * 1.2)  # Scale a bit to fit the labels
+    else:
+        ymax = 1
+
+    ax.set_ylim(bottom=0, top=ymax)
+
+    ax.legend([
+        'HLS Granules',
+        'OPERA DSWx-HLS Granules',
+        'HLS granules mapped to more than one DSWx-HLS granule',
+        'HLS granules mapped to no DSWx-HLS granule',
+    ], fontsize=12)
 
     plt.savefig(join(directory, filename))
     logger.info(f'Wrote plot {filename}')
@@ -216,10 +236,10 @@ def plot_and_save(date_counts, directory, skip_agg=False):
 
         if days[0] != days[-1]:
             filename = f'dswx_hls_accountability_{days[0]}_to_{days[-1]}.png'
-            title = f'Counts for {days[0]} to {days[-1]}'
+            title = f'DSWx-HLS Accountability for {days[0]} to {days[-1]}'
         else:
             filename = f'dswx_hls_accountability_{days[0]}.png'
-            title = f'Counts for {days[0]}'
+            title = f'DSWx-HLS Accountability for {days[0]}'
 
         _plot_and_save_counts(date_counts, directory, filename, title)
 

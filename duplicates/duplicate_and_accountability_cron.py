@@ -4,6 +4,7 @@ import logging
 import os.path
 import subprocess
 import sys
+import warnings
 from datetime import datetime, timedelta
 from math import ceil
 from pathlib import Path
@@ -207,28 +208,37 @@ def plot_data_and_save(data, plot_dir, s3_dir):
             count = product_data[measure]
             offset = width * multiplier
             rects = ax.bar(x + offset, count, width, label=measure, color=color)
+
             if measure == 'total_products':
-                ax.bar_label(rects, padding=3, )
+                ax.bar_label(rects, padding=3, fmt='{:,.0f}', fontsize=12, rotation=90)
             else:
-                labels = [f'{c} ({p:0.2f}%)' for c, p in zip(count, product_data['duplicate_percent'])]
-                ax.bar_label(rects, labels, padding=3, )
+                labels = [f'{c:,}\n({perc:0.2f}%)' for c, perc in zip(count, product_data['duplicate_percent'])]
+                ax.bar_label(rects, labels, padding=3, fontsize=12, rotation=90)
 
             multiplier += 1
 
-        ax.set_ylabel('Count')
-        ax.set_xlabel('Acquisition date (at 00:00:00Z)')
+        ax.set_xlabel('Acquisition date (at 00:00:00Z)', fontsize=12)
+        ax.set_ylabel('Granule Count', fontsize=12)
+
         ax.set_xticks(x + (width / 2), days, rotation=90)
-        ax.set_title(f'Product counts for {product} from {days[0]} to {days[-1]}')
+        with warnings.catch_warnings(category=UserWarning, action='ignore'):
+            ax.set_yticklabels([f'{label:,.0f}' for label in ax.get_yticks()])
+
+        ax.set_title(f'Product counts for {product} from {days[0]} to {days[-1]}', fontsize=14)
+
         ymax = max(product_data['total_products'])
         if ymax > 0:
             ymax = ceil(ymax * 1.2)
         else:
             ymax = 1
+
         ax.set_ylim(bottom=0, top=ymax)
-        ax.legend()
+
+        ax.legend(['Total Product Count', 'Duplicate Product Count'], fontsize=12)
 
         plot_path = plot_dir / f'{product}_counts.png'
         s3_key = str(s3_path / f'{product}_counts.png').lstrip('/')
+
         plt.savefig(plot_path)
         logger.info(f'Wrote duplicate product counts plot to {str(plot_path)}')
 
@@ -274,28 +284,37 @@ def plot_timeseries_data_and_save(data, plot_dir, s3_dir):
             count = product_data[measure]
             offset = width * multiplier
             rects = ax.bar(x + offset, count, width, label=measure, color=color)
+
             if measure == 'total_products':
-                ax.bar_label(rects, padding=3,)
+                ax.bar_label(rects, padding=3, fmt='{:,.0f}', fontsize=12, rotation=90)
             else:
-                labels = [f'{c} ({p:0.2f}%)' for c, p in zip(count, product_data['duplicate_percent'])]
-                ax.bar_label(rects, labels, padding=3,)
+                labels = [f'{c:,}\n({perc:0.2f}%)' for c, perc in zip(count, product_data['duplicate_percent'])]
+                ax.bar_label(rects, labels, padding=3, fontsize=12, rotation=90)
 
             multiplier += 1
 
-        ax.set_ylabel('Count')
-        ax.set_xlabel('Acquisition date (at 00:00:00Z)')
+        ax.set_xlabel('Acquisition date (at 00:00:00Z)', fontsize=12)
+        ax.set_ylabel('Granule Count', fontsize=12)
+
         ax.set_xticks(x + (width / 2), days, rotation=90)
-        ax.set_title(f'Product counts timeseries for {product} from {days[0]} to {days[-1]}')
+        with warnings.catch_warnings(category=UserWarning, action='ignore'):
+            ax.set_yticklabels([f'{label:,.0f}' for label in ax.get_yticks()])
+
+        ax.set_title(f'Product counts timeseries for {product} from {days[0]} to {days[-1]}', fontsize=14)
+
         ymax = max(product_data['total_products'])
         if ymax > 0:
-            ymax = ceil(ymax * 1.2)
+            ymax = ceil(ymax * 1.2)  # Scale a bit to fit the labels
         else:
             ymax = 1
+
         ax.set_ylim(bottom=0, top=ymax)
-        ax.legend()
+
+        ax.legend(['Total Product Count', 'Duplicate Product Count'], fontsize=12)
 
         plot_path = plot_dir / f'{product}_counts_timeseries.png'
         s3_key = str(s3_path / f'{product}_counts_timeseries.png').lstrip('/')
+
         plt.savefig(plot_path)
         logger.info(f'Wrote duplicate product counts plot to {str(plot_path)}')
 
