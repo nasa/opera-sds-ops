@@ -3,7 +3,7 @@ import json
 import logging
 import re
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 from os.path import basename, join
 from pathlib import Path
 
@@ -386,6 +386,31 @@ def main(args):
     logger.info(f'Wrote report to {args.output}')
 
     if args.histogram_dir is not None and len(date_counts) > 0:
+        if args.skip_agg:
+            # Fill in missing dates for the plot
+            plot_start_date = args.start_date
+            plot_end_date = args.end_date
+
+            if plot_end_date > plot_end_date.replace(hour=0, minute=0, second=0, microsecond=0):
+                plot_end_date = plot_end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            else:
+                plot_end_date = plot_end_date.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+
+            plot_date = plot_start_date
+
+            while plot_date <= plot_end_date:
+                plot_date_str = plot_date.strftime("%Y-%m-%d / %Y-%j")
+
+                if plot_date_str not in date_counts:
+                    date_counts[plot_date_str] = {
+                        'hls_granules': 0,
+                        'matched_dswx_hls_granules': 0,
+                        'hls_to_many_dswx': 0,
+                        'hls_to_no_dswx': 0,
+                    }
+
+                plot_date += timedelta(days=1)
+
         logger.info(f'Writing monthly histograms to {args.histogram_dir}')
         plot_and_save(date_counts, args.histogram_dir, args.skip_agg)
 

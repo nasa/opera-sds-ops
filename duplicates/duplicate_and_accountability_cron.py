@@ -313,6 +313,25 @@ def record_dswx_hls_accountability(args, start_date, end_date):
     date_counts = report_data['counts_by_date']
     days = [day.split('/')[0].strip() for day in sorted(date_counts.keys())]
 
+    # Fix list of days as sometimes no data on a given day can lead to omissions in the report
+    plot_start_date = datetime.strptime(report_data['summary']['query_start_date'], "%Y-%m-%dT%H:%M:%S")
+    plot_end_date = datetime.strptime(report_data['summary']['query_end_date'], "%Y-%m-%dT%H:%M:%S")
+
+    if plot_end_date > plot_end_date.replace(hour=0, minute=0, second=0, microsecond=0):
+        plot_end_date = plot_end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        plot_end_date = plot_end_date.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+
+    plot_date = plot_start_date
+
+    while plot_date <= plot_end_date:
+        plot_date_str = plot_date.strftime("%Y-%m-%d")
+        days.append(plot_date_str)
+        plot_date += timedelta(days=1)
+
+    days = list(set(days))
+    days.sort()
+
     if len(days) == 0:
         logger.info('No accountability data for DSWx-HLS')
         duplicate_count = 0
