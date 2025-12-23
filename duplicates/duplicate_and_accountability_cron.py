@@ -221,7 +221,8 @@ def plot_data_and_save(data, plot_dir, s3_dir):
         ax.set_ylabel('Granule Count', fontsize=12)
 
         ax.set_xticks(x + (width / 2), days, rotation=90)
-        with warnings.catch_warnings(action='ignore'):
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', category=UserWarning)
             ax.set_yticklabels([f'{label:,.0f}' for label in ax.get_yticks()])
 
         ax.set_title(f'Product counts for {product} from {days[0]} to {days[-1]}', fontsize=14)
@@ -297,7 +298,8 @@ def plot_timeseries_data_and_save(data, plot_dir, s3_dir):
         ax.set_ylabel('Granule Count', fontsize=12)
 
         ax.set_xticks(x + (width / 2), days, rotation=90)
-        with warnings.catch_warnings(action='ignore'):
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', category=UserWarning)
             ax.set_yticklabels([f'{label:,.0f}' for label in ax.get_yticks()])
 
         ax.set_title(f'Product counts timeseries for {product} from {days[0]} to {days[-1]}', fontsize=14)

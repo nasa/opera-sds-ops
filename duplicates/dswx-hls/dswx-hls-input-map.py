@@ -190,7 +190,8 @@ def _plot_and_save_counts(counts, directory, filename, title):
     ax.set_ylabel('Granule Count', fontsize=12)
 
     ax.set_xticks(x + width, days, rotation=90)
-    with warnings.catch_warnings(action='ignore'):
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', category=UserWarning)
         ax.set_yticklabels([f'{label:,.0f}' for label in ax.get_yticks()])
 
     ax.set_title(title, fontsize=14)
