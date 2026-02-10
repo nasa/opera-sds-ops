@@ -1,0 +1,87 @@
+# OPERA Accountability Framework Configuration
+
+# CMR settings
+cmr:
+  url: "https://cmr.earthdata.nasa.gov/search/granules.umm_json_v1_4"
+  url_uat: "https://cmr.uat.earthdata.nasa.gov/search/granules.umm_json"
+  timeout: 60
+  page_size: 2000
+
+# Output settings
+output_dir: "./output"
+
+# Product definitions (extracted from Riley's duplicate_check.py)
+products:
+  DSWX_HLS:
+    name: "Dynamic Surface Water Extent - HLS"
+    ccid:
+      PROD: "C2617126679-POCLOUD"
+      UAT: ""
+    pattern: 'OPERA_L3_DSWx-HLS_(?P<tile_id>T[^\W_]{5})_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_(?P<sensor>S2A|S2B|S2C|S2D|L8|L9)_30_v\d+[.]\d+'
+    unique_fields: ["tile_id", "acquisition_ts", "sensor"]
+    aggregation_field: "acquisition_ts"
+    aggregation_format: "%Y%m%dT%H%M%SZ"
+    creation_field: "creation_ts"
+    # Accountability configuration
+    accountability:
+      enabled: true
+      hls_s30_ccid:
+        PROD: "C2021957295-LPCLOUD"
+        UAT: ""
+      hls_l30_ccid:
+        PROD: "C2021957657-LPCLOUD"
+        UAT: ""
+      hls_pattern: '(?P<id>(?P<product_shortname>HLS[.](?P<source>[SL])30)[.](?P<tile_id>T[^\W_]{5})[.](?P<acquisition_ts>\d{7}T\d{6})[.](?P<collection_version>v\d+[.]\d+))'
+      l9_cutoff_date: "2025-10-01T00:04:07.135000Z"
+
+  RTC_S1:
+    name: "Radiometric Terrain Corrected - Sentinel-1"
+    ccid:
+      PROD: "C2777436413-ASF"
+      UAT: "C1259974840-ASF"
+    pattern: 'OPERA_L2_RTC-S1_(?P<burst_id>\w{4}-\w{6}-\w{3})_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_(?P<sensor>S1[A-D])_30_v\d+[.]\d+'
+    unique_fields: ["burst_id", "acquisition_ts", "sensor"]
+    aggregation_field: "acquisition_ts"
+    aggregation_format: "%Y%m%dT%H%M%SZ"
+    creation_field: "creation_ts"
+    accountability:
+      enabled: false
+
+  CSLC_S1:
+    name: "Coregistered Single Look Complex - Sentinel-1"
+    ccid:
+      PROD: "C2777443834-ASF"
+      UAT: ""
+    pattern: '(?P<id>OPERA_L2_CSLC-S1_(?P<burst_id>\w{4}-\w{6}-\w{3})_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_(?P<sensor>S1[A-D])_(?P<pol>VV|VH|HH|HV|VV\+VH|HH\+HV)_v\d+[.]\d+)'
+    unique_fields: ["burst_id", "acquisition_ts", "sensor", "pol"]
+    aggregation_field: "acquisition_ts"
+    aggregation_format: "%Y%m%dT%H%M%SZ"
+    creation_field: "creation_ts"
+    accountability:
+      enabled: false
+
+  DSWX_S1:
+    name: "Dynamic Surface Water Extent - Sentinel-1"
+    ccid:
+      PROD: "C2949811996-POCLOUD"
+      UAT: ""
+    pattern: '(?P<id>OPERA_L3_DSWx-S1_(?P<tile_id>T[^\W_]{5})_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_(?P<sensor>S1[A-D])_30_v\d+[.]\d+)'
+    unique_fields: ["tile_id", "acquisition_ts", "sensor"]
+    aggregation_field: "acquisition_ts"
+    aggregation_format: "%Y%m%dT%H%M%SZ"
+    creation_field: "creation_ts"
+    accountability:
+      enabled: false
+
+  DISP_S1:
+    name: "Displacement - Sentinel-1"
+    ccid:
+      PROD: "C3294057315-ASF"
+      UAT: ""
+    pattern: '(?P<id>OPERA_L3_DISP-S1_IW_(?P<frame_id>F\d{5})_(?P<pol>VV|VH|HH|HV|VV\+VH|HH\+HV)_(?P<ref_datetime>\d{8}T\d{6}Z)_(?P<sec_datetime>\d{8}T\d{6}Z)_v\d+[.]\d+_(?P<creation_ts>\d{8}T\d{6}Z))'
+    unique_fields: ["frame_id", "pol", "ref_datetime", "sec_datetime"]
+    aggregation_field: "creation_ts"
+    aggregation_format: "%Y%m%dT%H%M%SZ"
+    creation_field: "creation_ts"
+    accountability:
+      enabled: false
