@@ -20,7 +20,9 @@ DSWX_PATTERN = re.compile(r'(?P<id>OPERA_L3_DSWx-S1_(?P<tile_id>T[^\W_]{5})_(?P<
 
 GRANULE_TIME_FMT = '%Y%m%dT%H%M%SZ'
 
-DSWX_S1AB_START_TIME = datetime(2023, 12, 15, 15, 8, 12)
+# TODO: Enable CLI overrides of these in case we want to use this tool to do
+#       hist processing before the existing start dates
+DSWX_S1AB_START_TIME = datetime(2024, 8, 21, 0, 11, 56)
 DSWX_S1C_START_TIME = datetime(2025, 5, 20)
 
 
