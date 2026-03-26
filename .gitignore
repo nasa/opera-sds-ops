@@ -1,2 +1,9 @@
 *.log
 **/.DS_Store
+
+__pycache__
+*venv
+*.ipynb
+static_layer_auditor/analysis_outputs
+static_layer_auditor/burst_inventory/*.csv
+static_layer_auditor/burst-id-geometries-simple-0.9.0.geojson
