@@ -122,7 +122,7 @@ output/
 
 ## Configuration
 
-Edit `config.yaml` to:
+Edit `src/opera_accountability/config.yaml` to:
 - Adjust CMR settings (URL, timeout, page size)
 - Modify product patterns and unique field definitions
 - Configure output directory
@@ -159,9 +159,8 @@ Integration tests in `tests/test_cmr_integration.py` verify that opera-audit res
 ## Development
 
 This package follows a simple structure:
-- `src/opera_accountability/` - Main package code
+- `src/opera_accountability/` - Main package code (includes `config.yaml`)
 - `tests/` - Test files and fixtures
-- `config.yaml` - Configuration
 
 Key files:
 - `cmr.py` - CMR client with retry and pagination
