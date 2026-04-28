@@ -7,3 +7,9 @@ __pycache__/
 
 # Output directory
 output/
+
+# Test/coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
