@@ -190,11 +190,21 @@ def test_resolve_mgrs_tile_db_override_missing_raises(tmp_path: Path):
         tile_sets.resolve_mgrs_tile_db(str(tmp_path / "does_not_exist.sqlite"))
 
 
-def test_resolve_mgrs_tile_db_packaged_default_exists():
-    """The bundled SQLite should be discoverable via importlib.resources."""
+def test_resolve_mgrs_tile_db_no_source_raises(monkeypatch):
+    """Without --mgrs-db or OPERA_MGRS_DB, resolution must error clearly."""
+    monkeypatch.delenv('OPERA_MGRS_DB', raising=False)
+    with pytest.raises(FileNotFoundError, match="OPERA_MGRS_DB"):
+        tile_sets.resolve_mgrs_tile_db(None)
+
+
+def test_resolve_mgrs_tile_db_env_var(tmp_path: Path, monkeypatch):
+    """OPERA_MGRS_DB env var is honored when no override is given."""
+    db = tmp_path / "mgrs.sqlite"
+    _make_tile_db(db)
+    monkeypatch.setenv('OPERA_MGRS_DB', str(db))
+
     resolved = tile_sets.resolve_mgrs_tile_db(None)
-    assert resolved.exists(), f"Expected packaged DB at {resolved}"
-    assert resolved.suffix == '.sqlite'
+    assert resolved == db.resolve()
 
 
 # ---------------------------------------------------------------------------

@@ -1,18 +1,21 @@
 """Step 3 of the DSWx-S1 accountability pipeline: map missing RTCs → MGRS tile sets.
 
-Uses the bundled MGRS tile-collection SQLite database to resolve each missing
-RTC's burst ID to the MGRS tile set(s) it belongs to, dropping any tile sets
-whose ``land_ocean_flag`` is ``'water'``. Port of
-``accountability_tools/dswx_s1/missing_rtcs_to_tile_sets.py``.
+Uses an externally supplied MGRS tile-collection SQLite database to resolve
+each missing RTC's burst ID to the MGRS tile set(s) it belongs to, dropping
+any tile sets whose ``land_ocean_flag`` is ``'water'``. The database is no
+longer bundled with this package (the ~55 MB file made clones slow); obtain
+it from JPL Artifactory or the ADT package repository and point the tool at
+it via ``--mgrs-db <path>`` or the ``OPERA_MGRS_DB`` environment variable.
+Port of ``accountability_tools/dswx_s1/missing_rtcs_to_tile_sets.py``.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from importlib.resources import files as _pkg_files
 from pathlib import Path
 from typing import Optional
 
@@ -37,29 +40,27 @@ _QUERY = """
 def resolve_mgrs_tile_db(override: Optional[str] = None) -> Path:
     """Resolve the MGRS tile-collection SQLite path.
 
-    Resolution order:
+    The database is not bundled with this package. Resolution order:
 
     1. Explicit ``override`` (treated as an absolute/relative filesystem path).
-    2. ``products.DSWX_S1.accountability.mgrs_tile_db`` in ``config.yaml``,
-       looked up inside the packaged ``opera_accountability/data/`` directory
-       via :mod:`importlib.resources`.
-    """
-    if override:
-        p = Path(override).expanduser().resolve()
-        if not p.exists():
-            raise FileNotFoundError(f"--mgrs-db path does not exist: {p}")
-        return p
+    2. ``OPERA_MGRS_DB`` environment variable.
 
-    db_name = CONFIG['products']['DSWX_S1']['accountability']['mgrs_tile_db']
-    pkg_db = _pkg_files('opera_accountability').joinpath('data', db_name)
-    db_path = Path(str(pkg_db))
-    if not db_path.exists():
+    Raises :class:`FileNotFoundError` with guidance if neither is set or the
+    resolved path does not exist.
+    """
+    candidate = override or os.environ.get('OPERA_MGRS_DB')
+    if not candidate:
         raise FileNotFoundError(
-            f"Bundled MGRS tile DB not found at {db_path}. Expected "
-            f"opera_accountability/data/{db_name} (configure via "
-            f"config.yaml's products.DSWX_S1.accountability.mgrs_tile_db)."
+            "MGRS tile-collection SQLite path is required. Pass --mgrs-db "
+            "<path> or set the OPERA_MGRS_DB environment variable. The DB "
+            "is available from JPL Artifactory or the ADT package repo "
+            "(it is no longer bundled with opera-accountability)."
         )
-    return db_path
+
+    p = Path(candidate).expanduser().resolve()
+    if not p.exists():
+        raise FileNotFoundError(f"MGRS tile DB path does not exist: {p}")
+    return p
 
 
 def _burst_id_to_db_key(rtc_id: str) -> str:
@@ -160,7 +161,7 @@ def map_missing_rtcs_to_tile_sets(
     if unmatched_bursts:
         logger.warning(
             "%d / %d missing RTCs had no burst match in %s — consider "
-            "updating products.DSWX_S1.accountability.mgrs_tile_db.",
+            "pointing --mgrs-db / OPERA_MGRS_DB at a newer MGRS tile DB.",
             unmatched_bursts, len(missing_rtcs), mgrs_db_path,
         )
     return mgrs_set_to_rtc

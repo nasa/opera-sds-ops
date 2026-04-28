@@ -46,7 +46,7 @@ opera-audit = "opera_accountability.cli:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-opera_accountability = ["data/*.sqlite", "config.yaml"]
+opera_accountability = ["config.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

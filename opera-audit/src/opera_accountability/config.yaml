@@ -75,12 +75,10 @@ products:
       enabled: true
       strategy: "dswx_s1"
       # RTC-S1 CCID is sourced from products.RTC_S1.ccid to avoid drift.
-      # MGRS tile-collection SQLite database. Looked up inside the packaged
-      # `opera_accountability/data/` directory via importlib.resources so the
-      # tool works after `git clone && pip install -e .` (or `pip install .`)
-      # with no extra setup. Override at the CLI with `--mgrs-db <abs-path>`
-      # to point at a newer DB stored anywhere on disk.
-      mgrs_tile_db: "MGRS_tile_collection_v0.3.sqlite"
+      # MGRS tile-collection SQLite database. The DB is *not* bundled with
+      # this package (it is ~55 MB and slows clones); obtain it from JPL
+      # Artifactory or the ADT package repo and supply its path via
+      # `--mgrs-db <abs-path>` or the `OPERA_MGRS_DB` environment variable.
       # Earliest sensing times by sensor. RTC products acquired before these
       # timestamps cannot have produced a DSWx-S1 output and are excluded from
       # the "missing RTC" set.

@@ -149,7 +149,11 @@ def accountability(
     output_dir: str = typer.Option("./output", "--output-dir", "-o", help="Output directory (used with --save)"),
     mgrs_db: Optional[str] = typer.Option(
         None, "--mgrs-db",
-        help="Override the MGRS tile-collection SQLite path (DSWX_S1 only)."
+        help=(
+            "Path to the MGRS tile-collection SQLite (DSWX_S1 only). "
+            "Required unless OPERA_MGRS_DB is set; obtain the DB from "
+            "JPL Artifactory or the ADT package repo."
+        )
     ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
     verbose: bool = typer.Option(False, "--verbose", help="Verbose output")
