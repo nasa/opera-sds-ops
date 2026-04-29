@@ -27,7 +27,7 @@ from os.path import basename
 
 from opera_accountability.cmr import query_cmr
 from opera_accountability.duplicates import detect_duplicates
-from opera_accountability.accountability import analyze_accountability
+from opera_accountability.strategies.dswx_hls import analyze_accountability
 from opera_accountability.strategies.dswx_s1 import pipeline as ds1_pipeline
 from opera_accountability import CONFIG
 

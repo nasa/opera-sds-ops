@@ -24,7 +24,7 @@ def save_reports(
     Save reports in multiple formats.
 
     Args:
-        results: Results dict from duplicates.detect_duplicates() or accountability.analyze_accountability()
+        results: Results dict from duplicates.detect_duplicates() or strategies.dswx_hls.analyze_accountability()
         output_dir: Base output directory
         product: Product name
         report_type: 'duplicates' or 'accountability'

@@ -15,7 +15,7 @@ from rich.panel import Panel
 from . import CONFIG, __version__
 from .cmr import query_cmr
 from .duplicates import detect_duplicates
-from .accountability import analyze_accountability
+from .strategies.dswx_hls import analyze_accountability
 from .reports import save_reports
 
 # Set up logging (default to WARNING, not INFO)

@@ -2,10 +2,9 @@
 
 Uses an externally supplied MGRS tile-collection SQLite database to resolve
 each missing RTC's burst ID to the MGRS tile set(s) it belongs to, dropping
-any tile sets whose ``land_ocean_flag`` is ``'water'``. The database is no
-longer bundled with this package (the ~55 MB file made clones slow); obtain
-it from JPL Artifactory or the ADT package repository and point the tool at
-it via ``--mgrs-db <path>`` or the ``OPERA_MGRS_DB`` environment variable.
+any tile sets whose ``land_ocean_flag`` is ``'water'``. Obtain the DB from
+JPL Artifactory or the ADT package repository and point the tool at it via
+``--mgrs-db <path>`` or the ``OPERA_MGRS_DB`` environment variable.
 Port of ``accountability_tools/dswx_s1/missing_rtcs_to_tile_sets.py``.
 """
 

@@ -165,7 +165,8 @@ This package follows a simple structure:
 Key files:
 - `cmr.py` - CMR client with retry and pagination
 - `duplicates.py` - Duplicate detection logic
-- `accountability.py` - Accountability analysis for DSWX_HLS
+- `strategies/dswx_hls/` - DSWX_HLS accountability strategy (HLS input mapping)
+- `strategies/dswx_s1/` - DSWX_S1 accountability strategy (4-step RTC→DSWx pipeline)
 - `reports.py` - Report generation in multiple formats
 - `cli.py` - Command-line interface
 - `dashboard.py` - Streamlit dashboard
