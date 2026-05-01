@@ -7,7 +7,7 @@ from os.path import basename
 from typing import Any
 from collections import defaultdict
 
-from . import CONFIG
+from ... import CONFIG
 
 logger = logging.getLogger(__name__)
 

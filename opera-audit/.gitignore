@@ -7,3 +7,13 @@ __pycache__/
 
 # Output directory
 output/
+
+# Test/coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
+# External MGRS tile-collection DB (obtained from Artifactory / ADT package)
+*.sqlite
+*.sqlite-journal

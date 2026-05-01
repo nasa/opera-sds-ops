@@ -16,13 +16,15 @@ def save_reports(
     output_dir: str,
     product: str,
     report_type: str,
-    venue: str = 'PROD'
+    venue: str = 'PROD',
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
 ) -> dict[str, Path]:
     """
     Save reports in multiple formats.
 
     Args:
-        results: Results dict from duplicates.detect_duplicates() or accountability.analyze_accountability()
+        results: Results dict from duplicates.detect_duplicates() or strategies.dswx_hls.analyze_accountability()
         output_dir: Base output directory
         product: Product name
         report_type: 'duplicates' or 'accountability'
@@ -42,14 +44,20 @@ def save_reports(
 
     # 1. JSON format (full report)
     json_path = base_dir / f"{date_str}.json"
+    report_metadata = {
+        "generated_at": datetime.now().isoformat(),
+        "product_type": product,
+        "venue": venue,
+        "report_type": report_type,
+    }
+    if start_date is not None:
+        report_metadata["start_date"] = start_date.isoformat()
+    if end_date is not None:
+        report_metadata["end_date"] = end_date.isoformat()
+
     report_data = {
-        "report_metadata": {
-            "generated_at": datetime.now().isoformat(),
-            "product_type": product,
-            "venue": venue,
-            "report_type": report_type
-        },
-        "results": results
+        "report_metadata": report_metadata,
+        "results": results,
     }
 
     with open(json_path, 'w') as f:

@@ -27,7 +27,8 @@ from os.path import basename
 
 from opera_accountability.cmr import query_cmr
 from opera_accountability.duplicates import detect_duplicates
-from opera_accountability.accountability import analyze_accountability
+from opera_accountability.strategies.dswx_hls import analyze_accountability
+from opera_accountability.strategies.dswx_s1 import pipeline as ds1_pipeline
 from opera_accountability import CONFIG
 
 
@@ -56,15 +57,42 @@ TEST_CASES = {
             'tolerance': 0,  # Exact match required
             'description': 'CSLC-S1 duplicate detection for 2026-02-06'
         },
-        # Add more duplicate test cases here as needed:
-        # 'RTC_S1_SOME_DATE': {
-        #     'product': 'RTC_S1',
-        #     'start_date': '2026-01-15',
-        #     'end_date': '2026-01-16',
-        #     'expected_duplicates': 25,
-        #     'tolerance': 0,
-        #     'description': 'RTC-S1 duplicate detection for 2026-01-15'
-        # },
+        # --- Products ported from Riley's duplicate_check.py (Phase 1A) ---
+        # expected_duplicates values are informational-only (used in failure
+        # messages). The actual assertion compares opera-audit output against
+        # an independent CMR re-implementation of Riley's algorithm below.
+        'DIST_ALERT_HLS_2025_10_01': {
+            'product': 'DIST_ALERT_HLS',
+            'start_date': '2025-10-01',
+            'end_date': '2025-10-02',
+            'expected_duplicates': 0,
+            'tolerance': 0,
+            'description': 'DIST-ALERT-HLS duplicate detection for 2025-10-01'
+        },
+        'TROPO_2025_10_01': {
+            'product': 'TROPO',
+            'start_date': '2025-10-01',
+            'end_date': '2025-10-02',
+            'expected_duplicates': 0,
+            'tolerance': 0,
+            'description': 'TROPO duplicate detection for 2025-10-01'
+        },
+        'CSLC_S1_STATIC_2024_05_01': {
+            'product': 'CSLC_S1_STATIC',
+            'start_date': '2024-05-01',
+            'end_date': '2024-05-08',
+            'expected_duplicates': 0,
+            'tolerance': 0,
+            'description': 'CSLC-S1-STATIC duplicate detection for 2024-05-01 week'
+        },
+        'RTC_S1_STATIC_2024_05_01': {
+            'product': 'RTC_S1_STATIC',
+            'start_date': '2024-05-01',
+            'end_date': '2024-05-08',
+            'expected_duplicates': 0,
+            'tolerance': 0,
+            'description': 'RTC-S1-STATIC duplicate detection for 2024-05-01 week'
+        },
     },
 
     # Accountability tests (currently only DSWX_HLS supported)
@@ -471,8 +499,53 @@ def test_accountability_matches_cmr(test_name, test_case):
 
 
 # =============================================================================
-# HELPER TESTS
+# DSWX-S1 ACCOUNTABILITY PIPELINE — end-to-end integration test
 # =============================================================================
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_dswx_s1_accountability_pipeline_end_to_end(tmp_path):
+    """Run the full 4-step DSWx-S1 pipeline against live CMR for a narrow window.
+
+    Validates:
+    - CMR survey works for both RTC-S1 and DSWx-S1 collections
+    - RTC → DSWx input mapping and sensor-start filtering execute
+    - MGRS tile-set resolution against the bundled SQLite DB succeeds
+    - Cycle/sensor expansion produces deterministic output
+    - All expected JSON artifacts are written
+    """
+    start_date = datetime.strptime('2025-01-01', '%Y-%m-%d')
+    end_date = datetime.strptime('2025-01-02', '%Y-%m-%d')
+
+    results = ds1_pipeline.run(
+        start_date=start_date,
+        end_date=end_date,
+        output_dir=tmp_path,
+        venue='PROD',
+        save=True,
+    )
+
+    # Sanity invariants on the numeric results.
+    assert results['rtc_surveyed'] > 0, "Expected at least one RTC-S1 granule in 1-day window"
+    assert results['dswx_surveyed'] > 0, "Expected at least one DSWx-S1 granule in 1-day window"
+    assert results['filtered_rtc_count'] <= results['rtc_surveyed']
+    assert results['used_rtc_count'] <= results['filtered_rtc_count']
+    assert results['missing_count'] == (
+        results['filtered_rtc_count'] - results['used_rtc_count']
+    )
+
+    # All promised artifact files exist and contain valid JSON.
+    import json as _json
+    expected_files = (
+        'rtc_survey', 'dswx_survey',
+        'missing_rtc_products', 'rtc_to_dswx_map',
+        'missing_rtcs_to_tile_sets', 'missing_mgrs_set_cycle_indices',
+        'summary_json',
+    )
+    for key in expected_files:
+        path = results['files'][key]
+        assert _json.loads(open(path).read()) is not None, f"{key} wrote invalid JSON"
+
 
 @pytest.mark.integration
 class TestCMRConnectivity:
