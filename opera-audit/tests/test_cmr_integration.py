@@ -15,7 +15,7 @@ generated via pytest parametrize. No additional code changes needed.
 
 PRODUCT SUPPORT:
 - Duplicate tests: Support ALL products (DSWX_HLS, RTC_S1, CSLC_S1, etc.)
-- Accountability tests: Currently only DSWX_HLS supported
+- Accountability tests: Currently only DSWX_HLS and DIST_S1 supported
 """
 
 import re
@@ -95,7 +95,7 @@ TEST_CASES = {
         },
     },
 
-    # Accountability tests (currently only DSWX_HLS supported)
+    # Accountability tests (currently only DSWX_HLS and DIST_S1 supported)
     'ACCOUNTABILITY': {
         'DSWX_HLS_2026_02_06': {
             'start_date': '2026-02-06',
@@ -104,13 +104,22 @@ TEST_CASES = {
             'tolerance': 0,  # Exact match required
             'description': 'DSWx-HLS accountability analysis for 2026-02-06'
         },
+        # DIST_S1 accountability test - placeholder for future validation
+        'DIST_S1_2025_01_01': {
+            'start_date': '2025-01-01',
+            'end_date': '2025-01-02',
+            'expected_missing': 0,
+            'tolerance': 0,
+            'description': 'DIST-S1 accountability analysis for 2025-01-01'
+        },
         # Add more accountability test cases here as needed:
-        # 'DSWX_HLS_ANOTHER_DATE': {
-        #     'start_date': '2026-01-12',
-        #     'end_date': '2026-01-13',
-        #     'expected_missing': 250,
-        #     'tolerance': 0,
-        #     'description': 'DSWx-HLS accountability for 2026-01-12'
+        'DSWX_HLS_ANOTHER_DATE': {
+            'start_date': '2026-01-12',
+            'end_date': '2026-01-13',
+            'expected_missing': 250,
+            'tolerance': 0,
+            'description': 'DSWx-HLS accountability for 2026-01-12'
+        },
         # },
     }
 }
@@ -295,8 +304,7 @@ def analyze_accountability_from_cmr(
     ids=[name for name in TEST_CASES['DUPLICATES'].keys()]
 )
 def test_duplicate_detection_matches_cmr(test_name, test_case):
-    """
-    Test that duplicate detection matches independent CMR analysis.
+    """Test that duplicate detection matches independent CMR analysis.
 
     This test is automatically generated for each entry in TEST_CASES['DUPLICATES'].
     To add new tests, simply add entries to the TEST_CASES dict at the top of this file.
@@ -405,7 +413,8 @@ def test_accountability_matches_cmr(test_name, test_case):
     This test is automatically generated for each entry in TEST_CASES['ACCOUNTABILITY'].
     To add new tests, simply add entries to the TEST_CASES dict at the top of this file.
 
-    NOTE: Currently only supports DSWX_HLS accountability.
+    NOTE: Currently supports DSWX_HLS accountability. DIST_S1 integration tests
+    are placeholders pending production data availability.
 
     Validates:
     - CMR query for DSWx, HLS-S30, and HLS-L30

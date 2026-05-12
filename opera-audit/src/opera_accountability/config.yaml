@@ -89,6 +89,30 @@ products:
       # Thread pool size for SQLite tile-set lookups.
       tile_set_workers: 8
 
+  DIST_S1:
+    name: "Disturbance - Sentinel-1"
+    ccid:
+      PROD: ""
+      UAT: ""
+    collection:
+      PROD:
+        provider: "ASF"
+        short_name: "OPERA_L3_DIST-ALERT-S1_PROVISIONAL_V0"
+      UAT:
+        provider: "ASF"
+        short_name: "OPERA_L3_DIST-ALERT-S1_PROVISIONAL_V0"
+    pattern: '(?P<id>OPERA_L3_DIST(?:-ALERT)?-S1_(?P<tile_id>T?[^\W_]+)_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_S1[A-D]?_30_v\d+([.]\d+)?)'
+    unique_fields: ["tile_id", "acquisition_ts"]
+    aggregation_field: "acquisition_ts"
+    aggregation_format: "%Y%m%dT%H%M%SZ"
+    creation_field: "creation_ts"
+    accountability:
+      enabled: true
+      strategy: "dist_s1"
+      max_concurrent_iso_downloads: 10
+      max_iso_retries: 3
+      prefer_s3_iso_xml: false
+
   DISP_S1:
     name: "Displacement - Sentinel-1"
     ccid:

@@ -3,278 +3,281 @@
 ## Installation
 
 ```bash
-cd opera-accountability
+cd opera-audit
 uv venv
 source .venv/bin/activate
 uv pip install -e .
 ```
 
-## Command Examples
+## Supported Products
 
-### 1. Check for Duplicates - Last 7 Days
+| Product | Duplicates | Accountability | Strategy | Notes |
+|---------|-----------|----------------|----------|-------|
+| DSWX_HLS | yes | yes | `dswx_hls` | |
+| RTC_S1 | yes | no | — | |
+| CSLC_S1 | yes | no | — | |
+| DSWX_S1 | yes | yes | `dswx_s1` | Requires `--mgrs-db` or `OPERA_MGRS_DB` env var |
+| DIST_S1 | yes | yes | `dist_s1` | Uses short_name query (no ccid) |
+| DISP_S1 | yes | no | — | Supports `--check-end-conflicts` |
+| TROPO | yes | no | — | |
+| DIST_ALERT_HLS | yes | no | — | |
+| CSLC_S1_STATIC | yes | no | — | |
+| RTC_S1_STATIC | yes | no | — | |
+
+## Command Reference
+
+### Check Version
+
+```bash
+opera-audit version
+```
+
+### Duplicate Detection
+
+#### Single Product
 
 ```bash
 opera-audit duplicates DSWX_HLS --days-back 7
-```
-
-**Output:**
-```
-╭─────────────────────────────────────────╮
-│ OPERA Audit                             │
-│                                         │
-│ Duplicate Detection                     │
-│ Product: DSWX_HLS                       │
-│ Venue: PROD                             │
-│ Date Range: 2026-01-15 to 2026-01-22   │
-│ Output: ./output                        │
-╰─────────────────────────────────────────╯
-
-Querying CMR...
-Retrieved 1,247 granules from CMR
-
-Analyzing for duplicates...
-Found 3 duplicates out of 1,247 granules (0.24%)
-
-Saving reports...
-
-┏━━━━━━━━━━━━━━━━━┳━━━━━━━┓
-┃ Metric          ┃ Count ┃
-┡━━━━━━━━━━━━━━━━━╇━━━━━━━┩
-│ Total Granules  │ 1,247 │
-│ Unique Granules │ 1,244 │
-│ Duplicates      │     3 │
-│ Duplicate Rate  │ 0.24% │
-└─────────────────┴───────┘
-
-Files created:
-  json: ./output/reports/duplicates/DSWX_HLS/2026-01-22.json
-  text: ./output/reports/duplicates/DSWX_HLS/2026-01-22.txt
-  summary: ./output/reports/duplicates/DSWX_HLS/2026-01-22_summary.txt
-
-Done!
-```
-
-### 2. Check Specific Date Range
-
-```bash
 opera-audit duplicates RTC_S1 --start 2026-01-01 --end 2026-01-21 --venue PROD
+opera-audit duplicates DSWX_HLS --days-back 7 --save        # save reports to disk
+opera-audit duplicates DSWX_HLS --days-back 7 --quiet       # minimal output (for cron)
 ```
 
-### 3. Check All Products (Future)
+#### All Products at Once
 
 ```bash
-# Run for each product
-for product in DSWX_HLS RTC_S1 CSLC_S1 DSWX_S1 DISP_S1; do
-    opera-audit duplicates $product --days-back 7
-done
+opera-audit duplicates-all --days-back 7 --save
 ```
 
-### 4. Run Accountability Analysis
+Example output:
+```
+┏━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓
+┃ Product        ┃   Total ┃ Duplicates ┃  Rate ┃
+┡━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩
+│ DSWX_HLS       │  80,392 │        871 │ 1.08% │
+│ RTC_S1         │ 161,019 │      3,701 │ 2.30% │
+│ CSLC_S1        │  12,354 │         54 │ 0.44% │
+│ DSWX_S1        │  43,501 │        131 │ 0.30% │
+│ DISP_S1        │       0 │          0 │ 0.00% │
+│ TROPO          │       7 │          0 │ 0.00% │
+│ DIST_ALERT_HLS │  79,525 │          8 │ 0.01% │
+└────────────────┴─────────┴────────────┴───────┘
+```
+
+#### DISP-S1 End-Conflict Detection
 
 ```bash
-opera-audit accountability --days-back 30
+opera-audit duplicates DISP_S1 --days-back 30 --check-end-conflicts
 ```
 
-**Output:**
-```
-╭─────────────────────────────────────────╮
-│ OPERA Audit                             │
-│                                         │
-│ Accountability Analysis                 │
-│ Product: DSWX_HLS                       │
-│ Venue: PROD                             │
-│ Date Range: 2025-12-23 to 2026-01-22   │
-│ Output: ./output                        │
-╰─────────────────────────────────────────╯
+Detects cases where the same frame+polarization+end-date has multiple begin-dates (conflicting time-series segments).
 
-Querying CMR for DSWx-HLS...
-Retrieved 15,380 granules from CMR
+#### Memory-Efficient Mode
 
-Querying CMR for HLS-S30...
-Retrieved 22,145 granules from CMR
-
-Querying CMR for HLS-L30...
-Retrieved 18,932 granules from CMR
-
-After L9 filtering: 41,077 HLS granules
-Mapped DSWx to 15,380 unique HLS inputs
-Found 142 HLS granules with no DSWx output
-
-Analyzing accountability...
-Saving reports...
-
-┏━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┓
-┃ Metric                 ┃  Count ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━┩
-│ Expected HLS Granules  │ 41,077 │
-│ Matched DSWx Granules  │ 40,935 │
-│ Missing DSWx Outputs   │    142 │
-│ Accountability Rate    │ 99.65% │
-└────────────────────────┴────────┘
-
-Files created:
-  json: ./output/reports/accountability/DSWX_HLS/2026-01-22.json
-  text: ./output/reports/accountability/DSWX_HLS/2026-01-22_missing.txt
-  summary: ./output/reports/accountability/DSWX_HLS/2026-01-22_summary.txt
-
-Done!
+```bash
+opera-audit duplicates RTC_S1 --days-back 30 --memory-efficient
 ```
 
-### 5. Launch Dashboard
+Processes granules in time-chunked batches to avoid large memory usage for high-volume products.
+
+### Accountability Analysis
+
+#### DSWX_HLS (default)
+
+```bash
+opera-audit accountability DSWX_HLS --days-back 7 --save
+```
+
+Example output:
+```
+┏━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┓
+┃ Metric                ┃   Count ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━┩
+│ Expected HLS Granules │  79,298 │
+│ Matched DSWx Granules │  79,296 │
+│ Missing DSWx Outputs  │       2 │
+│ Accountability Rate   │ 100.00% │
+└───────────────────────┴─────────┘
+```
+
+#### DSWX_S1 (requires MGRS tile DB)
+
+```bash
+# Pass DB path explicitly
+opera-audit accountability DSWX_S1 --days-back 7 --save --mgrs-db /path/to/MGRS_tile_collection.sqlite
+
+# Or set environment variable
+export OPERA_MGRS_DB=/path/to/MGRS_tile_collection.sqlite
+opera-audit accountability DSWX_S1 --days-back 7 --save
+```
+
+The MGRS tile-collection SQLite DB is available from JPL Artifactory or the ADT package repo.
+
+#### DIST_S1
+
+```bash
+opera-audit accountability DIST_S1 --days-back 7 --save
+```
+
+#### All Enabled Products
+
+```bash
+opera-audit accountability-all --days-back 7 --save
+```
+
+### Launch Dashboard
 
 ```bash
 opera-audit dashboard
+# or with a custom data directory:
+opera-audit dashboard --data-dir /path/to/output
 ```
 
 Opens browser to `http://localhost:8501` showing:
-- Overview with metrics across all products
-- Duplicates page with charts and tables
-- Accountability page with missing granule lists
-
-### 6. Quiet Mode (for Cron Jobs)
-
-```bash
-opera-audit duplicates DSWX_HLS --days-back 7 --quiet
-```
-
-Only logs warnings/errors, minimal output.
-
-### 7. Verbose Mode (for Debugging)
-
-```bash
-opera-audit duplicates DSWX_HLS --days-back 7 --verbose
-```
-
-Shows detailed logs including CMR queries, pattern matching, etc.
+- **Overview** — health metrics across all products
+- **Duplicates** — charts and tables per product
+- **Accountability** — missing granule lists, rates, strategy-specific panels
 
 ## Output Files
 
+Reports are saved under `./output/reports/{duplicates,accountability}/{PRODUCT}/`.
+
 ### Duplicates Report JSON
-`./output/reports/duplicates/DSWX_HLS/2026-01-22.json`
+
+`./output/reports/duplicates/DSWX_HLS/2026-05-12.json`
 
 ```json
 {
   "report_metadata": {
-    "generated_at": "2026-01-22T10:30:00",
+    "generated_at": "2026-05-12T10:30:00",
     "product_type": "DSWX_HLS",
     "venue": "PROD",
     "report_type": "duplicates"
   },
   "results": {
-    "total": 1247,
-    "unique": 1244,
-    "duplicates": 3,
-    "duplicate_list": [
-      "OPERA_L3_DSWx-HLS_T10TEM_20260115T180931Z_20260115T235959Z_L8_30_v1.0",
-      "OPERA_L3_DSWx-HLS_T11SKA_20260116T183045Z_20260116T230000Z_S2A_30_v1.0",
-      "OPERA_L3_DSWx-HLS_T12SUD_20260118T182045Z_20260118T235959Z_L9_30_v1.0"
-    ],
+    "total": 80392,
+    "unique": 79521,
+    "duplicates": 871,
+    "duplicate_list": ["..."],
     "by_date": {
-      "2026-01-15": {"total": 415, "unique": 414, "duplicates": 1},
-      "2026-01-16": {"total": 421, "unique": 420, "duplicates": 1},
-      "2026-01-17": {"total": 411, "unique": 411, "duplicates": 0}
+      "2026-05-05": {"total": 11200, "unique": 11080, "duplicates": 120}
     }
   }
 }
 ```
 
-### Duplicates Text List (DAAC Format)
-`./output/reports/duplicates/DSWX_HLS/2026-01-22.txt`
+### Accountability Report (DSWX_S1 nested layout)
 
+`./output/reports/accountability/DSWX_S1/2026-05-12/summary.json`
+
+```json
+{
+  "metadata": {"generated_at": "2026-05-12T10:30:00"},
+  "rtc_surveyed": 161019,
+  "dswx_surveyed": 43501,
+  "filtered_rtc_count": 157000,
+  "used_rtc_count": 155000,
+  "missing_count": 2000,
+  "missing": ["..."],
+  "expected": 157000,
+  "actual": 155000
+}
 ```
-OPERA_L3_DSWx-HLS_T10TEM_20260115T180931Z_20260115T235959Z_L8_30_v1.0
-OPERA_L3_DSWx-HLS_T11SKA_20260116T183045Z_20260116T230000Z_S2A_30_v1.0
-OPERA_L3_DSWx-HLS_T12SUD_20260118T182045Z_20260118T235959Z_L9_30_v1.0
+
+Sibling files: `rtc_survey.json`, `dswx_survey.json`, `missing_rtc_products.json`, `rtc_to_dswx_map.json`.
+
+## Testing
+
+### Run Unit Tests (fast, no network)
+
+```bash
+python -m pytest tests/ -v -m "not slow"
 ```
 
-### Summary Text
-`./output/reports/duplicates/DSWX_HLS/2026-01-22_summary.txt`
+### Run Integration Tests (requires CMR access)
 
+```bash
+python -m pytest tests/ -v -m integration
 ```
-OPERA Duplicates Report
-==================================================
-Product:        DSWX_HLS
-Venue:          PROD
-Generated:      2026-01-22 10:30:00
 
-SUMMARY
---------------------------------------------------
-Total Granules:     1,247
-Unique Granules:    1,244
-Duplicate Count:    3
-Duplicate Rate:     0.24%
+### Tests That Require the MGRS Tile DB
 
-Files Generated:
-- Full report:     ./output/reports/duplicates/DSWX_HLS/2026-01-22.json
-- DAAC list:       ./output/reports/duplicates/DSWX_HLS/2026-01-22.txt
+The following tests create a **temporary in-memory SQLite DB** as a fixture, so they do **not** require the real MGRS tile DB file:
+
+- `tests/test_dswx_s1_strategy.py` — tile-set resolution, pipeline smoke test
+- `tests/test_cli_dispatch.py` — CLI `--mgrs-db` argument passing (mocked)
+
+The **integration test** `test_dswx_s1_accountability_pipeline_end_to_end` in `tests/test_cmr_integration.py` requires the real MGRS DB at runtime (via `OPERA_MGRS_DB` or the bundled path).
+
+The `accountability-all` command for DSWX_S1 also requires the DB:
+
+```bash
+export OPERA_MGRS_DB=/path/to/MGRS_tile_collection.sqlite
+opera-audit accountability-all --days-back 7 --save
 ```
 
 ## Integration with Cron
 
-### Daily Duplicate Check
+### Daily Duplicate Check (all products)
 ```bash
-# Add to crontab
-0 2 * * * cd /path/to/opera-accountability && source .venv/bin/activate && opera-audit duplicates DSWX_HLS --days-back 1 --quiet >> /var/log/opera-audit.log 2>&1
+0 2 * * * cd /path/to/opera-audit && source .venv/bin/activate && opera-audit duplicates-all --days-back 1 --save --quiet >> /var/log/opera-audit.log 2>&1
 ```
 
 ### Weekly Accountability Check
 ```bash
-# Run every Monday
-0 3 * * 1 cd /path/to/opera-accountability && source .venv/bin/activate && opera-audit accountability --days-back 7 --quiet >> /var/log/opera-audit.log 2>&1
+0 3 * * 1 cd /path/to/opera-audit && source .venv/bin/activate && opera-audit accountability-all --days-back 7 --save --quiet >> /var/log/opera-audit.log 2>&1
 ```
 
 ## Python API Usage
 
-You can also use the package programmatically:
-
 ```python
-from opera_accountability.cmr import query_cmr
+from opera_accountability import CONFIG
+from opera_accountability.cmr import query_cmr, query_cmr_by_short_name
 from opera_accountability.duplicates import detect_duplicates
 from opera_accountability.reports import save_reports
 from datetime import datetime, timedelta
 
-# Query CMR
 end_date = datetime.now()
 start_date = end_date - timedelta(days=7)
-granules = query_cmr(
-    collection_id='C2617126679-POCLOUD',
-    start_date=start_date,
-    end_date=end_date,
-    venue='PROD'
-)
 
-# Detect duplicates
+# --- Duplicates (by ccid) ---
+ccid = CONFIG['products']['DSWX_HLS']['ccid']['PROD']
+granules = query_cmr(ccid, start_date, end_date, 'PROD')
 results = detect_duplicates(granules, 'DSWX_HLS')
+print(f"Found {results['duplicates']} duplicates out of {results['total']}")
 
-# Save reports
-files = save_reports(results, './output', 'DSWX_HLS', 'duplicates', 'PROD')
+# --- Duplicates (by short_name, e.g. DIST_S1) ---
+coll = CONFIG['products']['DIST_S1']['collection']['PROD']
+granules = query_cmr_by_short_name(coll['short_name'], coll['provider'], start_date, end_date)
+results = detect_duplicates(granules, 'DIST_S1')
 
-print(f"Found {results['duplicates']} duplicates")
-print(f"Reports saved to: {files}")
+# --- Save reports ---
+files = save_reports(results, './output', 'DSWX_HLS', 'duplicates', 'PROD',
+                     start_date=start_date, end_date=end_date)
 ```
 
 ## Troubleshooting
 
 ### CMR Connection Issues
 ```bash
-# Test with verbose logging
 opera-audit duplicates DSWX_HLS --days-back 1 --verbose
 ```
 
 ### Pattern Not Matching
 ```python
-# Test pattern matching
 from opera_accountability import CONFIG
 import re
 
 pattern = re.compile(CONFIG['products']['DSWX_HLS']['pattern'])
-test_granule = 'OPERA_L3_DSWx-HLS_T10TEM_20260115T180931Z_20260115T235959Z_L8_30_v1.0'
-match = pattern.match(test_granule)
+test_id = 'OPERA_L3_DSWx-HLS_T10TEM_20260115T180931Z_20260115T235959Z_L8_30_v1.0'
+match = pattern.match(test_id)
 print(match.groupdict() if match else "No match!")
 ```
 
 ### Check Configuration
 ```python
 from opera_accountability import CONFIG
-print(CONFIG['products']['DSWX_HLS'])
+for name, prod in CONFIG['products'].items():
+    acc = prod.get('accountability', {})
+    print(f"{name}: strategy={acc.get('strategy', 'n/a')}, enabled={acc.get('enabled', False)}")
 ```

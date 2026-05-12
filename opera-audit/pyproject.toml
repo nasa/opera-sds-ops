@@ -23,6 +23,7 @@ classifiers = [
 
 dependencies = [
     "requests>=2.31.0",
+    "aiohttp>=3.9.0",
     "backoff>=2.2.0",
     "pyyaml>=6.0",
     "typer>=0.9.0",
@@ -31,12 +32,20 @@ dependencies = [
     "streamlit-shadcn-ui>=0.1.18",
     "altair>=5.0.0",
     "python-dateutil>=2.8.0",
+    "pandas>=2.0.0",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
+]
+dist_s1 = [
+    "boto3>=1.28.0",
+    "botocore>=1.31.0",
+]
+burst_db = [
+    "data-subscriber>=0.1.0",
 ]
 
 [project.scripts]
