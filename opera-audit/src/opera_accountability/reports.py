@@ -66,7 +66,17 @@ def save_reports(
     files_created['json'] = json_path
 
     # 2. Text format (DAAC format - list of granule IDs)
-    if report_type == 'duplicates' and 'duplicate_list' in results:
+    if report_type == 'duplicates' and 'conflicts' in results:
+        txt_path = base_dir / f"{date_str}_conflicts.txt"
+        with open(txt_path, 'w') as f:
+            for conflict_key, conflict in results['conflicts'].items():
+                f.write(f"# {conflict_key}\n")
+                for product_id in conflict['products']:
+                    f.write(f"{product_id}\n")
+        logger.info(f"Saved conflict list: {txt_path}")
+        files_created['text'] = txt_path
+
+    elif report_type == 'duplicates' and 'duplicate_list' in results:
         txt_path = base_dir / f"{date_str}.txt"
         with open(txt_path, 'w') as f:
             for granule_id in results['duplicate_list']:
@@ -95,12 +105,20 @@ def save_reports(
         if report_type == 'duplicates':
             f.write("SUMMARY\n")
             f.write("-" * 50 + "\n")
-            f.write(f"Total Granules:     {results['total']:,}\n")
-            f.write(f"Unique Granules:    {results['unique']:,}\n")
-            f.write(f"Duplicate Count:    {results['duplicates']:,}\n")
-            if results['total'] > 0:
-                dup_rate = (results['duplicates'] / results['total']) * 100
-                f.write(f"Duplicate Rate:     {dup_rate:.2f}%\n")
+            if 'conflict_groups' in results:
+                f.write(f"Total Granules:         {results['total']:,}\n")
+                f.write(f"Conflict Groups:        {results['conflict_groups']:,}\n")
+                f.write(f"Conflicting Products:   {results['conflicting_products']:,}\n")
+                if results['total'] > 0:
+                    conflict_rate = (results['conflicting_products'] / results['total']) * 100
+                    f.write(f"Conflict Rate:          {conflict_rate:.2f}%\n")
+            else:
+                f.write(f"Total Granules:     {results['total']:,}\n")
+                f.write(f"Unique Granules:    {results['unique']:,}\n")
+                f.write(f"Duplicate Count:    {results['duplicates']:,}\n")
+                if results['total'] > 0:
+                    dup_rate = (results['duplicates'] / results['total']) * 100
+                    f.write(f"Duplicate Rate:     {dup_rate:.2f}%\n")
 
         elif report_type == 'accountability':
             f.write("SUMMARY\n")

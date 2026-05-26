@@ -86,6 +86,8 @@ class DateCountStrategy(AccountabilityStrategy):
             'missing_dates': missing_count,
             'expected_total': expected_total,
             'actual_total': actual_total,
+            'expected': expected_total,  # Standard format for reports
+            'actual': actual_total,  # Standard format for reports
             'missing_count': expected_total - actual_total,
             'missing': sorted(list(missing_dates.keys())),
             'date_counts': dict(date_counts),

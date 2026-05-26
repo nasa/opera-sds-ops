@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import netrc
+import os
 import time
 import xml.etree.ElementTree as ET
 from typing import Iterable
@@ -10,6 +12,41 @@ import requests
 from requests.exceptions import RequestException
 
 logger = logging.getLogger(__name__)
+
+
+def _get_earthdata_session() -> requests.Session:
+    """Build a requests.Session with Earthdata Login credentials.
+
+    Credential sources (checked in order):
+    1. EARTHDATA_TOKEN environment variable (Bearer token)
+    2. ~/.netrc entry for urs.earthdata.nasa.gov (username/password)
+
+    Raises RuntimeError with a clear message if no credentials are found.
+    """
+    session = requests.Session()
+
+    token = os.environ.get('EARTHDATA_TOKEN')
+    if token:
+        session.headers['Authorization'] = f'Bearer {token}'
+        return session
+
+    try:
+        netrc_file = netrc.netrc()
+        auth = netrc_file.authenticators('urs.earthdata.nasa.gov')
+        if auth:
+            session.auth = (auth[0], auth[2])
+            return session
+    except (FileNotFoundError, netrc.NetrcParseError):
+        pass
+
+    raise RuntimeError(
+        "Earthdata Login credentials required for ISO-XML downloads.\n"
+        "Provide credentials via one of:\n"
+        "  1. EARTHDATA_TOKEN environment variable (Bearer token)\n"
+        "  2. ~/.netrc entry for urs.earthdata.nasa.gov\n"
+        "     machine urs.earthdata.nasa.gov login <user> password <pass>\n"
+        "Register at https://urs.earthdata.nasa.gov/users/new if needed."
+    )
 
 
 def extract_iso_xml_url(product: dict, prefer_s3: bool = False) -> str:
@@ -64,11 +101,18 @@ def _get_s3_object(url: str, max_retries: int, base_delay: float) -> bytes:
 
 
 def _get_http_content(url: str, max_retries: int, base_delay: float) -> bytes:
+    session = _get_earthdata_session()
     last_exception = None
 
     for attempt in range(max_retries + 1):
         try:
-            response = requests.get(url, timeout=30)
+            response = session.get(url, timeout=30, allow_redirects=True)
+            if response.status_code == 401:
+                raise RuntimeError(
+                    f"401 Unauthorized fetching {url}. "
+                    "Check your Earthdata Login credentials "
+                    "(EARTHDATA_TOKEN env var or ~/.netrc for urs.earthdata.nasa.gov)."
+                )
             response.raise_for_status()
             return response.content
         except RequestException as err:

@@ -522,7 +522,14 @@ def test_dswx_s1_accountability_pipeline_end_to_end(tmp_path):
     - MGRS tile-set resolution against the bundled SQLite DB succeeds
     - Cycle/sensor expansion produces deterministic output
     - All expected JSON artifacts are written
+
+    Requires OPERA_MGRS_DB env var or --mgrs-db to be set (the DB is no longer bundled).
     """
+    import os
+    mgrs_db = os.environ.get('OPERA_MGRS_DB')
+    if not mgrs_db:
+        pytest.skip("OPERA_MGRS_DB not set — MGRS tile DB required for e2e test")
+
     start_date = datetime.strptime('2025-01-01', '%Y-%m-%d')
     end_date = datetime.strptime('2025-01-02', '%Y-%m-%d')
 

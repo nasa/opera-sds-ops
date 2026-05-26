@@ -95,7 +95,8 @@ def duplicates(
     # Query CMR (progress bar shown by query_cmr)
     # End-conflict detection requires the full granule list, so disable
     # memory-efficient mode when both flags are set.
-    use_memory_efficient = memory_efficient and not (check_end_conflicts and product == 'DISP_S1')
+    is_static = CONFIG['products'][product].get('static', False)
+    use_memory_efficient = memory_efficient and not (check_end_conflicts and product == 'DISP_S1') and not is_static
 
     if use_memory_efficient:
         if not quiet:
@@ -103,11 +104,11 @@ def duplicates(
         results = detect_duplicates_memory_efficient(product, start_date, end_date, venue)
     else:
         if ccid:
-            cmr_granules = query_cmr(ccid, start_date, end_date, venue)
+            cmr_granules = query_cmr(ccid, start_date, end_date, venue, skip_temporal=is_static)
         else:
             coll = CONFIG['products'][product]['collection'][venue]
             cmr_granules = query_cmr_by_short_name(
-                coll['short_name'], coll['provider'], start_date, end_date
+                coll['short_name'], coll['provider'], start_date, end_date, venue
             )
 
         if len(cmr_granules) == 0:
@@ -117,7 +118,7 @@ def duplicates(
         # Detect duplicates or end conflicts
         if not quiet:
             console.print("\n[cyan]Analyzing for duplicates...[/cyan]")
-        
+
         if check_end_conflicts and product == 'DISP_S1':
             results = detect_disp_s1_end_conflicts(cmr_granules)
         else:
@@ -248,14 +249,15 @@ def accountability(
         raise typer.Exit(1)
 
     acc_cfg = product_cfg.get('accountability') or {}
-    if not acc_cfg.get('enabled'):
-        console.print(f"[red]Error: accountability not enabled for {product} in config.yaml[/red]")
-        raise typer.Exit(1)
 
     # Use provided strategy or auto-detect from config
     if strategy:
         strategy_name = strategy
     else:
+        if not acc_cfg.get('enabled'):
+            console.print(f"[red]Error: accountability not enabled for {product} in config.yaml[/red]")
+            console.print("[dim]Tip: use --strategy to force a specific strategy even if not enabled in config[/dim]")
+            raise typer.Exit(1)
         strategy_name = acc_cfg.get('strategy', 'dswx_hls')
 
     # Calculate date range
@@ -282,16 +284,16 @@ def accountability(
     # Dispatch by strategy
     if strategy_name == 'dswx_hls':
         _run_dswx_hls_accountability(
-            product, start_date, end_date, venue, save, output_dir, quiet
+            product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
         )
     elif strategy_name == 'dswx_s1':
         _run_dswx_s1_accountability(
-            start_date, end_date, venue, save, output_dir, mgrs_db, quiet
+            start_date, end_date, venue, save, output_dir, mgrs_db, quiet, recovery_format
         )
     elif strategy_name == 'dist_s1':
         _run_dist_s1_accountability(
             start_date, end_date, venue, save, output_dir,
-            burst_db, max_concurrent, max_retries, prefer_s3, quiet
+            burst_db, max_concurrent, max_retries, prefer_s3, quiet, recovery_format
         )
     elif strategy_name == 'forward_map':
         _run_forward_map_accountability(
@@ -361,7 +363,7 @@ def _run_date_count_accountability(
     output_dir: str,
     quiet: bool,
     recovery_format: Optional[str] = None,
-) -> None:
+) -> dict:
     """Run date-count accountability strategy."""
     from opera_accountability.strategies.date_count import DateCountStrategy
     
@@ -389,6 +391,8 @@ def _run_date_count_accountability(
         files = write_recovery_files_by_date(results, output_dir, recovery_format)
         if not quiet:
             console.print(f"[cyan]Recovery files written: {len(files)} files[/cyan]")
+    
+    return results
 
 
 def _run_delegated_validator_accountability(
@@ -478,6 +482,7 @@ def _run_dswx_hls_accountability(
     save: bool,
     output_dir: str,
     quiet: bool,
+    recovery_format: Optional[str] = None,
 ) -> dict:
     """Existing DSWX_HLS pipeline, extracted so the CLI can dispatch by strategy."""
     dswx_ccid = CONFIG['products'][product]['ccid'][venue]
@@ -506,6 +511,13 @@ def _run_dswx_hls_accountability(
             results, output_dir, product, 'accountability', venue,
             start_date=start_date, end_date=end_date,
         )
+
+    if recovery_format and results.get('missing'):
+        from opera_accountability.recovery_file import write_recovery_file
+        output_path = f"{output_dir}/recovery_{product}"
+        write_recovery_file(results, output_path, recovery_format)
+        if not quiet:
+            console.print(f"[cyan]Recovery file written to {output_path}.{recovery_format}[/cyan]")
 
     if not quiet:
         table = Table(title=f"Accountability Summary - {product}")
@@ -546,7 +558,8 @@ def _run_dist_s1_accountability(
     max_retries: Optional[int],
     prefer_s3: bool,
     quiet: bool,
-) -> None:
+    recovery_format: Optional[str] = None,
+) -> dict:
     from .strategies.dist_s1 import run as run_dist_s1
 
     if not quiet:
@@ -563,6 +576,15 @@ def _run_dist_s1_accountability(
         max_retries=max_retries,
         prefer_s3=prefer_s3,
     )
+
+    if recovery_format and results.get('missing'):
+        from opera_accountability.recovery_file import write_recovery_file
+        output_path = f"{output_dir}/recovery_DIST_S1"
+        write_recovery_file(
+            {'missing': results['missing']}, output_path, recovery_format
+        )
+        if not quiet:
+            console.print(f"[cyan]Recovery file written to {output_path}.{recovery_format}[/cyan]")
 
     if not quiet:
         table = Table(title="DIST-S1 Accountability Summary")
@@ -593,6 +615,8 @@ def _run_dist_s1_accountability(
     else:
         console.print("[green]Done![/green]")
 
+    return results
+
 
 def _run_dswx_s1_accountability(
     start_date: datetime,
@@ -602,7 +626,8 @@ def _run_dswx_s1_accountability(
     output_dir: str,
     mgrs_db: Optional[str],
     quiet: bool,
-) -> None:
+    recovery_format: Optional[str] = None,
+) -> dict:
     """DSWx-S1 pipeline dispatcher: runs the 4-step strategy and renders results."""
     # Imported lazily so the dswx_s1 package is only loaded when used.
     from .strategies.dswx_s1 import run as run_dswx_s1
@@ -618,6 +643,15 @@ def _run_dswx_s1_accountability(
         save=save,
         mgrs_db_override=mgrs_db,
     )
+
+    if recovery_format and results.get('missing'):
+        from opera_accountability.recovery_file import write_recovery_file
+        output_path = f"{output_dir}/recovery_DSWX_S1"
+        write_recovery_file(
+            {'missing': results['missing']}, output_path, recovery_format
+        )
+        if not quiet:
+            console.print(f"[cyan]Recovery file written to {output_path}.{recovery_format}[/cyan]")
 
     if not quiet:
         table = Table(title="DSWx-S1 Accountability Summary")
@@ -651,6 +685,8 @@ def _run_dswx_s1_accountability(
         )
     else:
         console.print("[green]Done![/green]")
+
+    return results
 
 
 @app.command()
@@ -727,16 +763,17 @@ def duplicates_all(
         try:
             # Query CMR
             # End-conflict detection requires the full granule list.
-            use_mem_eff = memory_efficient and not (check_end_conflicts and product == 'DISP_S1')
+            is_static = CONFIG['products'][product].get('static', False)
+            use_mem_eff = memory_efficient and not (check_end_conflicts and product == 'DISP_S1') and not is_static
             if use_mem_eff:
                 results = detect_duplicates_memory_efficient(product, start_date, end_date, venue)
             else:
                 if ccid:
-                    cmr_granules = query_cmr(ccid, start_date, end_date, venue)
+                    cmr_granules = query_cmr(ccid, start_date, end_date, venue, skip_temporal=is_static)
                 else:
                     coll = CONFIG['products'][product]['collection'][venue]
                     cmr_granules = query_cmr_by_short_name(
-                        coll['short_name'], coll['provider'], start_date, end_date
+                        coll['short_name'], coll['provider'], start_date, end_date, venue
                     )
                 if len(cmr_granules) == 0:
                     if not quiet:
@@ -843,18 +880,30 @@ def accountability_all(
                 if results:
                     all_results[product] = results
             elif strategy == 'dswx_s1':
-                _run_dswx_s1_accountability(start_date, end_date, venue, save, output_dir, None, quiet)
-                all_results[product] = {'expected': 0, 'actual': 0, 'missing_count': 0, '_placeholder': True}
+                results = _run_dswx_s1_accountability(start_date, end_date, venue, save, output_dir, None, quiet)
+                all_results[product] = {
+                    'expected': results.get('expected', results.get('filtered_rtc_count', 0)),
+                    'actual': results.get('actual', results.get('used_rtc_count', 0)),
+                    'missing_count': results.get('missing_count', 0),
+                }
             elif strategy == 'dist_s1':
                 prefer_s3 = CONFIG['products'][product]['accountability'].get('prefer_s3_iso_xml', False)
-                _run_dist_s1_accountability(start_date, end_date, venue, save, output_dir, None, None, None, prefer_s3, quiet)
-                all_results[product] = {'expected': 0, 'actual': 0, 'missing_count': 0, '_placeholder': True}
+                results = _run_dist_s1_accountability(start_date, end_date, venue, save, output_dir, None, None, None, prefer_s3, quiet)
+                all_results[product] = {
+                    'expected': results.get('expected', 0),
+                    'actual': results.get('actual', 0),
+                    'missing_count': results.get('missing_count', 0),
+                }
             elif strategy == 'forward_map':
                 _run_forward_map_accountability(product, start_date, end_date, venue, save, output_dir, quiet)
                 all_results[product] = {'expected': 0, 'actual': 0, 'missing_count': 0, '_placeholder': True}
             elif strategy == 'date_count':
-                _run_date_count_accountability(product, start_date, end_date, venue, save, output_dir, quiet)
-                all_results[product] = {'expected': 0, 'actual': 0, 'missing_count': 0, '_placeholder': True}
+                results = _run_date_count_accountability(product, start_date, end_date, venue, save, output_dir, quiet)
+                all_results[product] = {
+                    'expected': results.get('expected_total', 0),
+                    'actual': results.get('actual_total', 0),
+                    'missing_count': results.get('missing_count', 0),
+                }
             elif strategy == 'delegated_validator':
                 _run_delegated_validator_accountability(product, start_date, end_date, venue, save, output_dir, quiet)
                 all_results[product] = {'expected': 0, 'actual': 0, 'missing_count': 0, '_placeholder': True}
@@ -864,10 +913,6 @@ def accountability_all(
             else:
                 console.print(f"  [red]Unknown strategy: {strategy}[/red]")
                 continue
-            
-            if not quiet and product in all_results and not all_results[product].get('_placeholder'):
-                r = all_results[product]
-                console.print(f"  Expected: {r.get('expected', 0)}, Actual: {r.get('actual', 0)}, Missing: {r.get('missing_count', 0)}")
         
         except Exception as e:
             if not quiet:

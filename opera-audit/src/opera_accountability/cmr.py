@@ -87,7 +87,8 @@ def query_cmr(
     collection_id: str,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
-    venue: str = 'PROD'
+    venue: str = 'PROD',
+    skip_temporal: bool = False,
 ) -> list[dict]:
     """
     Query CMR for granules with pagination and retry logic.
@@ -97,6 +98,7 @@ def query_cmr(
         start_date: Start of temporal range (optional)
         end_date: End of temporal range (optional)
         venue: 'PROD' or 'UAT'
+        skip_temporal: If True, omit temporal filter (for static products with no time extent)
 
     Returns:
         List of granule dicts (CMR UMM JSON format)
@@ -109,8 +111,8 @@ def query_cmr(
         'page_size': CONFIG['cmr']['page_size']
     }
 
-    # Add temporal range if specified
-    if start_date or end_date:
+    # Add temporal range if specified and not skipped
+    if not skip_temporal and (start_date or end_date):
         start_str = start_date.strftime('%Y-%m-%dT%H:%M:%SZ') if start_date else ''
         end_str = end_date.strftime('%Y-%m-%dT%H:%M:%SZ') if end_date else ''
         params['temporal[]'] = f'{start_str},{end_str}'

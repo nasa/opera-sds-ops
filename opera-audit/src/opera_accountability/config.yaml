@@ -124,7 +124,11 @@ products:
     aggregation_format: "%Y%m%dT%H%M%SZ"
     creation_field: "creation_ts"
     accountability:
-      enabled: false
+      enabled: true
+      strategy: "delegated_validator"
+      delegated_validator:
+        validator_module: null
+        validator_function: null
 
   TROPO:
     name: "Troposphere Zenith Delay"
@@ -137,7 +141,10 @@ products:
     aggregation_format: "%Y%m%dT%H%M%SZ"
     creation_field: "creation_ts"
     accountability:
-      enabled: false
+      enabled: true
+      strategy: "date_count"
+      date_count:
+        expected_per_day: 4
 
   DIST_ALERT_HLS:
     name: "Disturbance Alert - HLS"
@@ -162,6 +169,8 @@ products:
     aggregation_field: "validity_ts"
     aggregation_format: "%Y%m%d"
     # No creation_field: static products have no creation timestamp in the granule ID.
+    # Static products: use native-id query instead of temporal range query.
+    static: true
     accountability:
       enabled: false
 
@@ -175,5 +184,7 @@ products:
     aggregation_field: "validity_ts"
     aggregation_format: "%Y%m%d"
     # No creation_field: static products have no creation timestamp in the granule ID.
+    # Static products: use native-id query instead of temporal range query.
+    static: true
     accountability:
       enabled: false
