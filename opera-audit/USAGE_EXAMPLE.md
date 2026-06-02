@@ -46,7 +46,7 @@ opera-audit duplicates DSWX_HLS --days-back 7 --quiet       # minimal output (fo
 #### All Products at Once
 
 ```bash
-opera-audit duplicates-all --days-back 7 --save
+opera-audit duplicates --days-back 7 --save
 ```
 
 Example output:
@@ -220,7 +220,7 @@ opera-audit accountability-all --days-back 7 --save
 
 ### Daily Duplicate Check (all products)
 ```bash
-0 2 * * * cd /path/to/opera-audit && source .venv/bin/activate && opera-audit duplicates-all --days-back 1 --save --quiet >> /var/log/opera-audit.log 2>&1
+0 2 * * * cd /path/to/opera-audit && source .venv/bin/activate && opera-audit duplicates --days-back 1 --save --quiet >> /var/log/opera-audit.log 2>&1
 ```
 
 ### Weekly Accountability Check

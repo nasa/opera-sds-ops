@@ -42,7 +42,7 @@ console = Console()
 
 @app.command()
 def duplicates(
-    product: str = typer.Argument(..., help="Product name (DSWX_HLS, RTC_S1, CSLC_S1, DSWX_S1, DISP_S1)"),
+    product: Optional[str] = typer.Argument(None, help="Product name (DSWX_HLS, RTC_S1, CSLC_S1, DSWX_S1, DISP_S1). If omitted, runs for all products."),
     days_back: int = typer.Option(7, "--days-back", "-d", help="Number of days to look back"),
     start: Optional[str] = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD)"),
     end: Optional[str] = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
@@ -50,14 +50,29 @@ def duplicates(
     save: bool = typer.Option(False, "--save", help="Save reports to files (default: stdout only)"),
     output_dir: str = typer.Option("./output", "--output-dir", "-o", help="Output directory (used with --save)"),
     check_end_conflicts: bool = typer.Option(False, "--check-end-conflicts", help="Check for DISP-S1 end conflicts (same frame+end date, different begin date)"),
-    memory_efficient: bool = typer.Option(False, "--memory-efficient", help="Use memory-efficient batched processing for large datasets"),
+    memory_efficient: bool = typer.Option(True, "--memory-efficient/--no-memory-efficient", help="Use memory-efficient batched processing (default: enabled)"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
     verbose: bool = typer.Option(False, "--verbose", help="Verbose output")
 ):
-    """Run duplicate detection for a product."""
+    """Run duplicate detection for a product (or all products if none specified)."""
 
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+
+    # If no product specified, run for all products
+    if product is None:
+        _run_duplicates_all(
+            days_back=days_back,
+            start=start,
+            end=end,
+            venue=venue,
+            save=save,
+            output_dir=output_dir,
+            check_end_conflicts=check_end_conflicts,
+            memory_efficient=memory_efficient,
+            quiet=quiet,
+        )
+        return
 
     # Validate product
     if product not in CONFIG['products']:
@@ -715,19 +730,18 @@ def dashboard(
         console.print("\n[yellow]Dashboard stopped[/yellow]")
 
 
-@app.command()
-def duplicates_all(
-    days_back: int = typer.Option(7, "--days-back", "-d", help="Number of days to look back"),
-    start: Optional[str] = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD)"),
-    end: Optional[str] = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
-    venue: str = typer.Option("PROD", "--venue", "-v", help="Venue (PROD or UAT)"),
-    save: bool = typer.Option(False, "--save", help="Save reports to files (default: stdout only)"),
-    output_dir: str = typer.Option("./output", "--output-dir", "-o", help="Output directory (used with --save)"),
-    check_end_conflicts: bool = typer.Option(False, "--check-end-conflicts", help="Check for DISP-S1 end conflicts"),
-    memory_efficient: bool = typer.Option(False, "--memory-efficient", help="Use memory-efficient batched processing"),
-    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
-):
-    """Run duplicate detection for all products."""
+def _run_duplicates_all(
+    days_back: int,
+    start: Optional[str],
+    end: Optional[str],
+    venue: str,
+    save: bool,
+    output_dir: str,
+    check_end_conflicts: bool,
+    memory_efficient: bool,
+    quiet: bool,
+) -> None:
+    """Internal helper to run duplicate detection for all products."""
     
     # Calculate date range
     if start and end:

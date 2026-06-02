@@ -20,7 +20,7 @@ product line, with a Streamlit dashboard for visualizing results.
 - **Output formats**: structured JSON (full report), plain-text granule lists,
   and human-readable summaries.
 - **CLI** built on Typer + Rich (`opera-audit duplicates`, `accountability`,
-  `duplicates-all`, `accountability-all`, `dashboard`).
+  `accountability-all`, `dashboard`).
 - **Streamlit dashboard** with per-product panels, status pills
   (healthy / warning / critical), Altair charts, and per-artifact JSON
   previews.
@@ -95,9 +95,14 @@ opera-audit duplicates RTC_S1 --start 2026-01-01 --end 2026-01-21 --save
 opera-audit duplicates DISP_S1 --check-end-conflicts --start 2026-02-01 --end 2026-02-07 --save
 ```
 
-**Memory-efficient mode for very large windows:**
+**Run duplicate detection for all products (no product argument):**
 ```bash
-opera-audit duplicates RTC_S1 --start 2026-01-01 --end 2026-03-01 --memory-efficient --save
+opera-audit duplicates --start 2026-02-01 --end 2026-02-07 --save
+```
+
+**Note:** Memory-efficient mode is now **enabled by default**. Use `--no-memory-efficient` to disable:
+```bash
+opera-audit duplicates RTC_S1 --start 2026-01-01 --end 2026-03-01 --no-memory-efficient --save
 ```
 
 **Run accountability analysis for a specific product:**
@@ -116,12 +121,8 @@ opera-audit accountability DIST_S1 \
     --max-concurrent 10 --max-retries 3
 ```
 
-**Sweep all products in one command:**
+**Run accountability for all enabled products:**
 ```bash
-# All duplicate checks
-opera-audit duplicates-all --start 2026-02-01 --end 2026-02-07 --save
-
-# All accountability strategies that are enabled in config.yaml
 opera-audit accountability-all --start 2026-02-01 --end 2026-02-07 --save
 ```
 
@@ -209,7 +210,41 @@ always surfaces the newest report per product.
 opera-audit dashboard --data-dir ./output
 ```
 
-The dashboard has three tabs:
+### Data Directory Structure
+
+The dashboard's `--data-dir` argument should point to the **parent directory** 
+containing a `reports/` subdirectory (created by running commands with `--save`). 
+
+For example, if you ran:
+```bash
+opera-audit duplicates DSWX_HLS --save --output-dir /my/data
+```
+
+Then launch the dashboard with:
+```bash
+opera-audit dashboard --data-dir /my/data
+```
+
+The dashboard expects this structure inside the data directory:
+```
+/my/data/
+└── reports/
+    ├── duplicates/
+    │   └── PRODUCT_NAME/
+    │       └── YYYY-MM-DD.json
+    └── accountability/
+        └── PRODUCT_NAME/
+            ├── YYYY-MM-DD.json          # flat layout (most products)
+            └── YYYY-MM-DD/              # nested layout (DSWX_S1, DIST_S1)
+                └── summary.json
+```
+
+If the dashboard shows "No reports yet", verify that:
+1. You ran duplicate/accountability commands with `--save`
+2. The `--output-dir` used matches the `--data-dir` you're pointing to
+3. The `reports/` subdirectory exists inside your data directory
+
+### Dashboard Tabs
 
 - **Overview** — shadcn metric cards, an Altair bar chart of duplicate rates
   by product, and per-product summary tables for both duplicates and
