@@ -100,7 +100,12 @@ opera-audit duplicates DISP_S1 --check-end-conflicts --start 2026-02-01 --end 20
 opera-audit duplicates --start 2026-02-01 --end 2026-02-07 --save
 ```
 
-**Note:** Memory-efficient mode is now **enabled by default**. Use `--no-memory-efficient` to disable:
+**Note:** Memory-efficient mode is now **enabled by default**. It's automatically disabled for:
+- Static collections
+- DISP-S1 with `--check-end-conflicts`
+- Products without CCID configured (falls back to short_name query)
+
+To manually disable:
 ```bash
 opera-audit duplicates RTC_S1 --start 2026-01-01 --end 2026-03-01 --no-memory-efficient --save
 ```

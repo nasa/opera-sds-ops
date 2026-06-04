@@ -110,8 +110,9 @@ def duplicates(
     # Query CMR (progress bar shown by query_cmr)
     # End-conflict detection requires the full granule list, so disable
     # memory-efficient mode when both flags are set.
+    # Also disable if no CCID (memory-efficient path lacks short-name fallback).
     is_static = CONFIG['products'][product].get('static', False)
-    use_memory_efficient = memory_efficient and not (check_end_conflicts and product == 'DISP_S1') and not is_static
+    use_memory_efficient = memory_efficient and not (check_end_conflicts and product == 'DISP_S1') and not is_static and bool(ccid)
 
     if use_memory_efficient:
         if not quiet:
@@ -777,8 +778,9 @@ def _run_duplicates_all(
         try:
             # Query CMR
             # End-conflict detection requires the full granule list.
+            # Also disable memory-efficient if no CCID (lacks short-name fallback).
             is_static = CONFIG['products'][product].get('static', False)
-            use_mem_eff = memory_efficient and not (check_end_conflicts and product == 'DISP_S1') and not is_static
+            use_mem_eff = memory_efficient and not (check_end_conflicts and product == 'DISP_S1') and not is_static and bool(ccid)
             if use_mem_eff:
                 results = detect_duplicates_memory_efficient(product, start_date, end_date, venue)
             else:
