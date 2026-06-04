@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import altair as alt
@@ -135,7 +135,7 @@ def _extract_generated_at(report: dict) -> str | None:
 def _format_age(generated_at: str | None) -> str:
     """Format an ISO timestamp as a wall-clock label for the "Generated" column.
 
-    Returns the local-time timestamp as ``YYYY-MM-DD HH:MM`` (operators asked
+    Returns the local-time timestamp as ``YYYY-MM-DD HH:MM TZ`` (operators asked
     for absolute timestamps instead of the original relative labels like
     ``"Today 17:05"`` / ``"3d ago"`` — easier to correlate with log lines and
     cron schedules). Returns ``"unknown"`` if the input is falsy or cannot be
@@ -148,11 +148,14 @@ def _format_age(generated_at: str | None) -> str:
         ts = generated_at.replace('Z', '+00:00')
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is not None:
-            dt = dt.astimezone().replace(tzinfo=None)
+            dt = dt.astimezone()
+        else:
+            # Naive timestamp - assume it's already in local time
+            dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
     except (ValueError, TypeError):
         return "unknown"
 
-    return dt.strftime('%Y-%m-%d %H:%M')
+    return dt.strftime('%Y-%m-%d %H:%M %Z')
 
 
 # Status thresholds — single source of truth used by the helpers AND rendered
@@ -723,7 +726,7 @@ def _build_meta_strip(data_dir: Path) -> str:
         f'<div class="opera-legend-row">{critical_pill}'
         f'<span>duplicates ≥ {dup_warning:g}% · accountability &lt; {acc_warning:g}%</span></div>'
         '<div class="opera-legend-title" style="margin-top:14px;">Generated column</div>'
-        '<div class="opera-legend-row"><span class="opera-freshness">YYYY-MM-DD HH:MM</span>'
+        '<div class="opera-legend-row"><span class="opera-freshness">YYYY-MM-DD HH:MM TZ</span>'
         '<span>wall-clock time the report was generated</span></div>'
         '</div>'
     )
@@ -747,17 +750,38 @@ def _build_meta_strip(data_dir: Path) -> str:
 
 
 def _format_meta_timestamp(value: str | None) -> str | None:
-    """Format an ISO timestamp for the meta strip, or return ``None``."""
+    """Format an ISO timestamp for the meta strip (UTC), or return ``None``."""
+    if not value:
+        return None
+    try:
+        ts = value.replace('Z', '+00:00')
+        dt = datetime.fromisoformat(ts)
+        # Keep in UTC
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc)
+        else:
+            # Naive timestamp - assume it's UTC
+            dt = dt.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return value
+    return dt.strftime('%Y-%m-%d %H:%M UTC')
+
+
+def _format_meta_timestamp_local(value: str | None) -> str | None:
+    """Format an ISO timestamp for the meta strip (local time), or return ``None``."""
     if not value:
         return None
     try:
         ts = value.replace('Z', '+00:00')
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is not None:
-            dt = dt.astimezone().replace(tzinfo=None)
+            dt = dt.astimezone()
+        else:
+            # Naive timestamp - assume it's already in local time
+            dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
     except (ValueError, TypeError):
         return value
-    return dt.strftime('%Y-%m-%d %H:%M')
+    return dt.strftime('%Y-%m-%d %H:%M %Z')
 
 
 def _render_report_meta_strip(report: dict) -> None:
@@ -775,7 +799,7 @@ def _render_report_meta_strip(report: dict) -> None:
 
     start = _format_meta_timestamp(meta.get('start_date'))
     end = _format_meta_timestamp(meta.get('end_date'))
-    generated = _format_meta_timestamp(meta.get('generated_at'))
+    generated = _format_meta_timestamp_local(meta.get('generated_at'))
     venue = meta.get('venue')
 
     from html import escape as _e

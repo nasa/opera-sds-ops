@@ -195,9 +195,9 @@ def duplicates(
 
 @app.command()
 def accountability(
-    product: str = typer.Argument(
-        'DSWX_HLS',
-        help="Product to analyze (DSWX_HLS, DSWX_S1, DIST_S1, TROPO, DISP_S1, DISP_S1_STATIC). Defaults to DSWX_HLS for backward compatibility."
+    product: Optional[str] = typer.Argument(
+        None,
+        help="Product to analyze (DSWX_HLS, DSWX_S1, DIST_S1, TROPO, DISP_S1, DISP_S1_STATIC). If omitted, runs for all enabled products."
     ),
     strategy: Optional[str] = typer.Option(None, "--strategy", "-s", help="Accountability strategy (forward_map, date_count, delegated_validator, db_based). Auto-detected from config if not specified."),
     days_back: int = typer.Option(7, "--days-back", "-d", help="Number of days to look back"),
@@ -256,6 +256,19 @@ def accountability(
 
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+
+    # If no product specified, run for all enabled products
+    if product is None:
+        _run_accountability_all(
+            days_back=days_back,
+            start=start,
+            end=end,
+            venue=venue,
+            save=save,
+            output_dir=output_dir,
+            quiet=quiet,
+        )
+        return
 
     # Validate product
     product_cfg = CONFIG['products'].get(product)
@@ -842,17 +855,16 @@ def _run_duplicates_all(
         console.print("[green]Done![/green]")
 
 
-@app.command()
-def accountability_all(
-    days_back: int = typer.Option(7, "--days-back", "-d", help="Number of days to look back"),
-    start: Optional[str] = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD)"),
-    end: Optional[str] = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
-    venue: str = typer.Option("PROD", "--venue", "-v", help="Venue (PROD or UAT)"),
-    save: bool = typer.Option(False, "--save", help="Save reports to files (default: stdout only)"),
-    output_dir: str = typer.Option("./output", "--output-dir", "-o", help="Output directory (used with --save)"),
-    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
-):
-    """Run accountability for all products with accountability enabled."""
+def _run_accountability_all(
+    days_back: int,
+    start: Optional[str],
+    end: Optional[str],
+    venue: str,
+    save: bool,
+    output_dir: str,
+    quiet: bool,
+) -> None:
+    """Internal helper to run accountability for all products with accountability enabled."""
     
     # Calculate date range
     if start and end:

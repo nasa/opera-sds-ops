@@ -82,7 +82,7 @@ Processes granules in time-chunked batches to avoid large memory usage for high-
 
 ### Accountability Analysis
 
-#### DSWX_HLS (default)
+#### DSWX_HLS
 
 ```bash
 opera-audit accountability DSWX_HLS --days-back 7 --save
@@ -122,7 +122,7 @@ opera-audit accountability DIST_S1 --days-back 7 --save
 #### All Enabled Products
 
 ```bash
-opera-audit accountability-all --days-back 7 --save
+opera-audit accountability --days-back 7 --save
 ```
 
 ### Launch Dashboard
@@ -209,11 +209,11 @@ The following tests create a **temporary in-memory SQLite DB** as a fixture, so 
 
 The **integration test** `test_dswx_s1_accountability_pipeline_end_to_end` in `tests/test_cmr_integration.py` requires the real MGRS DB at runtime (via `OPERA_MGRS_DB` or the bundled path).
 
-The `accountability-all` command for DSWX_S1 also requires the DB:
+The `accountability` command for DSWX_S1 (when running all products) also requires the DB:
 
 ```bash
 export OPERA_MGRS_DB=/path/to/MGRS_tile_collection.sqlite
-opera-audit accountability-all --days-back 7 --save
+opera-audit accountability --days-back 7 --save
 ```
 
 ## Integration with Cron
@@ -225,7 +225,7 @@ opera-audit accountability-all --days-back 7 --save
 
 ### Weekly Accountability Check
 ```bash
-0 3 * * 1 cd /path/to/opera-audit && source .venv/bin/activate && opera-audit accountability-all --days-back 7 --save --quiet >> /var/log/opera-audit.log 2>&1
+0 3 * * 1 cd /path/to/opera-audit && source .venv/bin/activate && opera-audit accountability --days-back 7 --save --quiet >> /var/log/opera-audit.log 2>&1
 ```
 
 ## Python API Usage

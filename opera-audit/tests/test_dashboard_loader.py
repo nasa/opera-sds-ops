@@ -194,7 +194,10 @@ def test_format_age_renders_absolute_local_timestamp():
     not a relative label like 'Today 17:05' / '3d ago'."""
     from datetime import datetime as _dt
     sample = _dt(2026, 4, 21, 9, 5)
-    assert _format_age(sample.isoformat()) == "2026-04-21 09:05"
+    result = _format_age(sample.isoformat())
+    # Now includes timezone abbreviation (e.g., PDT, PST)
+    assert result.startswith("2026-04-21 09:05")
+    assert len(result.split()) == 3  # YYYY-MM-DD HH:MM TZ
 
 
 def test_format_age_strips_trailing_z_and_converts_to_local_time():
@@ -204,8 +207,11 @@ def test_format_age_strips_trailing_z_and_converts_to_local_time():
     label = _format_age("2026-04-21T16:05:00Z")
     # Round-trip the UTC instant through astimezone to compute the local
     # expected value so the test passes regardless of CI timezone.
-    local = _dt(2026, 4, 21, 16, 5, tzinfo=_tz.utc).astimezone().strftime('%Y-%m-%d %H:%M')
-    assert label == local
+    local_dt = _dt(2026, 4, 21, 16, 5, tzinfo=_tz.utc).astimezone()
+    local_base = local_dt.strftime('%Y-%m-%d %H:%M')
+    local_tz = local_dt.strftime('%Z')
+    # Now includes timezone abbreviation
+    assert label == f"{local_base} {local_tz}"
 
 
 def test_status_for_duplicate_rate_buckets():
