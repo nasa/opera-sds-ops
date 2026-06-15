@@ -83,21 +83,39 @@ def test_extract_iso_xml_url():
 
 
 def test_extract_dist_input_granules():
+    """Test ISO-XML extraction using Kevin's Phase 4 namespace-based approach."""
     xml = """<?xml version="1.0"?>
-    <MD_Metadata xmlns:gco="http://www.isotc211.org/2005/gco">
-        <identificationInfo>
-            <MD_DataIdentification>
-                <additionalDocumentation>
-                    <CI_Citation>
-                        <otherCitationDetails>
-                            <gco:CharacterString>PostRtcOperaIds</gco:CharacterString>
-                            <gco:CharacterString>OPERA_L2_RTC-S1_T123-456789-IW1_20260115T180931Z_20260115T235959Z_S1A_30_v1.0,OPERA_L2_RTC-S1_T123-456789-IW2_20260115T180931Z_20260115T235959Z_S1B_30_v1.0</gco:CharacterString>
-                        </otherCitationDetails>
-                    </CI_Citation>
-                </additionalDocumentation>
-            </MD_DataIdentification>
-        </identificationInfo>
-    </MD_Metadata>
+    <gmi:MI_Metadata xmlns:gmi="http://www.isotc211.org/2005/gmi"
+                     xmlns:eos="http://earthdata.nasa.gov/schema/eos"
+                     xmlns:gco="http://www.isotc211.org/2005/gco">
+        <gmi:acquisitionInformation>
+            <gmi:MI_AcquisitionInformation>
+                <gmi:platform>
+                    <eos:EOS_Platform>
+                        <gmi:instrument>
+                            <eos:EOS_Instrument>
+                                <eos:AdditionalAttribute>
+                                    <eos:reference>
+                                        <eos:EOS_AdditionalAttributeDescription>
+                                            <eos:name>
+                                                <gco:CharacterString>PostRtcOperaIds</gco:CharacterString>
+                                            </eos:name>
+                                            <eos:dataType>
+                                                <eos:EOS_AdditionalAttributeDataTypeCode>STRING</eos:EOS_AdditionalAttributeDataTypeCode>
+                                            </eos:dataType>
+                                        </eos:EOS_AdditionalAttributeDescription>
+                                    </eos:reference>
+                                    <eos:value>
+                                        <gco:CharacterString>OPERA_L2_RTC-S1_T123-456789-IW1_20260115T180931Z_20260115T235959Z_S1A_30_v1.0,OPERA_L2_RTC-S1_T123-456789-IW2_20260115T180931Z_20260115T235959Z_S1B_30_v1.0</gco:CharacterString>
+                                    </eos:value>
+                                </eos:AdditionalAttribute>
+                            </eos:EOS_Instrument>
+                        </gmi:instrument>
+                    </eos:EOS_Platform>
+                </gmi:platform>
+            </gmi:MI_AcquisitionInformation>
+        </gmi:acquisitionInformation>
+    </gmi:MI_Metadata>
     """
     # Parse XML directly instead of using obtain_iso_xml (which expects a URL)
     import xml.etree.ElementTree as ET
@@ -105,6 +123,7 @@ def test_extract_dist_input_granules():
     inputs = iso_xml.extract_dist_input_granules(root)
     assert len(inputs) == 2
     assert "OPERA_L2_RTC-S1_T123-456789-IW1_20260115T180931Z_20260115T235959Z_S1A_30_v1.0" in inputs
+    assert "OPERA_L2_RTC-S1_T123-456789-IW2_20260115T180931Z_20260115T235959Z_S1B_30_v1.0" in inputs
 
 
 def test_accountability_cmr_only_mode():

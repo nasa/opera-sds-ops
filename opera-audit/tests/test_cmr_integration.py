@@ -26,7 +26,11 @@ from collections import defaultdict
 from os.path import basename
 
 from opera_accountability.cmr import query_cmr
-from opera_accountability.duplicates import detect_duplicates
+from opera_accountability.duplicates import (
+    detect_duplicates,
+    detect_disp_s1_end_conflicts,
+    DISP_S1_END_CONFLICT_PATTERN,
+)
 from opera_accountability.strategies.dswx_hls import analyze_accountability
 from opera_accountability.strategies.dswx_s1 import pipeline as ds1_pipeline
 from opera_accountability import CONFIG
@@ -95,8 +99,9 @@ TEST_CASES = {
         },
     },
 
-    # Accountability tests (currently only DSWX_HLS and DIST_S1 supported)
+    # Accountability tests
     'ACCOUNTABILITY': {
+        # Phase 1 strategies (existing)
         'DSWX_HLS_2026_02_06': {
             'start_date': '2026-02-06',
             'end_date': '2026-02-07',
@@ -120,6 +125,21 @@ TEST_CASES = {
             'tolerance': 0,
             'description': 'DSWx-HLS accountability for 2026-01-12'
         },
+        
+        # Phase 3 strategies
+        'TROPO_DATE_COUNT_2025_10': {
+            'start_date': '2025-10-01',
+            'end_date': '2025-10-07',
+            'strategy': 'date_count',
+            'expected_per_day': 4,  # TROPO should have 4 granules per day (one per model)
+            'tolerance': 0,  # Allow 0 missing granules (strict accountability)
+            'description': 'TROPO date-count accountability for Oct 2025 (1 week)'
+        },
+        
+        # Note: DISP_S1 delegated_validator and DISP_S1_STATIC db_based tests
+        # require external dependencies (validator module, frame-to-burst DB)
+        # and are not included in automated testing. These should be tested
+        # manually with the appropriate resources configured.
         # },
     }
 }
@@ -216,6 +236,68 @@ def analyze_duplicates_from_cmr(granules: list, product: str) -> dict:
         'unique': len(unique_groups),
         'duplicates': len(duplicates),
         'duplicate_list': sorted(duplicates)
+    }
+
+
+def analyze_disp_s1_end_conflicts_from_cmr(granules: list) -> dict:
+    """Analyze DISP-S1 end conflicts from raw CMR granules.
+
+    Mirrors :func:`detect_disp_s1_end_conflicts` but operates on the direct
+    CMR client results. Used as an integration cross-check for Gerald's
+    end-conflict algorithm.
+    """
+    granule_ids = [item['umm']['GranuleUR'] for item in granules]
+
+    conflict_groups: dict[str, dict] = {}
+    parse_failures = 0
+
+    for item in granules:
+        granule_id = item['umm']['GranuleUR']
+        match = DISP_S1_END_CONFLICT_PATTERN.match(granule_id)
+        if not match:
+            parse_failures += 1
+            continue
+
+        frame_id = match.group('frame_id')
+        pol = match.group('pol')
+        begin_dt = match.group('begin_dt')
+        end_dt = match.group('end_dt')
+
+        key = f"{frame_id}_{pol}_{end_dt}"
+        if key not in conflict_groups:
+            conflict_groups[key] = {
+                'frame_id': frame_id,
+                'pol': pol,
+                'end_dt': end_dt,
+                'begin_dts': set(),
+                'products': [],
+            }
+
+        conflict_groups[key]['begin_dts'].add(begin_dt)
+        conflict_groups[key]['products'].append(granule_id)
+
+    actual_conflicts: dict[str, dict] = {}
+    total_conflicting_products = 0
+
+    for key, items in conflict_groups.items():
+        if len(items['begin_dts']) > 1:
+            conflict_key = f"{items['frame_id']}_{items['pol']}_{items['end_dt']}"
+            actual_conflicts[conflict_key] = {
+                'frame_id': items['frame_id'],
+                'pol': items['pol'],
+                'end_dt': items['end_dt'],
+                'begin_dts': sorted(list(items['begin_dts'])),
+                'products': items['products'],
+                'count': len(items['products']),
+            }
+            total_conflicting_products += len(items['products'])
+
+    return {
+        'total': len(granule_ids),
+        'conflict_groups': len(actual_conflicts),
+        'conflicting_products': total_conflicting_products,
+        'conflicts': actual_conflicts,
+        'parse_failures': parse_failures,
     }
 
 

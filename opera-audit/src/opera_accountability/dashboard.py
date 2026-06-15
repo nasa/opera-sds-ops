@@ -1111,7 +1111,11 @@ def _render_duplicates(reports: dict) -> None:
     if by_date:
         _section_label("Duplicates by date")
         df = pd.DataFrame([
-            {"Date": d, "Total": by_date[d]['total'], "Duplicates": by_date[d]['duplicates']}
+            {
+                "Date": d, 
+                "Total": by_date[d].get('total', by_date[d].get('n_granules', 0)), 
+                "Duplicates": by_date[d].get('n_duplicates', 0)
+            }
             for d in sorted(by_date.keys())
         ])
         melted = df.melt('Date', var_name='Series', value_name='Count')
@@ -1245,7 +1249,7 @@ def _render_dswx_hls_panel(product: str, report: dict) -> None:
 
 
 def _render_generic_strategy_panel(product: str, report: dict, strategy: str) -> None:
-    """Render panel for Phase 3 accountability strategies (forward_map, date_count, delegated_validator, db_based)."""
+    """Render panel for Chris's accountability strategies (forward_map, date_count, delegated_validator, db_based)."""
     _render_report_meta_strip(report)
     results = _unwrap_accountability_results(report)
     

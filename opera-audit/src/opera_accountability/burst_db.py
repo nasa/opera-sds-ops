@@ -11,12 +11,16 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
-_RTC_BURST_RE = re.compile(r'OPERA_L2_RTC-S1_(?P<burst_id>T?\w+-\d+-IW[123])_')
+_RTC_BURST_RE = re.compile(r'T\d{3}-\d{6}-IW\d')
 
 
 def extract_rtc_burst_id(granule_id: str) -> Optional[str]:
+    """Extract burst ID from RTC granule native ID.
+    
+    Exact port of Kevin's extract_rtc_burst from cmr_audit_dist_s1.py:360-363
+    """
     match = _RTC_BURST_RE.search(granule_id)
-    return match.group('burst_id') if match else None
+    return match.group() if match else None
 
 
 def normalize_burst_id(burst_id: str) -> str:

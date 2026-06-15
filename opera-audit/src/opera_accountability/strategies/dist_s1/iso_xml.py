@@ -136,31 +136,24 @@ def obtain_iso_xml(url: str, max_retries: int = 3, base_delay: float = 1.0) -> E
     return ET.fromstring(content)
 
 
-def _local_name(tag: str) -> str:
-    return tag.rsplit('}', 1)[-1]
-
-
-def _character_strings(elem: ET.Element) -> Iterable[str]:
-    for child in elem.iter():
-        if _local_name(child.tag) == "CharacterString" and child.text:
-            yield child.text.strip()
-
-
 def extract_dist_input_granules(root: ET.Element | str | bytes) -> set[str]:
+    """Extract comma-separated PostRtcOperaIds from ISO XML.
+    
+    Exact port of Kevin's cmr_audit_dist_s1.py:344-357
+    """
     if isinstance(root, (str, bytes)):
         root = ET.fromstring(root)
-
-    # Look for PostRtcOperaIds in CharacterString elements anywhere in the XML
-    found_marker = False
-    for elem in root.iter():
-        if _local_name(elem.tag) == "CharacterString" and elem.text:
-            text = elem.text.strip()
-            if text == "PostRtcOperaIds":
-                found_marker = True
-            elif found_marker and "," in text and "RTC-S1" in text:
-                # Found the RTC IDs after the marker
-                return {item.strip() for item in text.split(",") if item.strip()}
-            elif "," in text and "RTC-S1" in text:
-                # Direct RTC ID list found (no marker)
-                return {item.strip() for item in text.split(",") if item.strip()}
+    
+    # Use explicit namespaces matching Kevin's original
+    namespaces = {
+        "eos": "http://earthdata.nasa.gov/schema/eos",
+        "gco": "http://www.isotc211.org/2005/gco",
+    }
+    
+    for attr in root.findall(".//eos:AdditionalAttribute", namespaces):
+        name = attr.find(".//eos:name/gco:CharacterString", namespaces)
+        if name is not None and name.text == "PostRtcOperaIds":
+            value_elem = attr.find(".//eos:value/gco:CharacterString", namespaces)
+            if value_elem is not None:
+                return {x.strip() for x in value_elem.text.split(",")}
     return set()

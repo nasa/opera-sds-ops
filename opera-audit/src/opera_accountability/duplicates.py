@@ -5,6 +5,7 @@ import logging
 import gc
 from datetime import datetime, timedelta
 from collections import defaultdict
+from itertools import chain
 from typing import Any, Optional
 
 from . import CONFIG
@@ -13,9 +14,15 @@ from .cmr import query_cmr
 logger = logging.getLogger(__name__)
 
 # DISP-S1 end conflict detection regex (from Gerald's tool)
+# Note: Gerald's original only supports VV|HH (no VH, HV, or compound pols)
 DISP_S1_END_CONFLICT_PATTERN = re.compile(
-    r'OPERA_L3_DISP-S1_IW_(?P<frame_id>F\d{5})_(?P<pol>VV|VH|HH|HV|VV\+VH|HH\+HV)_'
-    r'(?P<begin_dt>\d{8}T\d{6}Z)_(?P<end_dt>\d{8}T\d{6}Z)_v\d+[.]\d+_(?P<production_dt>\d{8}T\d{6}Z)'
+    r'OPERA_L3_DISP-S1_IW_'
+    r'F(?P<frame_id>\d{5})'
+    r'_(?P<pol>VV|HH)'
+    r'_(?P<begin_dt>\d{8}T\d{6}Z)'
+    r'_(?P<end_dt>\d{8}T\d{6}Z)'
+    r'_v(?P<version>\d+\.\d+)'
+    r'_(?P<production_dt>\d{8}T\d{6}Z)'
 )
 
 
@@ -28,20 +35,17 @@ def detect_duplicates(cmr_granules: list[dict], product: str) -> dict[str, Any]:
     2. Extract unique identifier from configured fields
     3. Group by unique identifier
     4. Select latest by creation timestamp
-    5. Aggregate by acquisition date
+    5. Aggregate by acquisition date and month
 
     Args:
         cmr_granules: List of CMR granule dicts (UMM JSON format)
         product: Product name (e.g., 'DSWX_HLS')
 
     Returns:
-        Dict with duplicate analysis results:
+        Dict with duplicate analysis results matching Riley's original format:
         {
-            "total": int,
-            "unique": int,
-            "duplicates": int,
-            "duplicate_list": [granule_ids],
-            "by_date": {date: {total, unique, duplicates}}
+            "granule_month_map": {month: {n_granules, n_duplicates, percent_duplicates, duplicates}},
+            "aqc_date_map": {date: {n_granules, n_duplicates, percent_duplicates, duplicates}}
         }
     """
     product_config = CONFIG['products'][product]
@@ -58,80 +62,172 @@ def detect_duplicates(cmr_granules: list[dict], product: str) -> dict[str, Any]:
 
     logger.info(f"Processing {len(granule_ids)} granules for {product}")
 
-    # Track unique granules and duplicates
-    unique_granules = {}  # {unique_id_tuple: (granule_id, creation_ts)}
-    all_duplicates = []
-    by_date = defaultdict(lambda: {'total': 0, 'unique': 0, 'duplicates': 0})
+    # Track unique granules: {unique_id_tuple: (granule_id, repr(unique_id_tuple))}
+    unique_granules = {}
+    
+    # Daily and monthly aggregation maps (exactly matching Riley's structure)
+    aqc_date_map = {}
+    granule_month_map = {}
 
     for granule_id in granule_ids:
         match = pattern.match(granule_id)
 
-        if not match:
-            logger.warning(f"Granule ID {granule_id} did not match pattern")
-            continue
+        if match is None:
+            raise RuntimeError(f'Failed to parse granule ID {granule_id} with pattern {pattern.pattern}')
 
-        fields = match.groupdict()
+        group_dict = match.groupdict()
 
-        # Build unique identifier from configured fields
-        unique_id = tuple(fields[f] for f in unique_fields)
+        # Parse aggregation timestamp
+        granule_agg_time = datetime.strptime(group_dict[agg_field], agg_format)
+        granule_agg_day = granule_agg_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        granule_agg_day = granule_agg_day.strftime('%Y-%m-%d')
 
-        # Get acquisition date for aggregation
-        agg_time = datetime.strptime(fields[agg_field], agg_format)
-        agg_date = agg_time.date().isoformat()
+        granule_agg_month = granule_agg_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        granule_agg_month = granule_agg_month.strftime('%Y-%m')
 
-        # Track by date
-        by_date[agg_date]['total'] += 1
+        # Initialize daily map entry if needed
+        if granule_agg_day not in aqc_date_map:
+            aqc_date_map[granule_agg_day] = {
+                'n_granules': 0,
+                'n_duplicates': 0,
+                'percent_duplicates': -1.0,
+                'duplicates': {}
+            }
+
+        # Initialize monthly map entry if needed
+        if granule_agg_month not in granule_month_map:
+            granule_month_map[granule_agg_month] = {
+                'n_granules': 0,
+                'n_duplicates': 0,
+                'percent_duplicates': -1.0,
+                'duplicates': {}
+            }
+
+        # Increment granule counts
+        aqc_date_map[granule_agg_day]['n_granules'] += 1
+        granule_month_map[granule_agg_month]['n_granules'] += 1
+
+        # Build unique identifier tuple from configured fields
+        granule_unique_ids = tuple([group_dict[grp] for grp in unique_fields])
 
         # Check for duplicates
-        if unique_id in unique_granules:
-            # This is a duplicate
-            by_date[agg_date]['duplicates'] += 1
+        if granule_unique_ids in unique_granules:
+            granule_month_map[granule_agg_month]['n_duplicates'] += 1
+            aqc_date_map[granule_agg_day]['n_duplicates'] += 1
+            first_duplicate = unique_granules[granule_unique_ids]
 
-            existing_granule_id, existing_creation_ts = unique_granules[unique_id]
+            # Store duplicate under the repr() of unique_ids as key
+            if first_duplicate[1] not in granule_month_map[granule_agg_month]['duplicates']:
+                granule_month_map[granule_agg_month]['duplicates'][first_duplicate[1]] = [first_duplicate[0]]
 
-            # If we have creation timestamps, select the latest
-            if creation_field:
-                current_creation_ts = fields[creation_field]
+            if first_duplicate[1] not in aqc_date_map[granule_agg_day]['duplicates']:
+                aqc_date_map[granule_agg_day]['duplicates'][first_duplicate[1]] = [first_duplicate[0]]
 
-                # Keep the latest version
-                if current_creation_ts > existing_creation_ts:
-                    # Current is newer, mark existing as duplicate
-                    all_duplicates.append(existing_granule_id)
-                    unique_granules[unique_id] = (granule_id, current_creation_ts)
-                else:
-                    # Existing is newer, mark current as duplicate
-                    all_duplicates.append(granule_id)
-            else:
-                # No creation field, just track first one
-                all_duplicates.append(granule_id)
+            granule_month_map[granule_agg_month]['duplicates'][first_duplicate[1]].append(granule_id)
+            aqc_date_map[granule_agg_day]['duplicates'][first_duplicate[1]].append(granule_id)
         else:
-            # First occurrence of this unique ID
-            creation_ts = fields.get(creation_field, '') if creation_field else ''
-            unique_granules[unique_id] = (granule_id, creation_ts)
-            by_date[agg_date]['unique'] += 1
+            # First occurrence: store (granule_id, repr(unique_id_tuple))
+            unique_granules[granule_unique_ids] = (granule_id, repr(granule_unique_ids))
 
-    # Convert by_date to regular dict and sort
-    by_date = dict(sorted(by_date.items()))
+    # Post-process: Sort duplicates by creation timestamp if available
+    if creation_field:
+        for month in granule_month_map:
+            for duplicate in granule_month_map[month]['duplicates']:
+                duplicate_granule_ids = granule_month_map[month]['duplicates'][duplicate]
+                duplicate_granule_ids.sort(
+                    key=lambda x: pattern.match(x).groupdict()[creation_field], reverse=True
+                )
 
-    # Calculate unique count (items not in duplicates list)
-    total_granules = len(granule_ids)
-    duplicate_count = len(all_duplicates)
-    unique_count = len(unique_granules)
+                granule_month_map[month]['duplicates'][duplicate] = {
+                    'latest_product': duplicate_granule_ids[0],
+                    'duplicate_products': duplicate_granule_ids[1:],
+                }
 
-    if total_granules > 0:
-        logger.info(
-            f"Found {duplicate_count} duplicates out of {total_granules} granules "
-            f"({(duplicate_count / total_granules * 100):.2f}%)"
+        for date in aqc_date_map:
+            for duplicate in aqc_date_map[date]['duplicates']:
+                duplicate_granule_ids = aqc_date_map[date]['duplicates'][duplicate]
+                duplicate_granule_ids.sort(
+                    key=lambda x: pattern.match(x).groupdict()[creation_field], reverse=True
+                )
+
+                aqc_date_map[date]['duplicates'][duplicate] = {
+                    'latest_product': duplicate_granule_ids[0],
+                    'duplicate_products': duplicate_granule_ids[1:],
+                }
+
+    # Sort maps by date/month
+    granule_month_map = dict(sorted(granule_month_map.items()))
+    aqc_date_map = dict(sorted(aqc_date_map.items()))
+
+    # Calculate percentage duplicates and add test-compatible aliases
+    for month in granule_month_map.keys():
+        n_gran = granule_month_map[month]['n_granules']
+        granule_month_map[month]['percent_duplicates'] = (
+            (granule_month_map[month]['n_duplicates'] / n_gran) * 100 if n_gran > 0 else 0.0
         )
-    else:
-        logger.info("No granules to process")
+        # Add CLI/test aliases (total, unique)
+        granule_month_map[month]['total'] = granule_month_map[month]['n_granules']
+        granule_month_map[month]['unique'] = n_gran - granule_month_map[month]['n_duplicates']
 
+    for date in aqc_date_map.keys():
+        n_gran = aqc_date_map[date]['n_granules']
+        aqc_date_map[date]['percent_duplicates'] = (
+            (aqc_date_map[date]['n_duplicates'] / n_gran) * 100 if n_gran > 0 else 0.0
+        )
+        # Add CLI/test aliases (total, unique)
+        aqc_date_map[date]['total'] = aqc_date_map[date]['n_granules']
+        aqc_date_map[date]['unique'] = n_gran - aqc_date_map[date]['n_duplicates']
+
+    # Calculate total duplicates and stats (matching Riley's original)
+    n_duplicates = sum([month['n_duplicates'] for month in granule_month_map.values()])
+    n_granules = len(granule_ids)
+    n_unique = len(unique_granules)
+    
+    if n_granules > 0:
+        logger.info(f'Found {n_duplicates} duplicate granule IDs out of {n_granules} granules '
+                    f'({(n_duplicates / n_granules) * 100:.1f}%)')
+    else:
+        logger.info('No granules found in date range')
+
+    # Calculate duplicate counts per granule (for min/max/avg stats)
+    if creation_field:
+        duplicate_counts = list(chain.from_iterable(
+            [len(dup['duplicate_products']) for dup in month['duplicates'].values()]
+            for month in granule_month_map.values()
+        ))
+    else:
+        duplicate_counts = list(chain.from_iterable(
+            [len(dup) for dup in month['duplicates'].values()]
+            for month in granule_month_map.values()
+        ))
+
+    # Build flat duplicate list for CLI/reports compatibility
+    if creation_field:
+        duplicate_list = []
+        for month_data in granule_month_map.values():
+            for dup_group in month_data['duplicates'].values():
+                duplicate_list.extend(dup_group['duplicate_products'])
+    else:
+        duplicate_list = []
+        for month_data in granule_month_map.values():
+            for dup_group in month_data['duplicates'].values():
+                duplicate_list.extend(dup_group[1:])  # All but first
+
+    # Return format matching Riley's original with CLI compatibility
     return {
-        'total': total_granules,
-        'unique': unique_count,
-        'duplicates': duplicate_count,
-        'duplicate_list': sorted(all_duplicates),
-        'by_date': by_date
+        # Riley's original format
+        'granule_month_map': granule_month_map,
+        'aqc_date_map': aqc_date_map,
+        'by_date': aqc_date_map,  # Alias for tests/CLI compatibility
+        # CLI compatibility fields
+        'total': n_granules,
+        'unique': n_unique,
+        'duplicates': n_duplicates,
+        'duplicate_list': sorted(duplicate_list),
+        # Stats for reporting
+        'min_duplicates_per_granule': min(duplicate_counts) if len(duplicate_counts) > 0 else None,
+        'max_duplicates_per_granule': max(duplicate_counts) if len(duplicate_counts) > 0 else None,
+        'avg_duplicates_per_granule': sum(duplicate_counts) / len(duplicate_counts) if len(duplicate_counts) > 0 else None,
     }
 
 
@@ -139,25 +235,29 @@ def detect_disp_s1_end_conflicts(cmr_granules: list[dict]) -> dict[str, Any]:
     """
     Detect DISP-S1 end conflicts (same frame+end date, different begin date).
     
-    Ported from Gerald's detect_cmr_duplicates_for_disp_s1.py.
+    Exact port of Gerald's detect_cmr_duplicates_for_disp_s1.py end conflict detection.
+    
+    Groups by (frame_id, end_dt) only - NOT including polarization.
+    Identifies conflicts when multiple different begin_dt values exist for the same frame+end.
     
     Args:
         cmr_granules: List of CMR granule records
         
     Returns:
-        Dict with end conflict analysis results:
+        Dict with end conflict analysis matching Gerald's output structure:
         {
             "total": int,
             "conflict_groups": int,
             "conflicting_products": int,
-            "conflicts": {frame_id_end_dt: {begin_dts, products, ...}}
+            "conflicts": {frame_id_end_dt: {frame_id, end_dt, begin_dts, products, ...}}
         }
     """
     granule_ids = [g['umm']['GranuleUR'] for g in cmr_granules]
     logger.info(f"Processing {len(granule_ids)} DISP-S1 granules for end conflicts")
 
-    # Group by frame+pol+end datetime to find conflicts
-    conflict_groups: dict[str, dict] = {}
+    # Group by frame+end datetime (Gerald's original: line 380-400)
+    # Store (begin_dt, production_dt, version, granule_id) tuples
+    end_grouped = defaultdict(list)
     parse_failures = 0
     
     for granule in cmr_granules:
@@ -168,52 +268,50 @@ def detect_disp_s1_end_conflicts(cmr_granules: list[dict]) -> dict[str, Any]:
             parse_failures += 1
             continue
         
-        frame_id = match.group('frame_id')  # Includes 'F' prefix
-        pol = match.group('pol')
+        frame_id = int(match.group('frame_id'))  # Convert to int (Gerald's original: line 103)
         begin_dt = match.group('begin_dt')
         end_dt = match.group('end_dt')
+        version = match.group('version')
+        production_dt = match.group('production_dt')
         
-        # Conflict key: frame_id + pol + end_dt
-        conflict_key = f"{frame_id}_{pol}_{end_dt}"
+        # Key is (frame_id, end_dt) - no polarization (Gerald's original: line 396)
+        end_key = (frame_id, end_dt)
         
-        if conflict_key not in conflict_groups:
-            conflict_groups[conflict_key] = {
-                'frame_id': frame_id,
-                'pol': pol,
-                'end_dt': end_dt,
-                'begin_dts': set(),
-                'products': []
-            }
-        
-        conflict_groups[conflict_key]['begin_dts'].add(begin_dt)
-        conflict_groups[conflict_key]['products'].append(granule_id)
+        # Store (begin_dt, production_dt, version, granule_id) (Gerald's original: line 400)
+        end_grouped[end_key].append((begin_dt, production_dt, version, granule_id))
 
-    # Identify conflicts: groups with >1 begin datetime
-    actual_conflicts = {}
-    total_conflicting_products = 0
+    # Find end conflicts (Gerald's original: lines 441-463)
+    end_conflicts = {}
+    conflicts_total_products = 0
 
-    for key, items in conflict_groups.items():
-        if len(items['begin_dts']) > 1:
-            # This is a conflict: same frame+pol+end_dt, different begin_dt
-            conflict_key = f"{items['frame_id']}_{items['pol']}_{items['end_dt']}"
-            actual_conflicts[conflict_key] = {
-                'frame_id': items['frame_id'],
-                'pol': items['pol'],
-                'end_dt': items['end_dt'],
-                'begin_dts': sorted(list(items['begin_dts'])),
-                'products': items['products'],
-                'count': len(items['products'])
-            }
-            total_conflicting_products += len(items['products'])
+    for key, items in end_grouped.items():
+        if len(items) > 1:
+            frame_id, end_dt = key
+            # Check if there are different begin_dt values
+            begin_dts = set(item[0] for item in items)
+            if len(begin_dts) > 1:
+                # Sort by begin_dt, then production_dt (Gerald's original: line 451)
+                items_sorted = sorted(items, key=lambda x: (x[0], x[1]))
+                conflict_key = f"F{frame_id:05d}_{end_dt}"
+                end_conflicts[conflict_key] = {
+                    'frame_id': frame_id,
+                    'end_dt': end_dt,
+                    'begin_dts': sorted(list(begin_dts)),
+                    'count': len(items),
+                    'products': [item[3] for item in items_sorted],
+                    'production_times': [item[1] for item in items_sorted],
+                    'versions': [item[2] for item in items_sorted]
+                }
+                conflicts_total_products += len(items)
 
     total_granules = len(granule_ids)
-    conflict_group_count = len(actual_conflicts)
+    conflict_group_count = len(end_conflicts)
 
     if total_granules > 0:
         logger.info(
-            f"Found {conflict_group_count} end conflict groups ({total_conflicting_products} products) "
+            f"Found {conflict_group_count} end conflict groups ({conflicts_total_products} products) "
             f"out of {total_granules} granules "
-            f"({(total_conflicting_products / total_granules * 100):.2f}%)"
+            f"({(conflicts_total_products / total_granules * 100):.2f}%)"
         )
     else:
         logger.info("No granules to process for end conflicts")
@@ -221,8 +319,8 @@ def detect_disp_s1_end_conflicts(cmr_granules: list[dict]) -> dict[str, Any]:
     return {
         'total': total_granules,
         'conflict_groups': conflict_group_count,
-        'conflicting_products': total_conflicting_products,
-        'conflicts': actual_conflicts,
+        'conflicting_products': conflicts_total_products,
+        'conflicts': end_conflicts,
         'parse_failures': parse_failures,
     }
 
@@ -252,7 +350,7 @@ def detect_duplicates_memory_efficient(
         batch_size: Number of granule IDs to process before garbage collection
 
     Returns:
-        Dict with duplicate analysis results
+        Dict with duplicate analysis results matching Riley's original format
     """
     product_config = CONFIG['products'][product]
     ccid = product_config['ccid'].get(venue)
@@ -298,10 +396,10 @@ def detect_duplicates_memory_efficient(
     total_products = len(granule_ids)
     logger.info(f"Retrieved {total_products_fetched} products from CMR ({total_products} unique)")
 
-    # Process in batches
+    # Process in batches using Riley's exact algorithm
     unique_granules = {}
-    all_duplicates = []
-    by_date = defaultdict(lambda: {'total': 0, 'unique': 0, 'duplicates': 0})
+    aqc_date_map = {}
+    granule_month_map = {}
     parse_failures = 0
 
     for batch_start in range(0, len(granule_ids), batch_size):
@@ -315,31 +413,54 @@ def detect_duplicates_memory_efficient(
                 parse_failures += 1
                 continue
 
-            fields = match.groupdict()
-            unique_id = tuple(fields[f] for f in unique_fields)
+            group_dict = match.groupdict()
 
-            # Get acquisition date
-            agg_time = datetime.strptime(fields[agg_field], agg_format)
-            agg_date = agg_time.date().isoformat()
-            by_date[agg_date]['total'] += 1
+            # Parse aggregation timestamp
+            granule_agg_time = datetime.strptime(group_dict[agg_field], agg_format)
+            granule_agg_day = granule_agg_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            granule_agg_day = granule_agg_day.strftime('%Y-%m-%d')
 
-            if unique_id in unique_granules:
-                by_date[agg_date]['duplicates'] += 1
-                existing_granule_id, existing_creation_ts = unique_granules[unique_id]
+            granule_agg_month = granule_agg_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            granule_agg_month = granule_agg_month.strftime('%Y-%m')
 
-                if creation_field:
-                    current_creation_ts = fields[creation_field]
-                    if current_creation_ts > existing_creation_ts:
-                        all_duplicates.append(existing_granule_id)
-                        unique_granules[unique_id] = (granule_id, current_creation_ts)
-                    else:
-                        all_duplicates.append(granule_id)
-                else:
-                    all_duplicates.append(granule_id)
+            # Initialize daily map entry
+            if granule_agg_day not in aqc_date_map:
+                aqc_date_map[granule_agg_day] = {
+                    'n_granules': 0,
+                    'n_duplicates': 0,
+                    'percent_duplicates': -1.0,
+                    'duplicates': {}
+                }
+
+            # Initialize monthly map entry
+            if granule_agg_month not in granule_month_map:
+                granule_month_map[granule_agg_month] = {
+                    'n_granules': 0,
+                    'n_duplicates': 0,
+                    'percent_duplicates': -1.0,
+                    'duplicates': {}
+                }
+
+            aqc_date_map[granule_agg_day]['n_granules'] += 1
+            granule_month_map[granule_agg_month]['n_granules'] += 1
+
+            granule_unique_ids = tuple([group_dict[grp] for grp in unique_fields])
+
+            if granule_unique_ids in unique_granules:
+                granule_month_map[granule_agg_month]['n_duplicates'] += 1
+                aqc_date_map[granule_agg_day]['n_duplicates'] += 1
+                first_duplicate = unique_granules[granule_unique_ids]
+
+                if first_duplicate[1] not in granule_month_map[granule_agg_month]['duplicates']:
+                    granule_month_map[granule_agg_month]['duplicates'][first_duplicate[1]] = [first_duplicate[0]]
+
+                if first_duplicate[1] not in aqc_date_map[granule_agg_day]['duplicates']:
+                    aqc_date_map[granule_agg_day]['duplicates'][first_duplicate[1]] = [first_duplicate[0]]
+
+                granule_month_map[granule_agg_month]['duplicates'][first_duplicate[1]].append(granule_id)
+                aqc_date_map[granule_agg_day]['duplicates'][first_duplicate[1]].append(granule_id)
             else:
-                creation_ts = fields.get(creation_field, '') if creation_field else ''
-                unique_granules[unique_id] = (granule_id, creation_ts)
-                by_date[agg_date]['unique'] += 1
+                unique_granules[granule_unique_ids] = (granule_id, repr(granule_unique_ids))
 
         # Garbage collection periodically
         if batch_start > 0 and batch_start % (batch_size * 5) == 0:
@@ -351,17 +472,96 @@ def detect_duplicates_memory_efficient(
     if parse_failures > 0:
         logger.warning(f"Failed to parse {parse_failures} granule IDs")
 
-    by_date = dict(sorted(by_date.items()))
-    total_granules = len(unique_granules) + len(all_duplicates)
-    duplicate_count = len(all_duplicates)
-    unique_count = len(unique_granules)
+    # Post-process: Sort duplicates by creation timestamp
+    if creation_field:
+        for month in granule_month_map:
+            for duplicate in granule_month_map[month]['duplicates']:
+                duplicate_granule_ids = granule_month_map[month]['duplicates'][duplicate]
+                duplicate_granule_ids.sort(
+                    key=lambda x: pattern.match(x).groupdict()[creation_field], reverse=True
+                )
+
+                granule_month_map[month]['duplicates'][duplicate] = {
+                    'latest_product': duplicate_granule_ids[0],
+                    'duplicate_products': duplicate_granule_ids[1:],
+                }
+
+        for date in aqc_date_map:
+            for duplicate in aqc_date_map[date]['duplicates']:
+                duplicate_granule_ids = aqc_date_map[date]['duplicates'][duplicate]
+                duplicate_granule_ids.sort(
+                    key=lambda x: pattern.match(x).groupdict()[creation_field], reverse=True
+                )
+
+                aqc_date_map[date]['duplicates'][duplicate] = {
+                    'latest_product': duplicate_granule_ids[0],
+                    'duplicate_products': duplicate_granule_ids[1:],
+                }
+
+    granule_month_map = dict(sorted(granule_month_map.items()))
+    aqc_date_map = dict(sorted(aqc_date_map.items()))
+
+    for month in granule_month_map.keys():
+        n_gran = granule_month_map[month]['n_granules']
+        granule_month_map[month]['percent_duplicates'] = (
+            (granule_month_map[month]['n_duplicates'] / n_gran) * 100 if n_gran > 0 else 0.0
+        )
+
+    for date in aqc_date_map.keys():
+        n_gran = aqc_date_map[date]['n_granules']
+        aqc_date_map[date]['percent_duplicates'] = (
+            (aqc_date_map[date]['n_duplicates'] / n_gran) * 100 if n_gran > 0 else 0.0
+        )
+
+    # Calculate totals and stats
+    n_duplicates = sum([month['n_duplicates'] for month in granule_month_map.values()])
+    n_granules = total_products
+    n_unique = len(unique_granules)
+    
+    if n_granules > 0:
+        logger.info(f'Found {n_duplicates} duplicate granule IDs out of {n_granules} granules '
+                    f'({(n_duplicates / n_granules) * 100:.1f}%)')
+    else:
+        logger.info('No granules found in date range')
+
+    # Calculate duplicate counts per granule
+    if creation_field:
+        duplicate_counts = list(chain.from_iterable(
+            [len(dup['duplicate_products']) for dup in month['duplicates'].values()]
+            for month in granule_month_map.values()
+        ))
+    else:
+        duplicate_counts = list(chain.from_iterable(
+            [len(dup) for dup in month['duplicates'].values()]
+            for month in granule_month_map.values()
+        ))
+
+    # Build flat duplicate list
+    if creation_field:
+        duplicate_list = []
+        for month_data in granule_month_map.values():
+            for dup_group in month_data['duplicates'].values():
+                duplicate_list.extend(dup_group['duplicate_products'])
+    else:
+        duplicate_list = []
+        for month_data in granule_month_map.values():
+            for dup_group in month_data['duplicates'].values():
+                duplicate_list.extend(dup_group[1:])
 
     return {
-        'total': total_granules,
-        'unique': unique_count,
-        'duplicates': duplicate_count,
-        'duplicate_list': sorted(all_duplicates),
-        'by_date': by_date,
+        # Riley's original format
+        'granule_month_map': granule_month_map,
+        'aqc_date_map': aqc_date_map,
+        'by_date': aqc_date_map,  # Alias for tests/CLI compatibility
+        # CLI compatibility fields
+        'total': n_granules,
+        'unique': n_unique,
+        'duplicates': n_duplicates,
+        'duplicate_list': sorted(duplicate_list),
+        # Stats for reporting
+        'min_duplicates_per_granule': min(duplicate_counts) if len(duplicate_counts) > 0 else None,
+        'max_duplicates_per_granule': max(duplicate_counts) if len(duplicate_counts) > 0 else None,
+        'avg_duplicates_per_granule': sum(duplicate_counts) / len(duplicate_counts) if len(duplicate_counts) > 0 else None,
         'parse_failures': parse_failures
     }
 

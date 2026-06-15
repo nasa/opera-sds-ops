@@ -49,8 +49,19 @@ class DBBasedStrategy(AccountabilityStrategy):
         if not db_path:
             raise ValueError(f"No database path configured for {self.product}")
         
-        # Load reference database
+        # Load reference database - try multiple resolution strategies
         db_path = Path(db_path)
+        if not db_path.exists():
+            # Try relative to package root (for relative paths in config.yaml)
+            try:
+                from importlib.resources import files as pkg_files
+                pkg_root = pkg_files('opera_accountability').joinpath('../..')
+                candidate = pkg_root.joinpath(db_path).resolve()
+                if candidate.exists():
+                    db_path = candidate
+            except Exception:
+                pass
+        
         if not db_path.exists():
             raise FileNotFoundError(f"Database file not found: {db_path}")
         
@@ -71,7 +82,11 @@ class DBBasedStrategy(AccountabilityStrategy):
         granules = query_cmr(ccid, start_date, end_date, venue)
         
         # Extract actual items from CMR results
-        actual_items = self._extract_actual_items(granules, config)
+        actual_items_raw = self._extract_actual_items(granules, config)
+        
+        # Filter actual items to only include those that are expected
+        # (e.g., if filtering by is_north_america, don't count non-NA frames in CMR)
+        actual_items = expected_items & actual_items_raw
         
         # Identify missing items (in DB but not in CMR)
         missing_items = expected_items - actual_items
@@ -98,10 +113,19 @@ class DBBasedStrategy(AccountabilityStrategy):
         For DISP-S1-STATIC, this extracts frame IDs from the frame-to-burst DB.
         The specific extraction logic depends on the database structure.
         """
-        # Placeholder: would parse DB structure based on product-specific config
         # For DISP-S1-STATIC: extract frame IDs from frame-to-burst mapping
         if 'data' in db_data:
-            return set(db_data['data'].keys())
+            # Check if filtering by is_north_america is configured
+            filter_north_america = config.get('filter_north_america', True)
+            
+            if filter_north_america:
+                # Filter frames that are in North America
+                return {
+                    frame_id for frame_id, frame_data in db_data['data'].items()
+                    if isinstance(frame_data, dict) and frame_data.get('is_north_america', False)
+                }
+            else:
+                return set(db_data['data'].keys())
         return set()
     
     def _extract_actual_items(self, granules: list[dict], config: dict) -> set:
@@ -110,12 +134,26 @@ class DBBasedStrategy(AccountabilityStrategy):
         
         For DISP-S1-STATIC, this extracts frame IDs from granule native IDs.
         """
-        # Placeholder: would parse granule IDs based on product-specific pattern
-        # For DISP-S1-STATIC: extract frame ID from OPERA_L3_DISP-S1-STATIC_F16938_20140403_S1A_v1.0
+        # For DISP-S1-STATIC: extract frame ID from native-id
+        # Example: 'OPERA_L3_DISP-S1-STATIC_F16938_20140403_S1A_v1.0'
+        # Frame ID is in position [3], with 'F' prefix and leading zeros
         items = set()
         for granule in granules:
-            granule_id = granule['umm']['GranuleUR']
-            # Extract frame ID (product-specific parsing)
-            # This would use the regex pattern from config
-            items.add(granule_id)  # Placeholder
+            # Try to get native-id from meta first, fall back to GranuleUR
+            native_id = granule.get('meta', {}).get('native-id')
+            if not native_id:
+                native_id = granule['umm']['GranuleUR']
+            
+            try:
+                # Split by underscore and extract frame ID
+                parts = native_id.split('_')
+                if len(parts) >= 4 and parts[3].startswith('F'):
+                    # Remove 'F' prefix and leading zeros: 'F16938' -> '16938'
+                    frame_id = str(int(parts[3][1:]))
+                    items.add(frame_id)
+                else:
+                    logger.warning(f"Could not parse frame ID from: {native_id}")
+            except (ValueError, IndexError) as e:
+                logger.warning(f"Failed to parse frame ID from {native_id}: {e}")
+        
         return items

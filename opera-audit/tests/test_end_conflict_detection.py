@@ -5,10 +5,10 @@ from opera_accountability.duplicates import detect_disp_s1_end_conflicts, DISP_S
 
 
 def test_disp_s1_pattern_matches_valid_ids():
-    """Test that DISP_S1 pattern matches valid granule IDs."""
+    """Test that DISP_S1 pattern matches valid granule IDs (Gerald's pattern: VV|HH only)."""
     valid_ids = [
         'OPERA_L3_DISP-S1_IW_F09154_VV_20240101T000000Z_20240115T000000Z_v1.1_20240116T120000Z',
-        'OPERA_L3_DISP-S1_IW_F08622_VH_20240201T000000Z_20240215T000000Z_v1.0_20240216T120000Z',
+        'OPERA_L3_DISP-S1_IW_F08622_HH_20240201T000000Z_20240215T000000Z_v1.0_20240216T120000Z',
     ]
     for granule_id in valid_ids:
         assert DISP_S1_END_CONFLICT_PATTERN.match(granule_id) is not None
@@ -28,8 +28,8 @@ def test_disp_s1_pattern_rejects_invalid_ids():
 def test_detect_end_conflicts_no_conflicts():
     """Test end conflict detection with no conflicts."""
     cmr_granules = [
-        {'umm': {'GranuleUR': 'OPERA_L3_DISP-S1_IW_09154_VV_20240101T000000Z_20240115T000000Z_v1.1_20240116T120000Z'}},
-        {'umm': {'GranuleUR': 'OPERA_L3_DISP-S1_IW_08622_VH_20240201T000000Z_20240215T000000Z_v1.0_20240216T120000Z'}},
+        {'umm': {'GranuleUR': 'OPERA_L3_DISP-S1_IW_F09154_VV_20240101T000000Z_20240115T000000Z_v1.1_20240116T120000Z'}},
+        {'umm': {'GranuleUR': 'OPERA_L3_DISP-S1_IW_F08622_HH_20240201T000000Z_20240215T000000Z_v1.0_20240216T120000Z'}},
     ]
     results = detect_disp_s1_end_conflicts(cmr_granules)
     assert results['total'] == 2
@@ -39,12 +39,15 @@ def test_detect_end_conflicts_no_conflicts():
 
 
 def test_detect_end_conflicts_with_conflicts():
-    """Test end conflict detection with actual conflicts (same frame+end, different begin)."""
+    """Test end conflict detection with actual conflicts (same frame+end, different begin).
+    
+    Gerald's grouping: (frame_id, end_dt) - no polarization included.
+    """
     cmr_granules = [
         {'umm': {'GranuleUR': 'OPERA_L3_DISP-S1_IW_F09154_VV_20240101T000000Z_20240115T000000Z_v1.1_20240116T120000Z'}},
         {'umm': {'GranuleUR': 'OPERA_L3_DISP-S1_IW_F09154_VV_20240105T000000Z_20240115T000000Z_v1.0_20240116T130000Z'}},
         {'umm': {'GranuleUR': 'OPERA_L3_DISP-S1_IW_F09154_VV_20240110T000000Z_20240115T000000Z_v1.0_20240116T140000Z'}},
-        {'umm': {'GranuleUR': 'OPERA_L3_DISP-S1_IW_F08622_VH_20240201T000000Z_20240215T000000Z_v1.0_20240216T120000Z'}},
+        {'umm': {'GranuleUR': 'OPERA_L3_DISP-S1_IW_F08622_HH_20240201T000000Z_20240215T000000Z_v1.0_20240216T120000Z'}},
     ]
     results = detect_disp_s1_end_conflicts(cmr_granules)
     assert results['total'] == 4
@@ -52,18 +55,20 @@ def test_detect_end_conflicts_with_conflicts():
     assert results['conflicting_products'] == 3
     assert len(results['conflicts']) == 1
     
-    # Check the conflict details
-    conflict_key = 'F09154_VV_20240115T000000Z'
+    # Check the conflict details (Gerald's format: F{frame:05d}_{end_dt}, frame_id as int)
+    conflict_key = 'F09154_20240115T000000Z'
     assert conflict_key in results['conflicts']
     conflict = results['conflicts'][conflict_key]
-    assert conflict['frame_id'] == 'F09154'
-    assert conflict['pol'] == 'VV'
+    assert conflict['frame_id'] == 9154  # Gerald stores as int, not string
     assert conflict['end_dt'] == '20240115T000000Z'
     assert len(conflict['begin_dts']) == 3
     assert '20240101T000000Z' in conflict['begin_dts']
     assert '20240105T000000Z' in conflict['begin_dts']
     assert '20240110T000000Z' in conflict['begin_dts']
     assert len(conflict['products']) == 3
+    # Gerald's output includes production_times and versions
+    assert 'production_times' in conflict
+    assert 'versions' in conflict
 
 
 def test_detect_end_conflicts_same_begin_no_conflict():

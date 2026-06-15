@@ -433,12 +433,24 @@ def _run_delegated_validator_accountability(
     output_dir: str,
     quiet: bool,
     recovery_format: Optional[str] = None,
+    **kwargs
 ) -> None:
     """Run delegated-validator accountability strategy."""
     from opera_accountability.strategies.delegated_validator import DelegatedValidatorStrategy
     
+    # Get validator parameters from config
+    product_cfg = CONFIG['products'][product]
+    validator_cfg = product_cfg.get('accountability', {}).get('delegated_validator', {})
+    
+    # Pass validator parameters from config and kwargs
+    validator_kwargs = {
+        'processing_mode': kwargs.get('processing_mode', validator_cfg.get('processing_mode', 'forward')),
+        'k': kwargs.get('k', validator_cfg.get('k', 15)),
+        'frames_only': kwargs.get('frames_only'),
+    }
+    
     strategy = DelegatedValidatorStrategy(product)
-    results = strategy.analyze(start_date, end_date, venue)
+    results = strategy.analyze(start_date, end_date, venue, **validator_kwargs)
     
     if not quiet:
         table = Table(title=f"Delegated-Validator Accountability - {product}")
@@ -923,8 +935,20 @@ def _run_accountability_all(
                     'missing_count': results.get('missing_count', 0),
                 }
             elif strategy == 'forward_map':
-                _run_forward_map_accountability(product, start_date, end_date, venue, save, output_dir, quiet)
-                all_results[product] = {'expected': 0, 'actual': 0, 'missing_count': 0, '_placeholder': True}
+                from opera_accountability.strategies.forward_map import ForwardMapStrategy
+                fm_strategy = ForwardMapStrategy(product)
+                results = fm_strategy.analyze(start_date, end_date, venue)
+                if not quiet:
+                    table = Table(title=f"Forward-Map Accountability - {product}")
+                    table.add_column("Metric", style="cyan")
+                    table.add_column("Count", justify="right", style="green")
+                    table.add_row("Expected", f"{results['expected']:,}")
+                    table.add_row("Actual", f"{results['actual']:,}")
+                    table.add_row("Missing", f"{results['missing_count']:,}", style="yellow")
+                    console.print(table)
+                if save:
+                    save_reports(results, output_dir, product, 'accountability', venue, start_date=start_date, end_date=end_date)
+                all_results[product] = results
             elif strategy == 'date_count':
                 results = _run_date_count_accountability(product, start_date, end_date, venue, save, output_dir, quiet)
                 all_results[product] = {
@@ -933,11 +957,42 @@ def _run_accountability_all(
                     'missing_count': results.get('missing_count', 0),
                 }
             elif strategy == 'delegated_validator':
-                _run_delegated_validator_accountability(product, start_date, end_date, venue, save, output_dir, quiet)
-                all_results[product] = {'expected': 0, 'actual': 0, 'missing_count': 0, '_placeholder': True}
+                from opera_accountability.strategies.delegated_validator import DelegatedValidatorStrategy
+                product_cfg_inner = CONFIG['products'][product]
+                validator_cfg = product_cfg_inner.get('accountability', {}).get('delegated_validator', {})
+                validator_kwargs = {
+                    'processing_mode': validator_cfg.get('processing_mode', 'forward'),
+                    'k': validator_cfg.get('k', 15),
+                }
+                dv_strategy = DelegatedValidatorStrategy(product)
+                results = dv_strategy.analyze(start_date, end_date, venue, **validator_kwargs)
+                if not quiet:
+                    table = Table(title=f"Delegated-Validator Accountability - {product}")
+                    table.add_column("Metric", style="cyan")
+                    table.add_column("Count", justify="right", style="green")
+                    table.add_row("Expected", f"{results['expected']:,}")
+                    table.add_row("Actual", f"{results['actual']:,}")
+                    table.add_row("Missing", f"{results['missing_count']:,}", style="yellow")
+                    console.print(table)
+                if save:
+                    save_reports(results, output_dir, product, 'accountability', venue, start_date=start_date, end_date=end_date)
+                all_results[product] = results
             elif strategy == 'db_based':
-                _run_db_based_accountability(product, start_date, end_date, venue, save, output_dir, quiet)
-                all_results[product] = {'expected': 0, 'actual': 0, 'missing_count': 0, '_placeholder': True}
+                from opera_accountability.strategies.db_based import DBBasedStrategy
+                db_strategy = DBBasedStrategy(product)
+                results = db_strategy.analyze(start_date, end_date, venue)
+                if not quiet:
+                    table = Table(title=f"DB-Based Accountability - {product}")
+                    table.add_column("Metric", style="cyan")
+                    table.add_column("Count", justify="right", style="green")
+                    table.add_row("Expected", f"{results['expected']:,}")
+                    table.add_row("Actual", f"{results['actual']:,}")
+                    table.add_row("Missing", f"{results['missing_count']:,}", style="yellow")
+                    table.add_row("Coverage", f"{results['coverage_pct']:.1f}%")
+                    console.print(table)
+                if save:
+                    save_reports(results, output_dir, product, 'accountability', venue, start_date=start_date, end_date=end_date)
+                all_results[product] = results
             else:
                 console.print(f"  [red]Unknown strategy: {strategy}[/red]")
                 continue
@@ -960,8 +1015,6 @@ def _run_accountability_all(
         for product, results in all_results.items():
             if 'error' in results:
                 table.add_row(product, "ERROR", results['error'], "", "")
-            elif results.get('_placeholder'):
-                table.add_row(product, "(see above)", "", "", "")
             else:
                 expected = results.get('expected', 0)
                 actual = results.get('actual', 0)

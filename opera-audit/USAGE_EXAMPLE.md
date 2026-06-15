@@ -1,5 +1,10 @@
 # Usage Examples
 
+Comprehensive usage guide for the OPERA Accountability Framework.
+
+**Note:** This package consolidates tools from 4 contributors (Riley, Gerald, Chris, Kevin).
+See `CONSOLIDATION_MAP.md` for original tool locations and `README.md` for consolidation history.
+
 ## Installation
 
 ```bash
@@ -13,16 +18,19 @@ uv pip install -e .
 
 | Product | Duplicates | Accountability | Strategy | Notes |
 |---------|-----------|----------------|----------|-------|
-| DSWX_HLS | yes | yes | `dswx_hls` | |
-| RTC_S1 | yes | no | — | |
-| CSLC_S1 | yes | no | — | |
-| DSWX_S1 | yes | yes | `dswx_s1` | Requires `--mgrs-db` or `OPERA_MGRS_DB` env var |
-| DIST_S1 | yes | yes | `dist_s1` | Uses short_name query (no ccid) |
-| DISP_S1 | yes | no | — | Supports `--check-end-conflicts` |
-| TROPO | yes | no | — | |
-| DIST_ALERT_HLS | yes | no | — | |
-| CSLC_S1_STATIC | yes | no | — | |
-| RTC_S1_STATIC | yes | no | — | |
+| DSWX_HLS | yes | yes | `dswx_hls` / `forward_map` | Chris |
+| RTC_S1 | yes | no | — | Riley |
+| CSLC_S1 | yes | no | — | Riley |
+| DSWX_S1 | yes | yes | `dswx_s1` | Riley, requires `--mgrs-db` |
+| DIST_S1 | yes | yes | `dist_s1` | Kevin, uses ISO-XML extraction |
+| DISP_S1 | yes | yes | `delegated_validator` | Gerald + Chris, supports `--check-end-conflicts` |
+| TROPO | yes | yes | `date_count` | Chris, counts by date |
+| DISP_S1_STATIC | yes | yes | `db_based` | Chris, sample DB included |
+| DIST_ALERT_HLS | yes | no | — | Riley |
+| CSLC_S1_STATIC | yes | no | — | Riley |
+| RTC_S1_STATIC | yes | no | — | Riley |
+
+**Note on products without accountability:** 5 products (RTC_S1, CSLC_S1, CSLC_S1_STATIC, RTC_S1_STATIC, DIST_ALERT_HLS) are **intermediate inputs** or **static layers** where duplicate detection is sufficient for operational monitoring. See README.md "Why Some Products Don't Have Accountability" for detailed explanation.
 
 ## Command Reference
 
@@ -64,13 +72,19 @@ Example output:
 └────────────────┴─────────┴────────────┴───────┘
 ```
 
-#### DISP-S1 End-Conflict Detection
+#### DISP-S1 End-Conflict Detection (Gerald)
 
 ```bash
 opera-audit duplicates DISP_S1 --days-back 30 --check-end-conflicts
 ```
 
-Detects cases where the same frame+polarization+end-date has multiple begin-dates (conflicting time-series segments).
+Detects cases where the same frame+end-date has multiple begin-dates (conflicting time-series segments).
+This is Gerald's "end-conflict" detection algorithm from `detect_cmr_duplicates_for_disp_s1.py`.
+
+**Key characteristics:**
+- Groups by `(frame_id, end_dt)` only (polarization NOT included)
+- Identifies conflicts when same frame+end-date has different begin-dates
+- Original: `opera-sds-pcm/tools/ops/cmr_audit/detect_cmr_duplicates_for_disp_s1.py`
 
 #### Memory-Efficient Mode
 
@@ -113,11 +127,65 @@ opera-audit accountability DSWX_S1 --days-back 7 --save
 
 The MGRS tile-collection SQLite DB is available from JPL Artifactory or the ADT package repo.
 
-#### DIST_S1
+#### DIST_S1 (Kevin - ISO-XML extraction)
 
 ```bash
+# Basic DIST-S1 accountability (CMR-only)
 opera-audit accountability DIST_S1 --days-back 7 --save
+
+# With burst DB for cross-checking
+opera-audit accountability DIST_S1 --days-back 7 --save --burst-db /path/to/burst_db.json
+
+# Tune download concurrency and retries
+opera-audit accountability DIST_S1 --days-back 7 --save \
+    --max-concurrent 10 --max-retries 3
 ```
+
+**Strategy details:**
+- Extracts RTC inputs from DIST-S1 ISO-XML metadata (`PostRtcOperaIds` attribute)
+- Uses namespace-aware XPath queries: `.//eos:AdditionalAttribute`
+- Maps RTC burst IDs to MGRS tiles using burst-to-products DB (optional)
+- Original: `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_dist_s1.py`
+
+#### TROPO (Chris - date_count strategy)
+
+```bash
+opera-audit accountability TROPO --days-back 30 --save
+```
+
+**Strategy details:**
+- Counts granules by `BeginningDateTime` (date only, no time)
+- Flags dates with fewer than expected granules (threshold: 4 per day)
+- Original: `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_tropo.py`
+
+#### DISP_S1_STATIC (Chris - db_based strategy)
+
+```bash
+# Uses pre-configured sample database
+opera-audit accountability DISP_S1_STATIC --days-back 30 --save
+
+# Or override with custom database
+opera-audit accountability DISP_S1_STATIC --days-back 30 --save \
+    --db-path /path/to/your-frame-to-burst.json
+```
+
+**Strategy details:**
+- Maps frames to expected bursts using external database
+- Sample database included: `data/opera-s1-disp-frame-to-burst-sample.json`
+- Pre-configured in `config.yaml`, no `--db-path` needed for testing
+- For production: obtain full frame-to-burst DB from opera-sds-pcm or ADT package
+
+#### DISP_S1 (Gerald + Chris - delegated_validator)
+
+```bash
+opera-audit accountability DISP_S1 --days-back 7 --save
+```
+
+**Strategy details:**
+- Delegates to external validator: `opera_validator.opv_disp_s1.validate_disp_s1`
+- Requires validator configuration in `config.yaml`
+- Falls back to basic granule counting if validator not available
+- Original: Gerald's end-conflicts + Chris's delegated pattern
 
 #### All Enabled Products
 
@@ -228,33 +296,88 @@ opera-audit accountability --days-back 7 --save
 0 3 * * 1 cd /path/to/opera-audit && source .venv/bin/activate && opera-audit accountability --days-back 7 --save --quiet >> /var/log/opera-audit.log 2>&1
 ```
 
+## Strategy Override Examples
+
+You can override the default accountability strategy for any product:
+
+```bash
+# Use forward_map strategy instead of dswx_hls for DSWX_HLS
+opera-audit accountability DSWX_HLS --strategy forward_map --days-back 7 --save
+
+# Use date_count for a custom product
+opera-audit accountability CUSTOM_PRODUCT --strategy date_count --days-back 30 --save
+```
+
+**Available strategies:**
+- `dswx_hls` — HLS→DSWx mapping with L9 cutoff (Chris)
+- `dswx_s1` — 4-step RTC→DSWx pipeline (Riley)
+- `dist_s1` — ISO-XML RTC extraction (Kevin)
+- `forward_map` — Query inputs, generate expected outputs (Chris)
+- `date_count` — Count by date, flag low counts (Chris)
+- `delegated_validator` — External validator (Chris)
+- `db_based` — Database-driven mapping (Chris)
+
 ## Python API Usage
 
 ```python
 from opera_accountability import CONFIG
 from opera_accountability.cmr import query_cmr, query_cmr_by_short_name
-from opera_accountability.duplicates import detect_duplicates
+from opera_accountability.duplicates import detect_duplicates, detect_disp_s1_end_conflicts
 from opera_accountability.reports import save_reports
 from datetime import datetime, timedelta
 
 end_date = datetime.now()
 start_date = end_date - timedelta(days=7)
 
-# --- Duplicates (by ccid) ---
+# --- Duplicates (by ccid) - Riley ---
 ccid = CONFIG['products']['DSWX_HLS']['ccid']['PROD']
 granules = query_cmr(ccid, start_date, end_date, 'PROD')
 results = detect_duplicates(granules, 'DSWX_HLS')
 print(f"Found {results['duplicates']} duplicates out of {results['total']}")
 
-# --- Duplicates (by short_name, e.g. DIST_S1) ---
+# --- Duplicates (by short_name, e.g. DIST_S1) - Kevin ---
 coll = CONFIG['products']['DIST_S1']['collection']['PROD']
 granules = query_cmr_by_short_name(coll['short_name'], coll['provider'], start_date, end_date)
 results = detect_duplicates(granules, 'DIST_S1')
+
+# --- DISP-S1 end-conflicts - Gerald ---
+ccid = CONFIG['products']['DISP_S1']['ccid']['PROD']
+granules = query_cmr(ccid, start_date, end_date, 'PROD')
+results = detect_disp_s1_end_conflicts(granules)
+print(f"Found {results['conflict_groups']} end-conflict groups")
+
+# --- Accountability with strategy - Chris ---
+from opera_accountability.strategies.forward_map import ForwardMapStrategy
+strategy = ForwardMapStrategy('DSWX_HLS')
+results = strategy.analyze(start_date, end_date, 'PROD')
 
 # --- Save reports ---
 files = save_reports(results, './output', 'DSWX_HLS', 'duplicates', 'PROD',
                      start_date=start_date, end_date=end_date)
 ```
+
+## Consolidation Reference
+
+For detailed documentation of the consolidation:
+- **CONSOLIDATION_MAP.md** — Original tool locations, file structure comparisons, migration notes
+- **README.md** — Consolidation history by contributor
+
+### Original Tool Locations
+
+**Riley:**
+- `opera-sds-ops/duplicates/duplicate_check.py` → `src/opera_accountability/duplicates.py`
+- `opera-sds-ops/accountability_tools/dswx_s1/` → `src/opera_accountability/strategies/dswx_s1/`
+
+**Gerald:**
+- `opera-sds-pcm/tools/ops/cmr_audit/detect_cmr_duplicates_for_disp_s1.py` → `src/opera_accountability/duplicates.py::detect_disp_s1_end_conflicts()`
+
+**Chris:**
+- `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_hls.py` → `src/opera_accountability/strategies/{dswx_hls,forward_map}.py`
+- `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_tropo.py` → `src/opera_accountability/strategies/date_count.py`
+- `opera-sds-pcm/tools/ops/cmr_audit/cmr_client.py` → `src/opera_accountability/cmr_async.py`
+
+**Kevin:**
+- `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_dist_s1.py` → `src/opera_accountability/strategies/dist_s1/`
 
 ## Troubleshooting
 
@@ -280,4 +403,13 @@ from opera_accountability import CONFIG
 for name, prod in CONFIG['products'].items():
     acc = prod.get('accountability', {})
     print(f"{name}: strategy={acc.get('strategy', 'n/a')}, enabled={acc.get('enabled', False)}")
+```
+
+### Check Which Contributor Code Is Used
+```python
+# See README.md or CONSOLIDATION_MAP.md for detailed contributor mappings
+from opera_accountability.duplicates import detect_duplicates  # Riley
+from opera_accountability.duplicates import detect_disp_s1_end_conflicts  # Gerald
+from opera_accountability.strategies.forward_map import ForwardMapStrategy  # Chris
+from opera_accountability.strategies.dist_s1 import run as run_dist_s1  # Kevin
 ```

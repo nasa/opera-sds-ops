@@ -1,22 +1,30 @@
 # OPERA Accountability Framework
 
-A Python toolkit for OPERA SDS operators that detects duplicate granules and
+A unified Python toolkit for OPERA SDS operators that detects duplicate granules and
 performs accountability analysis (input → output mapping) across every OPERA
 product line, with a Streamlit dashboard for visualizing results.
 
+**This package consolidates accountability and duplicate detection tools from 4 contributors
+across the OPERA SDS team into a single, unified framework.** See `CONSOLIDATION_MAP.md`
+for detailed documentation of the consolidation process.
+
 ## Features
 
-- **Duplicate detection** for every OPERA product (regular dup-set detection plus
-  a DISP-S1 "end-conflict" mode for frames with the same end-date but different
-  begin-dates).
+- **Duplicate detection** for every OPERA product:
+  - Regular duplicate detection with monthly/daily aggregation. *[Riley]*
+  - DISP-S1 "end-conflict" mode for frames with the same end-date but different
+    begin-dates. *[Gerald]*
 - **Accountability strategies** — pick the right one per product:
-  - `dswx_hls` — HLS S30/L30 inputs → DSWx-HLS outputs (with L9 cutoff filter).
+  - `dswx_hls` — HLS S30/L30 inputs → DSWx-HLS outputs (with L9 cutoff filter). *[Chris]*
   - `dswx_s1` — 4-step RTC-S1 → DSWx-S1 pipeline (CMR survey → input mapping →
-    MGRS tile-set resolution → cycle/sensor bucket expansion).
+    MGRS tile-set resolution → cycle/sensor bucket expansion). *[Riley]*
   - `dist_s1` — RTC-S1 → DIST-S1 mapping driven by DIST-S1 ISO-XML metadata
-    (optionally augmented by the opera-sds-pcm burst DB).
-  - Generic Phase-3 strategies for new products: `forward_map`, `date_count`,
-    `delegated_validator`, `db_based`.
+    (optionally augmented by the opera-sds-pcm burst DB). *[Kevin]*
+  - Generic strategies for new products:
+    - `forward_map` — Query inputs first, generate expected output patterns. *[Chris]*
+    - `date_count` — Count granules by date, flag dates below threshold. *[Chris]*
+    - `delegated_validator` — Delegate to external validator module. *[Chris]*
+    - `db_based` — Map using external frame/burst database. *[Chris]*
 - **Output formats**: structured JSON (full report), plain-text granule lists,
   and human-readable summaries.
 - **CLI** built on Typer + Rich (`opera-audit duplicates`, `accountability`,
@@ -149,21 +157,87 @@ opera-audit version
 
 ## Supported Products
 
-| Product           | Duplicates | Accountability strategy |
-| ----------------- | :--------: | ----------------------- |
-| `DSWX_HLS`        |     ✅     | `dswx_hls`              |
-| `RTC_S1`          |     ✅     | —                       |
-| `CSLC_S1`         |     ✅     | —                       |
-| `DSWX_S1`         |     ✅     | `dswx_s1` (needs MGRS DB) |
-| `DIST_S1`         |     ✅     | `dist_s1`               |
-| `DISP_S1`         |     ✅     | `delegated_validator`   |
-| `TROPO`           |     ✅     | `date_count`            |
-| `DIST_ALERT_HLS`  |     ✅     | —                       |
-| `CSLC_S1_STATIC`  |     ✅     | —                       |
-| `RTC_S1_STATIC`   |     ✅     | —                       |
+| Product           | Duplicates | Accountability strategy | Status | Source |
+| ----------------- | :--------: | ----------------------- | ------ | ------ |
+| `DSWX_HLS`        |     ✅     | `dswx_hls` / `forward_map` | ✅ Production | Chris |
+| `RTC_S1`          |     ✅     | —                       | — | Riley |
+| `CSLC_S1`         |     ✅     | —                       | — | Riley |
+| `DSWX_S1`         |     ✅     | `dswx_s1` (needs MGRS DB) | ✅ Production | Riley |
+| `DIST_S1`         |     ✅     | `dist_s1`               | ✅ Production | Kevin |
+| `DISP_S1`         |     ✅     | `delegated_validator` ⚠️ | ⚠️ Needs validator | Gerald + Chris |
+| `TROPO`           |     ✅     | `date_count`            | ✅ Production | Chris |
+| `DISP_S1_STATIC`  |     ✅     | `db_based`              | ✅ Production | Chris |
+| `DIST_ALERT_HLS`  |     ✅     | —                       | — | Riley |
+| `CSLC_S1_STATIC`  |     ✅     | —                       | — | Riley |
+| `RTC_S1_STATIC`   |     ✅     | —                       | — | Riley |
 
-Products without an accountability strategy in the table are still surveyed
-by duplicate detection.
+**Legend:**
+- ✅ Production: Fully functional and production-ready
+- ⚠️ Needs validator: Requires external validator configuration (see Known Limitations)
+- — : Accountability analysis not implemented (duplicate detection only)
+
+### Why Some Products Don't Have Accountability
+
+**5 products intentionally omit accountability analysis.** These products are either intermediate inputs, static layers, or derived alerts where duplicate detection alone provides sufficient operational monitoring.
+
+---
+
+#### Category 1: Intermediate Input Products
+**Products:** `RTC_S1`, `CSLC_S1`
+
+**Processing Chain:**
+```
+SLC (raw satellite data)
+    ↓
+CSLC_S1 (coregistered)
+    ↓
+RTC_S1 (radiometrically corrected)
+    ↓
+DSWX_S1 / DIST_S1 / DISP_S1 (science products)
+```
+
+**Why no accountability:**
+- These are **preprocessing steps**, not final science deliverables
+- Accountability targets **end-user products** that deliver science data
+- For inputs, **preventing duplicate processing** is the critical concern
+- Downstream product accountability (DSWx-S1, DIST-S1) validates that inputs were used correctly
+
+**Technical note:** SLC → CSLC accountability would require complex burst ID parsing and frame mapping. This was partially prototyped by Chris but not completed due to lower operational priority compared to final product validation.
+
+---
+
+#### Category 2: Static Ancillary Layers
+**Products:** `CSLC_S1_STATIC`, `RTC_S1_STATIC`
+
+**Why no accountability:**
+- Static layers are generated **once per location** (not time-series)
+- No time-based input → output relationship exists
+- These are reference datasets (e.g., layover/shadow masks, local incidence angle)
+- **Duplicate detection ensures** the same static layer isn't published multiple times
+
+---
+
+#### Category 3: Downstream Alert Products
+**Products:** `DIST_ALERT_HLS`
+
+**Processing Chain:**
+```
+HLS (optical imagery)
+    ↓
+DSWX-HLS (surface water extent)
+    ↓
+DIST_ALERT_HLS (change detection alerts)
+```
+
+**Why no accountability:**
+- Alerts are **event-driven**, not systematic processing of all inputs
+- Complex triggering logic (threshold-based change detection)
+- Accountability relationship is **indirect** — validated via DSWx-HLS accountability
+- Duplicate detection catches operational issues (e.g., duplicate alert publications)
+
+---
+
+**Summary:** For these 5 products, **duplicate detection (100% coverage)** provides the essential operational monitoring. Full input→output accountability would add complexity without proportional operational value, as these products are either validated indirectly through downstream accountability or have non-standard processing relationships.
 
 ## Output Layout
 
@@ -284,13 +358,111 @@ Key files:
 - `strategies/dswx_s1/` — DSWX-S1 accountability (4-step RTC → DSWx pipeline).
 - `strategies/dist_s1/` — DIST-S1 accountability (ISO-XML pipeline).
 - `strategies/{forward_map,date_count,delegated_validator,db_based}.py` —
-  Phase-3 generic strategies for new products.
+  Generic strategies (Chris) for new products.
+
+## Known Limitations
+
+### Generic Strategies (Chris)
+
+The following strategies are **framework implementations** that work with appropriate configuration:
+
+- ✅ **`date_count`** (TROPO): Fully functional for date-based accountability
+- ✅ **`db_based`** (DISP_S1_STATIC): Functional when provided with frame-to-burst DB
+- ⚠️ **`delegated_validator`** (DISP_S1): Requires external validator integration
+- ⚠️ **`forward_map`**: Partially implemented (HLS extraction complete, SLC pending)
+
+### DISP_S1 Delegated Validator
+
+The `delegated_validator` strategy for DISP_S1 requires the external validator from opera-sds-pcm:
+- **Validator location**: `opera-sds-pcm/report/opera_validator/opv_disp_s1.py`
+- **To enable**: Edit `config.yaml` and set:
+  ```yaml
+  DISP_S1:
+    accountability:
+      delegated_validator:
+        validator_module: "report.opera_validator.opv_disp_s1"
+        validator_function: "validate_disp_s1"
+        validator_path: "/path/to/opera-sds-pcm"
+  ```
+- **Without validator**: Falls back to basic granule counting (not true accountability)
+
+### DISP_S1_STATIC DB-Based Strategy
+
+The `db_based` strategy for DISP_S1_STATIC requires a frame-to-burst database:
+- **DB format**: JSON file with frame-to-burst mappings and `is_north_america` flags
+- **Sample DB included**: `data/opera-s1-disp-frame-to-burst-sample.json` (pre-configured in `config.yaml`)
+- **Override DB path**: Use `--db-path` CLI option or edit `config.yaml`:
+  ```yaml
+  DISP_S1_STATIC:
+    accountability:
+      db_based:
+        db_path: "path/to/your-frame-to-burst.json"
+  ```
+- **Production DB**: Obtain full frame-to-burst database from opera-sds-pcm or ADT package
+
+### Forward-Map Strategy
+
+The `forward_map` strategy has partial implementation:
+- ✅ **HLS → DSWx-HLS**: Input extraction implemented
+- ⚠️ **SLC → CSLC/RTC**: Placeholder only (requires burst ID parsing)
+- **Usage**: Can be used with DSWX_HLS by overriding strategy:
+  ```bash
+  opera-audit accountability DSWX_HLS --strategy forward_map --start 2026-02-01 --end 2026-02-07
+  ```
+
+## Troubleshooting
+
+### "No validator configured, performing basic analysis"
+- This message appears when using `delegated_validator` without configuring an external validator
+- Solution: Configure `validator_module` and `validator_function` in `config.yaml` (see Known Limitations)
+- Alternative: The basic analysis provides granule counts but not frame-level validation
+
+### "Database file not found" (db_based strategy)
+- Solution: Provide `--db-path` pointing to the frame-to-burst JSON file
+- Example: `opera-audit accountability DISP_S1_STATIC --db-path ./frame-to-burst.json --start 2024-01-01 --end 2024-01-31`
+
+### MGRS database required for DSWX_S1
+- Set `OPERA_MGRS_DB` environment variable or use `--mgrs-db` flag
+- Obtain MGRS tile-collection SQLite database from JPL Artifactory
+
+## Consolidation History
+
+This package consolidates tools from 4 contributors:
+
+### Riley
+- **Duplicate detection** (`duplicates/duplicate_check.py`) — monthly/daily aggregation
+- **DSWx-S1 accountability pipeline** (`accountability_tools/dswx_s1/`) — 4-step RTC→DSWx survey
+- Source: `opera-sds-ops/duplicates/`, `opera-sds-ops/accountability_tools/dswx_s1/`
+
+### Gerald
+- **DISP-S1 end-conflict detection** — same frame+end-date, different begin-dates
+- Source: `opera-sds-pcm/tools/ops/cmr_audit/detect_cmr_duplicates_for_disp_s1.py`
+- Branch: `frame-states-via-cmr-audit`
+
+### Chris
+- **Multi-strategy suite** — `forward_map`, `date_count`, `delegated_validator`, `db_based`
+- **Async CMR client** with exponential backoff
+- **HLS/TROPO accountability** — forward-map and date-count strategies
+- Source: `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_{hls,slc,tropo}.py`
+- Source: `opera-sds-pcm/tools/ops/cmr_audit/cmr_client.py`
+
+### Kevin
+- **DIST-S1 ISO-XML tools** — extract RTC inputs from DIST-S1 metadata
+- **Burst-to-tile MGRS mapping** — RTC burst ID extraction and tile mapping
+- Source: `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_dist_s1.py`
+
+**See `CONSOLIDATION_MAP.md` for detailed file mappings, CLI usage, and migration notes.**
 
 ## Credits
 
-Consolidated from existing code by:
-- Riley Kuttruff (duplicate detection, accountability mapping)
-- Alvin Nguyen (CMR audit wrapper)
+Contributing authors:
+- **Riley** — duplicate detection, DSWx-S1 accountability pipeline
+- **Gerald** — DISP-S1 end-conflict detection
+- **Chris** — multi-strategy suite, async CMR client, validators
+- **Kevin** — DIST-S1 ISO-XML tools, burst-to-tile mapping
+- **Alvin Nguyen** — CMR audit wrapper
+
+Consolidation and framework integration: This project
 
 ## License
 
