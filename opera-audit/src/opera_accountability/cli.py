@@ -267,6 +267,8 @@ def accountability(
             save=save,
             output_dir=output_dir,
             quiet=quiet,
+            mgrs_db=mgrs_db,
+            db_path=db_path,
         )
         return
 
@@ -875,6 +877,8 @@ def _run_accountability_all(
     save: bool,
     output_dir: str,
     quiet: bool,
+    mgrs_db: Optional[str] = None,
+    db_path: Optional[str] = None,
 ) -> None:
     """Internal helper to run accountability for all products with accountability enabled."""
     
@@ -920,7 +924,7 @@ def _run_accountability_all(
                 if results:
                     all_results[product] = results
             elif strategy == 'dswx_s1':
-                results = _run_dswx_s1_accountability(start_date, end_date, venue, save, output_dir, None, quiet)
+                results = _run_dswx_s1_accountability(start_date, end_date, venue, save, output_dir, mgrs_db, quiet)
                 all_results[product] = {
                     'expected': results.get('expected', results.get('filtered_rtc_count', 0)),
                     'actual': results.get('actual', results.get('used_rtc_count', 0)),
@@ -980,7 +984,7 @@ def _run_accountability_all(
             elif strategy == 'db_based':
                 from opera_accountability.strategies.db_based import DBBasedStrategy
                 db_strategy = DBBasedStrategy(product)
-                results = db_strategy.analyze(start_date, end_date, venue)
+                results = db_strategy.analyze(start_date, end_date, venue, db_path=db_path)
                 if not quiet:
                     table = Table(title=f"DB-Based Accountability - {product}")
                     table.add_column("Metric", style="cyan")
