@@ -98,15 +98,15 @@ products:
   DIST_S1:
     name: "Disturbance - Sentinel-1"
     ccid:
-      PROD: ""
+      PROD: "C4090131664-ASF"
       UAT: ""
     collection:
       PROD:
         provider: "ASF"
-        short_name: "OPERA_L3_DIST-ALERT-S1_PROVISIONAL_V0"
+        short_name: "OPERA_L3_DIST-ALERT-S1_V1"
       UAT:
         provider: "ASF"
-        short_name: "OPERA_L3_DIST-ALERT-S1_PROVISIONAL_V0"
+        short_name: "OPERA_L3_DIST-ALERT-S1_V1"
     pattern: '(?P<id>OPERA_L3_DIST(?:-ALERT)?-S1_(?P<tile_id>T?[^\W_]+)_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_S1[A-D]?_30_v\d+([.]\d+)?)'
     unique_fields: ["tile_id", "acquisition_ts"]
     aggregation_field: "acquisition_ts"
@@ -209,15 +209,15 @@ products:
   DISP_S1_STATIC:
     name: "Displacement Static Layers - Sentinel-1"
     ccid:
-      PROD: "C3093599252-POCLOUD"  # DISP-S1-STATIC collection
-      UAT: "C1234567890-ASF"
+      PROD: "C3959290248-ASF"  # DISP-S1-STATIC collection
+      UAT: ""
     collection:
       PROD:
         provider: "ASF"
-        short_name: "OPERA_L3_DISP-S1-STATIC_PROVISIONAL_V0"
+        short_name: "OPERA_L3_DISP-S1-STATIC_V1"
       UAT:
         provider: "ASF"
-        short_name: "OPERA_L3_DISP-S1-STATIC_PROVISIONAL_V0"
+        short_name: "OPERA_L3_DISP-S1-STATIC_V1"
     pattern: '(?P<id>OPERA_L3_DISP-S1-STATIC_(?P<frame_id>F\d+)_(?P<validity_ts>\d{8})_(?P<sensor>S1[A-D])_v\d+[.]\d+)'
     unique_fields: ["frame_id", "validity_ts", "sensor"]
     aggregation_field: "validity_ts"
