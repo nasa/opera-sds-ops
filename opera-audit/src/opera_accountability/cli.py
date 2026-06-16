@@ -821,7 +821,10 @@ def _run_duplicates_all(
                 if len(cmr_granules) == 0:
                     if not quiet:
                         console.print(f"  [yellow]No granules found[/yellow]")
-                    all_results[product] = {'total': 0, 'unique': 0, 'duplicates': 0}
+                    zero_results = {'total': 0, 'unique': 0, 'duplicates': 0}
+                    all_results[product] = zero_results
+                    if save:
+                        save_reports(zero_results, output_dir, product, 'duplicates', venue, start_date=start_date, end_date=end_date)
                     continue
                 
                 # Detect duplicates
