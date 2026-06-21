@@ -1,0 +1,25 @@
+Instructions to Install the Crontab Setup on the Server
+
+Create the installation directory at /export/home/hysdsops/
+Create a folder named scheduled_tasks on the server (you may choose a different location if preferred—scheduled_tasks is just the reference path used here).
+
+Ensure S3 access for GeoJSON files
+Verify that the script can retrieve the required GeoJSON files from S3
+i.e. aws s3 cp s3://opera-ancillaries/north_america_opera.geojson .
+
+Activate the correct virtual environment
+The audit script requires sourcing the virtual environment from the PCM repository.
+Confirm the venv path hasn’t changed
+
+If it has, update the environment path in cmr_audit.env accordingly.
+
+Copy required files into the installation directory
+Copy both cmr_audit.env and run_cmr_audit.sh into the scheduled_tasks folder.
+
+Install the scheduled tasks via crontab
+Run crontab -e and add your cron entries pointing to the scripts in scheduled_tasks, and put the below into the crontab file
+
+0 1 * * * cd /export/home/hysdsops/scheduled_tasks && source cmr_audit.env && ./run_cmr_audit.sh -f hls --push-to-s3 2>&1 | logger -i -p user.notice -t cmr_audit_hls
+0 2 * * * cd /export/home/hysdsops/scheduled_tasks && source cmr_audit.env && ./run_cmr_audit.sh -f rtc_s1 --push-to-s3 2>&1 | logger -i -p user.notice -t cmr_audit_rtc_s1 
+0 3 * * * cd /export/home/hysdsops/scheduled_tasks && source cmr_audit.env && ./run_cmr_audit.sh -f cslc_s1 --push-to-s3 2>&1 | logger -i -p user.notice -t cmr_audit_cslc_s1
+0 4 * * * cd /export/home/hysdsops/scheduled_tasks && source cmr_audit.env && ./run_cmr_audit.sh -f dswx_s1 --push-to-s3 2>&1 | logger -i -p user.notice -t cmr_audit_dswx_s1
