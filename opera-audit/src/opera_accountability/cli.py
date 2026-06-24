@@ -15,7 +15,7 @@ from rich.panel import Panel
 from . import CONFIG, __version__
 from .cmr import query_cmr
 from .duplicates import detect_duplicates
-from .accountability import analyze_accountability
+from .strategies.dswx_hls import analyze_accountability
 from .reports import save_reports
 
 # Set up logging (default to WARNING, not INFO)
@@ -101,7 +101,10 @@ def duplicates(
     if save:
         if not quiet:
             console.print("[cyan]Saving reports...[/cyan]")
-        files = save_reports(results, output_dir, product, 'duplicates', venue)
+        files = save_reports(
+            results, output_dir, product, 'duplicates', venue,
+            start_date=start_date, end_date=end_date,
+        )
 
     # Display summary (always show unless quiet)
     if not quiet:
@@ -134,21 +137,51 @@ def duplicates(
 
 @app.command()
 def accountability(
+    product: str = typer.Argument(
+        'DSWX_HLS',
+        help="Product to analyze (DSWX_HLS or DSWX_S1). Defaults to DSWX_HLS for backward compatibility."
+    ),
     days_back: int = typer.Option(30, "--days-back", "-d", help="Number of days to look back"),
     start: Optional[str] = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD)"),
     end: Optional[str] = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
     venue: str = typer.Option("PROD", "--venue", "-v", help="Venue (PROD or UAT)"),
     save: bool = typer.Option(False, "--save", help="Save reports to files (default: stdout only)"),
     output_dir: str = typer.Option("./output", "--output-dir", "-o", help="Output directory (used with --save)"),
+    mgrs_db: Optional[str] = typer.Option(
+        None, "--mgrs-db",
+        help=(
+            "Path to the MGRS tile-collection SQLite (DSWX_S1 only). "
+            "Required unless OPERA_MGRS_DB is set; obtain the DB from "
+            "JPL Artifactory or the ADT package repo."
+        )
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
     verbose: bool = typer.Option(False, "--verbose", help="Verbose output")
 ):
-    """Run accountability analysis for DSWX_HLS (HLS input mapping)."""
+    """Run accountability analysis for a product.
+
+    Supported products (selected via ``accountability.strategy`` in config.yaml):
+
+    - ``DSWX_HLS`` — strategy ``dswx_hls`` (HLS input → DSWx-HLS output mapping)
+    - ``DSWX_S1`` — strategy ``dswx_s1`` (RTC-S1 → DSWx-S1 4-step pipeline)
+    """
 
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    product = 'DSWX_HLS'
+    # Validate product
+    product_cfg = CONFIG['products'].get(product)
+    if product_cfg is None:
+        console.print(f"[red]Error: Unknown product '{product}'[/red]")
+        console.print(f"Available products: {', '.join(CONFIG['products'].keys())}")
+        raise typer.Exit(1)
+
+    acc_cfg = product_cfg.get('accountability') or {}
+    if not acc_cfg.get('enabled'):
+        console.print(f"[red]Error: accountability not enabled for {product} in config.yaml[/red]")
+        raise typer.Exit(1)
+
+    strategy = acc_cfg.get('strategy', 'dswx_hls')
 
     # Calculate date range
     if start and end:
@@ -163,6 +196,7 @@ def accountability(
         console.print(Panel(
             f"[bold]Accountability Analysis[/bold]\n"
             f"Product: {product}\n"
+            f"Strategy: {strategy}\n"
             f"Venue: {venue}\n"
             f"Date Range: {start_date.date()} to {end_date.date()}\n"
             f"Mode: {mode_str}",
@@ -170,12 +204,34 @@ def accountability(
             border_style="cyan"
         ))
 
-    # Get collection IDs
+    # Dispatch by strategy
+    if strategy == 'dswx_hls':
+        _run_dswx_hls_accountability(
+            product, start_date, end_date, venue, save, output_dir, quiet
+        )
+    elif strategy == 'dswx_s1':
+        _run_dswx_s1_accountability(
+            start_date, end_date, venue, save, output_dir, mgrs_db, quiet
+        )
+    else:
+        console.print(f"[red]Error: Unknown accountability strategy '{strategy}'[/red]")
+        raise typer.Exit(1)
+
+
+def _run_dswx_hls_accountability(
+    product: str,
+    start_date: datetime,
+    end_date: datetime,
+    venue: str,
+    save: bool,
+    output_dir: str,
+    quiet: bool,
+) -> None:
+    """Existing DSWX_HLS pipeline, extracted so the CLI can dispatch by strategy."""
     dswx_ccid = CONFIG['products'][product]['ccid'][venue]
     hls_s30_ccid = CONFIG['products'][product]['accountability']['hls_s30_ccid'][venue]
     hls_l30_ccid = CONFIG['products'][product]['accountability']['hls_l30_ccid'][venue]
 
-    # Query CMR (progress bars shown by query_cmr)
     dswx_granules = query_cmr(dswx_ccid, start_date, end_date, venue)
     hls_s30_granules = query_cmr(hls_s30_ccid, start_date, end_date, venue)
     hls_l30_granules = query_cmr(hls_l30_ccid, start_date, end_date, venue)
@@ -186,18 +242,19 @@ def accountability(
         console.print("[yellow]No granules found in date range[/yellow]")
         return
 
-    # Analyze accountability
     if not quiet:
         console.print("\n[cyan]Analyzing accountability...[/cyan]")
     results = analyze_accountability(dswx_granules, hls_granules)
 
-    # Save reports to files only if --save flag is used
+    files = {}
     if save:
         if not quiet:
             console.print("[cyan]Saving reports...[/cyan]")
-        files = save_reports(results, output_dir, product, 'accountability', venue)
+        files = save_reports(
+            results, output_dir, product, 'accountability', venue,
+            start_date=start_date, end_date=end_date,
+        )
 
-    # Display summary (always show unless quiet)
     if not quiet:
         table = Table(title=f"Accountability Summary - {product}")
         table.add_column("Metric", style="cyan")
@@ -218,11 +275,68 @@ def accountability(
             for file_type, path in files.items():
                 console.print(f"  {file_type}: {path}")
 
-    # In quiet mode, just print the numbers
     if quiet:
         print(f"{results['expected']},{results['actual']},{results['missing_count']}")
+    else:
+        console.print("[green]Done![/green]")
+
+
+def _run_dswx_s1_accountability(
+    start_date: datetime,
+    end_date: datetime,
+    venue: str,
+    save: bool,
+    output_dir: str,
+    mgrs_db: Optional[str],
+    quiet: bool,
+) -> None:
+    """DSWx-S1 pipeline dispatcher: runs the 4-step strategy and renders results."""
+    # Imported lazily so the dswx_s1 package is only loaded when used.
+    from .strategies.dswx_s1 import run as run_dswx_s1
 
     if not quiet:
+        console.print("\n[cyan]Running DSWx-S1 4-step accountability pipeline...[/cyan]")
+
+    results = run_dswx_s1(
+        start_date=start_date,
+        end_date=end_date,
+        output_dir=output_dir,
+        venue=venue,
+        save=save,
+        mgrs_db_override=mgrs_db,
+    )
+
+    if not quiet:
+        table = Table(title="DSWx-S1 Accountability Summary")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Count", justify="right", style="green")
+
+        table.add_row("RTC-S1 surveyed", f"{results['rtc_surveyed']:,}")
+        table.add_row("DSWx-S1 surveyed", f"{results['dswx_surveyed']:,}")
+        table.add_row("RTCs after sensor filter", f"{results['filtered_rtc_count']:,}")
+        table.add_row("RTCs used in DSWx-S1", f"{results['used_rtc_count']:,}")
+        table.add_row("Missing RTCs", f"{results['missing_count']:,}", style="yellow")
+        # actual / expected is bounded to [0, 100] — see pipeline._write_summary.
+        if results['expected']:
+            acc_rate = results['actual'] / results['expected'] * 100
+            table.add_row("Accountability rate", f"{acc_rate:.2f}%")
+        table.add_row("MGRS tile sets affected", f"{results['tile_set_count']:,}")
+        table.add_row("Cycle/sensor buckets", f"{results['cycle_bucket_count']:,}")
+
+        console.print(table)
+
+        if save and results['files']:
+            console.print("\n[bold]Files created:[/bold]")
+            for file_type, path in results['files'].items():
+                console.print(f"  {file_type}: {path}")
+
+    if quiet:
+        print(
+            f"{results['rtc_surveyed']},{results['dswx_surveyed']},"
+            f"{results['used_rtc_count']},{results['missing_count']},"
+            f"{results['tile_set_count']},{results['cycle_bucket_count']}"
+        )
+    else:
         console.print("[green]Done![/green]")
 
 

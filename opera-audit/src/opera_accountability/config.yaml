@@ -25,6 +25,7 @@ products:
     # Accountability configuration
     accountability:
       enabled: true
+      strategy: "dswx_hls"
       hls_s30_ccid:
         PROD: "C2021957295-LPCLOUD"
         UAT: ""
@@ -71,7 +72,22 @@ products:
     aggregation_format: "%Y%m%dT%H%M%SZ"
     creation_field: "creation_ts"
     accountability:
-      enabled: false
+      enabled: true
+      strategy: "dswx_s1"
+      # RTC-S1 CCID is sourced from products.RTC_S1.ccid to avoid drift.
+      # MGRS tile-collection SQLite database. The DB is *not* bundled with
+      # this package (it is ~55 MB and slows clones); obtain it from JPL
+      # Artifactory or the ADT package repo and supply its path via
+      # `--mgrs-db <abs-path>` or the `OPERA_MGRS_DB` environment variable.
+      # Earliest sensing times by sensor. RTC products acquired before these
+      # timestamps cannot have produced a DSWx-S1 output and are excluded from
+      # the "missing RTC" set.
+      sensor_start_dates:
+        S1A: "2024-08-21T00:11:56Z"
+        S1B: "2024-08-21T00:11:56Z"
+        S1C: "2025-05-20T00:00:00Z"
+      # Thread pool size for SQLite tile-set lookups.
+      tile_set_workers: 8
 
   DISP_S1:
     name: "Displacement - Sentinel-1"
@@ -83,5 +99,57 @@ products:
     aggregation_field: "creation_ts"
     aggregation_format: "%Y%m%dT%H%M%SZ"
     creation_field: "creation_ts"
+    accountability:
+      enabled: false
+
+  TROPO:
+    name: "Troposphere Zenith Delay"
+    ccid:
+      PROD: "C3717139408-ASF"
+      UAT: ""
+    pattern: '(?P<id>OPERA_L4_TROPO-ZENITH_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_(?P<model>.+?)_v\d+[.]\d+)'
+    unique_fields: ["acquisition_ts", "model"]
+    aggregation_field: "acquisition_ts"
+    aggregation_format: "%Y%m%dT%H%M%SZ"
+    creation_field: "creation_ts"
+    accountability:
+      enabled: false
+
+  DIST_ALERT_HLS:
+    name: "Disturbance Alert - HLS"
+    ccid:
+      PROD: "C2746980408-LPCLOUD"
+      UAT: ""
+    pattern: '(?P<id>OPERA_L3_DIST-ALERT-HLS_(?P<tile_id>T[^\W_]{5})_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_(?P<sensor>S2A|S2B|S2C|S2D|L8|L9)_30_v\d+([.]\d+)?)'
+    unique_fields: ["tile_id", "acquisition_ts", "sensor"]
+    aggregation_field: "acquisition_ts"
+    aggregation_format: "%Y%m%dT%H%M%SZ"
+    creation_field: "creation_ts"
+    accountability:
+      enabled: false
+
+  CSLC_S1_STATIC:
+    name: "Coregistered Single Look Complex Static Layers - Sentinel-1"
+    ccid:
+      PROD: "C2795135668-ASF"
+      UAT: ""
+    pattern: '(?P<id>OPERA_L2_CSLC-S1-STATIC_(?P<burst_id>\w{4}-\w{6}-\w{3})_(?P<validity_ts>\d{8})_(?P<sensor>S1[A-D])_v\d+[.]\d+)'
+    unique_fields: ["burst_id", "validity_ts", "sensor"]
+    aggregation_field: "validity_ts"
+    aggregation_format: "%Y%m%d"
+    # No creation_field: static products have no creation timestamp in the granule ID.
+    accountability:
+      enabled: false
+
+  RTC_S1_STATIC:
+    name: "Radiometric Terrain Corrected Static Layers - Sentinel-1"
+    ccid:
+      PROD: "C2795135174-ASF"
+      UAT: ""
+    pattern: '(?P<id>OPERA_L2_RTC-S1-STATIC_(?P<burst_id>\w{4}-\w{6}-\w{3})_(?P<validity_ts>\d{8})_(?P<sensor>S1[A-D])_30_v\d+[.]\d+)'
+    unique_fields: ["burst_id", "validity_ts", "sensor"]
+    aggregation_field: "validity_ts"
+    aggregation_format: "%Y%m%d"
+    # No creation_field: static products have no creation timestamp in the granule ID.
     accountability:
       enabled: false

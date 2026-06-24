@@ -122,7 +122,7 @@ output/
 
 ## Configuration
 
-Edit `config.yaml` to:
+Edit `src/opera_accountability/config.yaml` to:
 - Adjust CMR settings (URL, timeout, page size)
 - Modify product patterns and unique field definitions
 - Configure output directory
@@ -159,14 +159,14 @@ Integration tests in `tests/test_cmr_integration.py` verify that opera-audit res
 ## Development
 
 This package follows a simple structure:
-- `src/opera_accountability/` - Main package code
+- `src/opera_accountability/` - Main package code (includes `config.yaml`)
 - `tests/` - Test files and fixtures
-- `config.yaml` - Configuration
 
 Key files:
 - `cmr.py` - CMR client with retry and pagination
 - `duplicates.py` - Duplicate detection logic
-- `accountability.py` - Accountability analysis for DSWX_HLS
+- `strategies/dswx_hls/` - DSWX_HLS accountability strategy (HLS input mapping)
+- `strategies/dswx_s1/` - DSWX_S1 accountability strategy (4-step RTC→DSWx pipeline)
 - `reports.py` - Report generation in multiple formats
 - `cli.py` - Command-line interface
 - `dashboard.py` - Streamlit dashboard

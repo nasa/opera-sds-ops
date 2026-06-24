@@ -1,0 +1,18 @@
+# Default Streamlit theme for opera-audit — JPL/OPERA branded light theme.
+# Users can toggle between light and dark in the dashboard header; the in-app
+# toggle injects additional CSS on top of this baseline.
+
+[theme]
+base = "light"
+primaryColor = "#0059A0"        # JPL blue
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F5F7FA"
+textColor = "#0B1F3A"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+# Silence the "Welcome to Streamlit!" email prompt in CI/dev runs.
+headless = true

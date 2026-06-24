@@ -7,8 +7,8 @@ add tests for other products (RTC_S1, CSLC_S1, etc.) when supported.
 
 import pytest
 from datetime import datetime
-from opera_accountability import accountability
-from opera_accountability.accountability import analyze_accountability
+from opera_accountability.strategies.dswx_hls import accountability
+from opera_accountability.strategies.dswx_hls import analyze_accountability
 
 
 @pytest.fixture(autouse=True)
