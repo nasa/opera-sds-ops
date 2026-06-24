@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import altair as alt
@@ -115,6 +115,10 @@ def _is_dswx_s1_report(report: dict) -> bool:
     return 'tile_set_count' in report and 'rtc_surveyed' in report
 
 
+def _is_dist_s1_report(report: dict) -> bool:
+    return 'dist_surveyed' in report and report.get('metadata', {}).get('strategy') == 'dist_s1'
+
+
 def _extract_generated_at(report: dict) -> str | None:
     """Pull the ``generated_at`` ISO timestamp from whichever report schema.
 
@@ -131,7 +135,7 @@ def _extract_generated_at(report: dict) -> str | None:
 def _format_age(generated_at: str | None) -> str:
     """Format an ISO timestamp as a wall-clock label for the "Generated" column.
 
-    Returns the local-time timestamp as ``YYYY-MM-DD HH:MM`` (operators asked
+    Returns the local-time timestamp as ``YYYY-MM-DD HH:MM TZ`` (operators asked
     for absolute timestamps instead of the original relative labels like
     ``"Today 17:05"`` / ``"3d ago"`` — easier to correlate with log lines and
     cron schedules). Returns ``"unknown"`` if the input is falsy or cannot be
@@ -144,11 +148,14 @@ def _format_age(generated_at: str | None) -> str:
         ts = generated_at.replace('Z', '+00:00')
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is not None:
-            dt = dt.astimezone().replace(tzinfo=None)
+            dt = dt.astimezone()
+        else:
+            # Naive timestamp - assume it's already in local time
+            dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
     except (ValueError, TypeError):
         return "unknown"
 
-    return dt.strftime('%Y-%m-%d %H:%M')
+    return dt.strftime('%Y-%m-%d %H:%M %Z')
 
 
 # Status thresholds — single source of truth used by the helpers AND rendered
@@ -719,7 +726,7 @@ def _build_meta_strip(data_dir: Path) -> str:
         f'<div class="opera-legend-row">{critical_pill}'
         f'<span>duplicates ≥ {dup_warning:g}% · accountability &lt; {acc_warning:g}%</span></div>'
         '<div class="opera-legend-title" style="margin-top:14px;">Generated column</div>'
-        '<div class="opera-legend-row"><span class="opera-freshness">YYYY-MM-DD HH:MM</span>'
+        '<div class="opera-legend-row"><span class="opera-freshness">YYYY-MM-DD HH:MM TZ</span>'
         '<span>wall-clock time the report was generated</span></div>'
         '</div>'
     )
@@ -743,17 +750,38 @@ def _build_meta_strip(data_dir: Path) -> str:
 
 
 def _format_meta_timestamp(value: str | None) -> str | None:
-    """Format an ISO timestamp for the meta strip, or return ``None``."""
+    """Format an ISO timestamp for the meta strip (UTC), or return ``None``."""
+    if not value:
+        return None
+    try:
+        ts = value.replace('Z', '+00:00')
+        dt = datetime.fromisoformat(ts)
+        # Keep in UTC
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc)
+        else:
+            # Naive timestamp - assume it's UTC
+            dt = dt.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return value
+    return dt.strftime('%Y-%m-%d %H:%M UTC')
+
+
+def _format_meta_timestamp_local(value: str | None) -> str | None:
+    """Format an ISO timestamp for the meta strip (local time), or return ``None``."""
     if not value:
         return None
     try:
         ts = value.replace('Z', '+00:00')
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is not None:
-            dt = dt.astimezone().replace(tzinfo=None)
+            dt = dt.astimezone()
+        else:
+            # Naive timestamp - assume it's already in local time
+            dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
     except (ValueError, TypeError):
         return value
-    return dt.strftime('%Y-%m-%d %H:%M')
+    return dt.strftime('%Y-%m-%d %H:%M %Z')
 
 
 def _render_report_meta_strip(report: dict) -> None:
@@ -771,7 +799,7 @@ def _render_report_meta_strip(report: dict) -> None:
 
     start = _format_meta_timestamp(meta.get('start_date'))
     end = _format_meta_timestamp(meta.get('end_date'))
-    generated = _format_meta_timestamp(meta.get('generated_at'))
+    generated = _format_meta_timestamp_local(meta.get('generated_at'))
     venue = meta.get('venue')
 
     from html import escape as _e
@@ -861,8 +889,20 @@ def _render_overview(reports: dict) -> None:
         return
 
     # Topline metrics — shadcn metric cards.
-    total_granules = sum(r['results']['total'] for r in reports['duplicates'].values())
-    total_duplicates = sum(r['results']['duplicates'] for r in reports['duplicates'].values())
+    #
+    # End-conflict reports (DISP_S1 ``--check-end-conflicts``) share the
+    # ``reports/duplicates/`` tree but expose ``conflicting_products`` instead
+    # of ``duplicates``. Counting them as duplicates keeps the topline
+    # roll-up meaningful and — critically — avoids a ``KeyError`` that used
+    # to take down the entire Overview tab whenever an end-conflict report
+    # was loaded alongside ordinary duplicate reports.
+    total_granules = sum(
+        r['results'].get('total', 0) for r in reports['duplicates'].values()
+    )
+    total_duplicates = sum(
+        r['results'].get('duplicates', r['results'].get('conflicting_products', 0))
+        for r in reports['duplicates'].values()
+    )
     total_accountability_products = len(reports['accountability'])
 
     cols = st.columns(4)
@@ -903,12 +943,22 @@ def _render_overview(reports: dict) -> None:
         _section_label("Duplicate rate by product")
         chart_rows = []
         for product, report in reports['duplicates'].items():
-            res = report['results']
-            rate = (res['duplicates'] / res['total'] * 100) if res['total'] else 0.0
+            # All duplicate reports written by ``save_reports`` are wrapped
+            # under ``results``; reading from the top-level ``report`` dict
+            # silently produced 0% rates for every product.
+            results = report.get('results', report)
+            total = results.get('total', 0)
+            # End-conflict reports (DISP_S1 ``--check-end-conflicts``) expose
+            # ``conflicting_products`` instead of ``duplicates``; surface
+            # whichever metric the report actually contains.
+            duplicates = results.get(
+                'duplicates', results.get('conflicting_products', 0)
+            )
+            rate = (duplicates / total * 100) if total else 0.0
             chart_rows.append({
                 "Product": product,
                 "Rate (%)": round(rate, 2),
-                "Duplicates": res['duplicates'],
+                "Duplicates": duplicates,
             })
         chart_df = pd.DataFrame(chart_rows).sort_values("Rate (%)", ascending=False)
         chart = (
@@ -931,18 +981,35 @@ def _render_overview(reports: dict) -> None:
         from html import escape as _e
         rows = []
         for product, report in reports['duplicates'].items():
-            results = report['results']
-            rate = (results['duplicates'] / results['total'] * 100) if results['total'] else 0.0
-            rows.append([
-                f"<strong>{_e(product)}</strong>",
-                f"{results['total']:,}",
-                f"{results['unique']:,}",
-                f"{results['duplicates']:,}",
-                _status_for_duplicate_rate(rate),
-                freshness_chip_html(_format_age(_extract_generated_at(report))),
-            ])
+            # Check if this is an end-conflict report
+            if product == 'DISP_S1' and 'conflict_groups' in report.get('results', {}):
+                results = report['results']
+                total = results.get('total', 0)
+                conflict_groups = results.get('conflict_groups', 0)
+                conflicting_products = results.get('conflicting_products', 0)
+                rate = (conflicting_products / total * 100) if total else 0.0
+                status = _status_for_duplicate_rate(rate)
+                rows.append([
+                    f"<strong>{_e(product)}</strong>",
+                    f"{total:,}",
+                    f"{conflict_groups:,}",
+                    f"{conflicting_products:,}",
+                    status,
+                    freshness_chip_html(_format_age(_extract_generated_at(report))),
+                ])
+            else:
+                results = report['results']
+                rate = (results['duplicates'] / results['total'] * 100) if results['total'] else 0.0
+                rows.append([
+                    f"<strong>{_e(product)}</strong>",
+                    f"{results['total']:,}",
+                    f"{results['unique']:,}",
+                    f"{results['duplicates']:,}",
+                    _status_for_duplicate_rate(rate),
+                    freshness_chip_html(_format_age(_extract_generated_at(report))),
+                ])
         _render_html_table(
-            ["Product", "Granules", "Unique", "Duplicates", "Status", "Generated"],
+            ["Product", "Granules", "Unique/Conflicts", "Duplicates/Conflicting", "Status", "Generated"],
             rows,
         )
 
@@ -952,7 +1019,7 @@ def _render_overview(reports: dict) -> None:
         from html import escape as _e
         acc_rows = []
         for product, report in reports['accountability'].items():
-            if _is_dswx_s1_report(report):
+            if _is_dswx_s1_report(report) or _is_dist_s1_report(report):
                 filtered = report.get('filtered_rtc_count', 0)
                 missing = report.get('missing_count', 0)
                 expected = report.get('expected', filtered)
@@ -1005,27 +1072,50 @@ def _render_duplicates(reports: dict) -> None:
     _render_report_meta_strip(report)
     results = report['results']
 
-    cols = st.columns(4)
-    with cols[0]:
-        sui.metric_card(title="Total granules", content=f"{results['total']:,}",
-                        description="in selected window", key=_next_key("m"))
-    with cols[1]:
-        sui.metric_card(title="Unique granules", content=f"{results['unique']:,}",
-                        description="after dedup", key=_next_key("m"))
-    with cols[2]:
-        sui.metric_card(title="Duplicates", content=f"{results['duplicates']:,}",
-                        description="older copies superseded", key=_next_key("m"))
-    with cols[3]:
-        rate = (results['duplicates'] / results['total'] * 100) if results['total'] else 0.0
-        sui.metric_card(title="Duplicate rate", content=f"{rate:.2f}%",
-                        description="duplicates ÷ total", key=_next_key("m"))
+    # Check if this is an end-conflict report
+    is_end_conflict = 'conflict_groups' in results
+
+    if is_end_conflict:
+        cols = st.columns(4)
+        with cols[0]:
+            sui.metric_card(title="Total granules", content=f"{results['total']:,}",
+                            description="in selected window", key=_next_key("m"))
+        with cols[1]:
+            sui.metric_card(title="Conflict groups", content=f"{results['conflict_groups']:,}",
+                            description="same frame+end date", key=_next_key("m"))
+        with cols[2]:
+            sui.metric_card(title="Conflicting products", content=f"{results['conflicting_products']:,}",
+                            description="different begin dates", key=_next_key("m"))
+        with cols[3]:
+            rate = (results['conflicting_products'] / results['total'] * 100) if results['total'] else 0.0
+            sui.metric_card(title="Conflict rate", content=f"{rate:.2f}%",
+                            description="conflicts ÷ total", key=_next_key("m"))
+    else:
+        cols = st.columns(4)
+        with cols[0]:
+            sui.metric_card(title="Total granules", content=f"{results['total']:,}",
+                            description="in selected window", key=_next_key("m"))
+        with cols[1]:
+            sui.metric_card(title="Unique granules", content=f"{results['unique']:,}",
+                            description="after dedup", key=_next_key("m"))
+        with cols[2]:
+            sui.metric_card(title="Duplicates", content=f"{results['duplicates']:,}",
+                            description="older copies superseded", key=_next_key("m"))
+        with cols[3]:
+            rate = (results['duplicates'] / results['total'] * 100) if results['total'] else 0.0
+            sui.metric_card(title="Duplicate rate", content=f"{rate:.2f}%",
+                            description="duplicates ÷ total", key=_next_key("m"))
 
     # Altair bar chart — one bar per date, two layers (total vs duplicates).
     by_date = results.get('by_date') or {}
     if by_date:
         _section_label("Duplicates by date")
         df = pd.DataFrame([
-            {"Date": d, "Total": by_date[d]['total'], "Duplicates": by_date[d]['duplicates']}
+            {
+                "Date": d, 
+                "Total": by_date[d].get('total', by_date[d].get('n_granules', 0)), 
+                "Duplicates": by_date[d].get('n_duplicates', 0)
+            }
             for d in sorted(by_date.keys())
         ])
         melted = df.melt('Date', var_name='Series', value_name='Count')
@@ -1045,7 +1135,27 @@ def _render_duplicates(reports: dict) -> None:
         st.altair_chart(chart, use_container_width=True)
 
     dup_list = results.get('duplicate_list') or []
-    if dup_list:
+    
+    # Show conflict details if end-conflict report
+    if is_end_conflict and 'conflicts' in results:
+        _section_label("End conflicts by frame")
+        conflicts = results['conflicts']
+        if conflicts:
+            conflict_data = []
+            for key, conf in conflicts.items():
+                conflict_data.append({
+                    "Frame": conf['frame_id'],
+                    "End Date": conf['end_dt'],
+                    "Begin Dates": ", ".join(conf['begin_dts']),
+                    "Count": conf['count']
+                })
+            df_conflicts = pd.DataFrame(conflict_data)
+            st.dataframe(df_conflicts, use_container_width=True)
+        else:
+            st.info("No end conflicts found")
+    
+    # Show duplicate list for regular reports
+    if not is_end_conflict and dup_list:
         today = datetime.now().strftime('%Y-%m-%d')
         _download_header(
             title="Duplicate granule IDs",
@@ -1084,8 +1194,15 @@ def _render_accountability(reports: dict) -> None:
         return
 
     report = reports['accountability'][selected]
+    results = _unwrap_accountability_results(report)
+    strategy = results.get('strategy', 'unknown')
+    
     if _is_dswx_s1_report(report):
         _render_dswx_s1_panel(selected, report)
+    elif _is_dist_s1_report(report):
+        _render_dist_s1_panel(selected, report)
+    elif strategy in ['date_count', 'db_based', 'forward_map', 'delegated_validator']:
+        _render_generic_strategy_panel(selected, report, strategy)
     else:
         _render_dswx_hls_panel(selected, report)
 
@@ -1129,6 +1246,82 @@ def _render_dswx_hls_panel(product: str, report: dict) -> None:
         with st.expander(f"Preview first {min(100, len(missing))} of {len(missing):,}"):
             for granule_id in missing[:100]:
                 st.code(granule_id, language=None)
+
+
+def _render_generic_strategy_panel(product: str, report: dict, strategy: str) -> None:
+    """Render panel for Chris's accountability strategies (forward_map, date_count, delegated_validator, db_based)."""
+    _render_report_meta_strip(report)
+    results = _unwrap_accountability_results(report)
+    
+    _section_label(f"Accountability summary (strategy: {strategy})")
+    
+    # Handle different result structures based on strategy
+    if strategy == 'date_count':
+        cols = st.columns(3)
+        with cols[0]:
+            sui.metric_card(title="Expected Per Day", content=f"{results.get('expected_per_day', 0)}",
+                            description="granules per day", key=_next_key("m"))
+        with cols[1]:
+            sui.metric_card(title="Missing Dates", content=f"{results.get('missing_dates', 0):,}",
+                            description="days below threshold", key=_next_key("m"))
+        with cols[2]:
+            sui.metric_card(title="Total Dates", content=f"{results.get('total_dates', 0):,}",
+                            description="date range coverage", key=_next_key("m"))
+        
+        # Show date counts if available
+        if 'date_counts' in results:
+            _section_label("Granule counts by date")
+            date_data = [{"Date": d, "Count": c} for d, c in results['date_counts'].items()]
+            df_dates = pd.DataFrame(date_data).sort_values("Date")
+            st.dataframe(df_dates, use_container_width=True)
+            
+            # Highlight missing dates
+            missing_dates = {d: c for d, c in results['date_counts'].items() 
+                           if c < results.get('expected_per_day', 1)}
+            if missing_dates:
+                _section_label(f"Dates with missing granules ({len(missing_dates)})")
+                st.json(missing_dates)
+    
+    elif strategy == 'db_based':
+        cols = st.columns(4)
+        with cols[0]:
+            sui.metric_card(title="Expected", content=f"{results.get('expected', 0):,}",
+                            description="items in database", key=_next_key("m"))
+        with cols[1]:
+            sui.metric_card(title="Actual", content=f"{results.get('actual', 0):,}",
+                            description="items in CMR", key=_next_key("m"))
+        with cols[2]:
+            sui.metric_card(title="Missing", content=f"{results.get('missing_count', 0):,}",
+                            description="items not found", key=_next_key("m"))
+        with cols[3]:
+            sui.metric_card(title="Coverage", content=f"{results.get('coverage_pct', 0):.1f}%",
+                            description="actual ÷ expected", key=_next_key("m"))
+    
+    else:  # forward_map, delegated_validator, or generic
+        cols = st.columns(3)
+        with cols[0]:
+            sui.metric_card(title="Expected", content=f"{results.get('expected', 0):,}",
+                            description="expected products", key=_next_key("m"))
+        with cols[1]:
+            sui.metric_card(title="Actual", content=f"{results.get('actual', 0):,}",
+                            description="found products", key=_next_key("m"))
+        with cols[2]:
+            sui.metric_card(title="Missing", content=f"{results.get('missing_count', 0):,}",
+                            description="missing products", key=_next_key("m"))
+        
+        if strategy == 'delegated_validator':
+            # ``st.info`` is not a context manager and requires the message
+            # as a positional arg; using ``with st.info():`` raised
+            # AttributeError every time a delegated_validator panel rendered.
+            st.info(
+                f"Validation delegated to external validator: "
+                f"{results.get('delegated', 'N/A')}"
+            )
+    
+    # Show missing items if available
+    if 'missing' in results and results['missing']:
+        _section_label(f"Missing items ({len(results['missing'])})")
+        st.json(results['missing'][:100])  # Show first 100
 
 
 def _render_dswx_s1_panel(product: str, report: dict) -> None:
@@ -1231,6 +1424,127 @@ def _render_dswx_s1_panel(product: str, report: dict) -> None:
                 )
 
     # Artifact manifest.
+    _section_label("Raw artifacts")
+    artifact_rows = []
+    for name in sorted(Path(report_dir).glob("*.json")):
+        size_kb = name.stat().st_size / 1024
+        artifact_rows.append({
+            "File": name.name,
+            "Size (KB)": f"{size_kb:,.1f}",
+        })
+    if artifact_rows:
+        sui.table(data=pd.DataFrame(artifact_rows), key=_next_key("tbl"))
+        st.caption(f"Report directory: `{report_dir}`")
+
+
+def _render_dist_s1_panel(product: str, report: dict) -> None:
+    _render_report_meta_strip(report)
+
+    _section_label("Accountability")
+    expected = report.get('expected', 0)
+    actual = report.get('actual', 0)
+    missing = report.get('missing_count', 0)
+    used = report.get('used_rtc_count', 0)
+
+    cols = st.columns(4)
+    with cols[0]:
+        sui.metric_card(title="RTC-S1 surveyed",
+                        content=f"{report.get('rtc_surveyed', 0):,}",
+                        description="deduped RTC granules",
+                        key=_next_key("m"))
+    with cols[1]:
+        sui.metric_card(title="RTCs used in DIST-S1",
+                        content=f"{used:,}",
+                        description="from ISO XML PostRtcOperaIds",
+                        key=_next_key("m"))
+    with cols[2]:
+        sui.metric_card(title="Missing RTCs",
+                        content=f"{missing:,}",
+                        description="surveyed − ISO XML inputs",
+                        key=_next_key("m"))
+    with cols[3]:
+        rate = (actual / expected * 100) if expected else 0.0
+        sui.metric_card(title="Accountability rate",
+                        content=f"{rate:.2f}%",
+                        description="matched ÷ expected",
+                        key=_next_key("m"))
+
+    _section_label("DIST-S1 audit details")
+    cols = st.columns(4)
+    with cols[0]:
+        sui.metric_card(title="DIST-S1 surveyed",
+                        content=f"{report.get('dist_surveyed', 0):,}",
+                        description="ISO XML parsed",
+                        key=_next_key("m"))
+    with cols[1]:
+        sui.metric_card(title="Existing tile/time keys",
+                        content=f"{report.get('existing_tile_time_count', 0):,}",
+                        description="parsed from DIST IDs",
+                        key=_next_key("m"))
+    with cols[2]:
+        sui.metric_card(title="Burst DB mode",
+                        content="On" if report.get('burst_db_enabled') else "CMR-only",
+                        description="optional RTC → tile mapping",
+                        key=_next_key("m"))
+    with cols[3]:
+        sui.metric_card(title="Missing product times",
+                        content=f"{report.get('missing_dist_product_count', 0):,}",
+                        description="after existing product filter",
+                        key=_next_key("m"))
+
+    missing_rtcs = report.get('missing') or []
+    if missing_rtcs:
+        today = datetime.now().strftime('%Y-%m-%d')
+        _download_header(
+            title="Missing RTC products",
+            count=len(missing_rtcs),
+            file_base=f"{product}_missing_rtcs_{today}",
+            items=missing_rtcs,
+            include_json=True,
+        )
+        with st.expander(f"Preview first {min(100, len(missing_rtcs))} of {len(missing_rtcs):,}"):
+            for granule_id in missing_rtcs[:100]:
+                st.code(granule_id, language=None)
+
+    missing_dist = report.get('missing_dist_products') or []
+    if missing_dist:
+        today = datetime.now().strftime('%Y-%m-%d')
+        _download_header(
+            title="Potential missing DIST-S1 product times",
+            count=len(missing_dist),
+            file_base=f"{product}_missing_product_times_{today}",
+            items=missing_dist,
+            include_json=True,
+        )
+        with st.expander(f"Preview first {min(100, len(missing_dist))} of {len(missing_dist):,}"):
+            for value in missing_dist[:100]:
+                st.code(value, language=None)
+
+    report_dir = report.get('_report_dir')
+    if not report_dir:
+        return
+
+    rows_path = Path(report_dir) / "missing_dist_product_rows.json"
+    if rows_path.exists():
+        _section_label("Potential missing products by tile/time group")
+        try:
+            with open(rows_path) as f:
+                rows = json.load(f)
+        except (OSError, json.JSONDecodeError) as err:
+            sui.alert(title="Could not read DIST-S1 rows", description=str(err),
+                      key=_next_key("alert"))
+            rows = []
+        if rows:
+            table_rows = [
+                {
+                    "Tile/acq group": row.get('mgrs_tile_id_acq_group'),
+                    "RTC count": len(row.get('rtc_granules') or []),
+                    "Product times": len(row.get('product_id_time') or []),
+                }
+                for row in rows[:200]
+            ]
+            sui.table(data=pd.DataFrame(table_rows), key=_next_key("tbl"))
+
     _section_label("Raw artifacts")
     artifact_rows = []
     for name in sorted(Path(report_dir).glob("*.json")):

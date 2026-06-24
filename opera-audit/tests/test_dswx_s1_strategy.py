@@ -237,26 +237,23 @@ def test_expand_with_cycle_indices_groups_by_tile_cycle_sensor():
 # ---------------------------------------------------------------------------
 
 
-def test_dedupe_skips_unparseable_ids_and_logs_warning(caplog):
-    """Regression: un-matchable granule IDs must be skipped, not abort the survey."""
+def test_dedupe_raises_on_unparseable_ids():
+    """Phase 1: Riley's original raises RuntimeError on un-matchable granule IDs."""
     import re
     from opera_accountability import CONFIG
+    import pytest
 
     pattern = re.compile(CONFIG['products']['RTC_S1']['pattern'])
     unique_fields = tuple(CONFIG['products']['RTC_S1']['unique_fields'])
 
     records = [
         {'id': RTC_A_S1A},
-        {'id': 'totally-bogus-granule-id'},  # should be skipped with a warning
+        {'id': 'totally-bogus-granule-id'},  # should raise RuntimeError
         {'id': RTC_B_S1A},
     ]
 
-    with caplog.at_level('WARNING', logger=survey.logger.name):
-        deduped = survey._dedupe_by_creation_ts(records, pattern, unique_fields)
-
-    ids = {r['id'] for r in deduped}
-    assert ids == {RTC_A_S1A, RTC_B_S1A}
-    assert any('totally-bogus-granule-id' in rec.message for rec in caplog.records)
+    with pytest.raises(RuntimeError, match="Failed to parse granule ID totally-bogus-granule-id"):
+        survey._dedupe_by_creation_ts(records, pattern, unique_fields)
 
 
 def test_dedupe_keeps_latest_creation_ts():

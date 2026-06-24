@@ -86,39 +86,16 @@ _INPUT_TAG_SUFFIXES = (
 def reduce_input_rtc_list(input_files: Iterable[str]) -> list[str]:
     """Normalize DSWx-S1 ``InputGranules`` entries to unique RTC granule IDs.
 
-    DSWx-S1 CMR records list their inputs as per-band / per-polarization files
-    (e.g. ``...S1A_30_v1.0_VV.tif``). This helper:
-
-    1. Strips one known file extension (``.tif`` / ``.tiff`` / ``.h5``).
-    2. Strips one known product/polarization tag (``_VV``, ``_HH+HV``,
-       ``_mask``, etc.).
-    3. Validates the result against the RTC granule regex; unrecognized
-       entries (e.g. DEM tiles) are preserved as-is so that downstream code
-       (``mapping.analyze``'s ``rtc_to_id_tuple`` try/except) can filter them.
-    4. Dedupes so there is one entry per input RTC granule.
-
-    Unrecognized suffixes are logged at DEBUG level to aid future debugging.
+    Exact port of Riley's implementation: chains removesuffix() calls to strip
+    file extensions (.h5, .tif) and polarization/product tags (_VV, _HH, _VH,
+    _HV, _mask), then deduplicates.
     """
-    reduced: set[str] = set()
-    for raw in input_files:
-        name = raw
-        for suffix in _INPUT_EXT_SUFFIXES:
-            if name.endswith(suffix):
-                name = name[: -len(suffix)]
-                break
-        for suffix in _INPUT_TAG_SUFFIXES:
-            if name.endswith(suffix):
-                name = name[: -len(suffix)]
-                break
-        if _RTC_GRANULE_PATTERN.match(name) is None and name != raw:
-            logger.debug(
-                "reduce_input_rtc_list: stripped form %r (from %r) does not "
-                "match RTC regex; keeping raw entry for downstream filtering.",
-                name, raw,
-            )
-            name = raw
-        reduced.add(name)
-    return list(reduced)
+    return list(set(
+        [g.removesuffix('.h5').removesuffix('.tif').removesuffix('.tiff')
+          .removesuffix('_VV+VH').removesuffix('_HH+HV')
+          .removesuffix('_VH').removesuffix('_HV').removesuffix('_VV')
+          .removesuffix('_HH').removesuffix('_mask') for g in input_files]
+    ))
 
 
 @lru_cache(maxsize=1_000_000)

@@ -34,6 +34,12 @@ products:
         UAT: ""
       hls_pattern: '(?P<id>(?P<product_shortname>HLS[.](?P<source>[SL])30)[.](?P<tile_id>T[^\W_]{5})[.](?P<acquisition_ts>\d{7}T\d{6})[.](?P<collection_version>v\d+[.]\d+))'
       l9_cutoff_date: "2025-10-01T00:04:07.135000Z"
+      # Alternative: forward_map strategy configuration (generic approach)
+      forward_map:
+        input_ccid:
+          PROD: "C2021957295-LPCLOUD"  # HLS S30
+          UAT: ""
+        input_product_type: "HLS"
 
   RTC_S1:
     name: "Radiometric Terrain Corrected - Sentinel-1"
@@ -89,6 +95,30 @@ products:
       # Thread pool size for SQLite tile-set lookups.
       tile_set_workers: 8
 
+  DIST_S1:
+    name: "Disturbance - Sentinel-1"
+    ccid:
+      PROD: "C4090131664-ASF"
+      UAT: ""
+    collection:
+      PROD:
+        provider: "ASF"
+        short_name: "OPERA_L3_DIST-ALERT-S1_V1"
+      UAT:
+        provider: "ASF"
+        short_name: "OPERA_L3_DIST-ALERT-S1_V1"
+    pattern: '(?P<id>OPERA_L3_DIST(?:-ALERT)?-S1_(?P<tile_id>T?[^\W_]+)_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_S1[A-D]?_30_v\d+([.]\d+)?)'
+    unique_fields: ["tile_id", "acquisition_ts"]
+    aggregation_field: "acquisition_ts"
+    aggregation_format: "%Y%m%dT%H%M%SZ"
+    creation_field: "creation_ts"
+    accountability:
+      enabled: true
+      strategy: "dist_s1"
+      max_concurrent_iso_downloads: 10
+      max_iso_retries: 3
+      prefer_s3_iso_xml: false
+
   DISP_S1:
     name: "Displacement - Sentinel-1"
     ccid:
@@ -100,7 +130,22 @@ products:
     aggregation_format: "%Y%m%dT%H%M%SZ"
     creation_field: "creation_ts"
     accountability:
-      enabled: false
+      enabled: true
+      strategy: "delegated_validator"
+      delegated_validator:
+        # External validator integration (optional but recommended)
+        # To enable: Set validator_module and validator_function
+        # Example: If opera-sds-pcm is available in your Python path:
+        #   validator_module: "report.opera_validator.opv_disp_s1"
+        #   validator_function: "validate_disp_s1"
+        #   validator_path: "/path/to/opera-sds-pcm"  # Optional: adds to sys.path
+        # Without a validator, falls back to basic granule counting
+        validator_module: null
+        validator_function: null
+        validator_path: null
+        # Validator parameters (passed when validator is enabled)
+        processing_mode: "forward"  # forward, reprocessing, or historical
+        k: 15  # Lookback parameter for DISP-S1 validation
 
   TROPO:
     name: "Troposphere Zenith Delay"
@@ -113,7 +158,10 @@ products:
     aggregation_format: "%Y%m%dT%H%M%SZ"
     creation_field: "creation_ts"
     accountability:
-      enabled: false
+      enabled: true
+      strategy: "date_count"
+      date_count:
+        expected_per_day: 4
 
   DIST_ALERT_HLS:
     name: "Disturbance Alert - HLS"
@@ -138,6 +186,8 @@ products:
     aggregation_field: "validity_ts"
     aggregation_format: "%Y%m%d"
     # No creation_field: static products have no creation timestamp in the granule ID.
+    # Static products: use native-id query instead of temporal range query.
+    static: true
     accountability:
       enabled: false
 
@@ -151,5 +201,33 @@ products:
     aggregation_field: "validity_ts"
     aggregation_format: "%Y%m%d"
     # No creation_field: static products have no creation timestamp in the granule ID.
+    # Static products: use native-id query instead of temporal range query.
+    static: true
     accountability:
       enabled: false
+
+  DISP_S1_STATIC:
+    name: "Displacement Static Layers - Sentinel-1"
+    ccid:
+      PROD: "C3959290248-ASF"  # DISP-S1-STATIC collection
+      UAT: ""
+    collection:
+      PROD:
+        provider: "ASF"
+        short_name: "OPERA_L3_DISP-S1-STATIC_V1"
+      UAT:
+        provider: "ASF"
+        short_name: "OPERA_L3_DISP-S1-STATIC_V1"
+    pattern: '(?P<id>OPERA_L3_DISP-S1-STATIC_(?P<frame_id>F\d+)_(?P<validity_ts>\d{8})_(?P<sensor>S1[A-D])_v\d+[.]\d+)'
+    unique_fields: ["frame_id", "validity_ts", "sensor"]
+    aggregation_field: "validity_ts"
+    aggregation_format: "%Y%m%d"
+    static: true
+    accountability:
+      enabled: true
+      strategy: "db_based"
+      db_based:
+        # Path to frame-to-burst DB JSON file (opera-s1-disp-frame-to-burst.json)
+        # Can be overridden with --db-path CLI option or environment variable
+        db_path: "data/opera-s1-disp-frame-to-burst-sample.json"
+        filter_north_america: true

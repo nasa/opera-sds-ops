@@ -20,8 +20,25 @@ CMR_URLS = {
 
 
 def _fatal_code(err: requests.exceptions.RequestException) -> bool:
-    """Check if error code should stop retrying."""
-    return err.response.status_code not in [401, 418, 429, 500, 502, 503, 504]
+    """Decide whether ``backoff`` should give up on this exception.
+
+    ``backoff`` invokes this from inside the retry loop, so raising here
+    aborts the loop with an ``AttributeError`` instead of retrying. Two
+    classes of exceptions can reach us:
+
+    * **HTTP errors** (``HTTPError`` raised by ``raise_for_status``) carry a
+      populated ``response`` — keep retrying for the standard set of
+      transient / throttling status codes.
+    * **Transport errors** (``ConnectionError``, ``Timeout``, ``DNS``…)
+      have ``response is None``. These are *always* transient by nature, so
+      keep retrying until ``max_time`` is hit. Returning ``False`` here was
+      the missing case that previously bubbled an ``AttributeError`` mid
+      pagination.
+    """
+    response = getattr(err, 'response', None)
+    if response is None:
+        return False
+    return response.status_code not in [401, 418, 429, 500, 502, 503, 504]
 
 
 def _backoff_logger(details):
@@ -70,7 +87,8 @@ def query_cmr(
     collection_id: str,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
-    venue: str = 'PROD'
+    venue: str = 'PROD',
+    skip_temporal: bool = False,
 ) -> list[dict]:
     """
     Query CMR for granules with pagination and retry logic.
@@ -80,6 +98,7 @@ def query_cmr(
         start_date: Start of temporal range (optional)
         end_date: End of temporal range (optional)
         venue: 'PROD' or 'UAT'
+        skip_temporal: If True, omit temporal filter (for static products with no time extent)
 
     Returns:
         List of granule dicts (CMR UMM JSON format)
@@ -92,8 +111,8 @@ def query_cmr(
         'page_size': CONFIG['cmr']['page_size']
     }
 
-    # Add temporal range if specified
-    if start_date or end_date:
+    # Add temporal range if specified and not skipped
+    if not skip_temporal and (start_date or end_date):
         start_str = start_date.strftime('%Y-%m-%dT%H:%M:%SZ') if start_date else ''
         end_str = end_date.strftime('%Y-%m-%dT%H:%M:%SZ') if end_date else ''
         params['temporal[]'] = f'{start_str},{end_str}'
@@ -128,6 +147,57 @@ def query_cmr(
         sys.stderr.flush()
 
     # Final newline
+    print(file=sys.stderr)
+
+    logger.info(f"Retrieved {len(granules)} granules from CMR")
+    return granules
+
+
+def query_cmr_by_short_name(
+    short_name: str,
+    provider: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    venue: str = 'PROD'
+) -> list[dict]:
+    cmr_url = CMR_URLS[venue]
+    granules = []
+
+    params = {
+        'short_name': short_name,
+        'page_size': CONFIG['cmr']['page_size']
+    }
+    if provider:
+        params['provider'] = provider
+
+    if start_date or end_date:
+        start_str = start_date.strftime('%Y-%m-%dT%H:%M:%SZ') if start_date else ''
+        end_str = end_date.strftime('%Y-%m-%dT%H:%M:%SZ') if end_date else ''
+        params['temporal[]'] = f'{start_str},{end_str}'
+
+    start_time = time.time()
+
+    print(f"\rQuerying CMR ({venue}): 0 granules retrieved | 00:00", end='', file=sys.stderr)
+    sys.stderr.flush()
+
+    page_granules, search_after = _do_cmr_request(cmr_url, params)
+    granules.extend(page_granules)
+
+    elapsed = int(time.time() - start_time)
+    elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+    print(f"\rQuerying CMR ({venue}): {len(granules)} granules retrieved | {elapsed_str}", end='', file=sys.stderr)
+    sys.stderr.flush()
+
+    while search_after:
+        headers = {'CMR-Search-After': search_after}
+        page_granules, search_after = _do_cmr_request(cmr_url, params, headers)
+        granules.extend(page_granules)
+
+        elapsed = int(time.time() - start_time)
+        elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+        print(f"\rQuerying CMR ({venue}): {len(granules)} granules retrieved | {elapsed_str}", end='', file=sys.stderr)
+        sys.stderr.flush()
+
     print(file=sys.stderr)
 
     logger.info(f"Retrieved {len(granules)} granules from CMR")
