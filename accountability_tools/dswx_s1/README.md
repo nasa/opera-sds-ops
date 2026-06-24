@@ -224,3 +224,76 @@ This script will output the expanded mapping in both JSON and pickle format: `mi
   ...
 }
 ```
+
+## 5 - check_burst_coverage.py
+
+check_burst_coverage.py reduces the output of add_cycle_indices.py by verifying the identified products have sufficient
+actual RTC coverage to trigger a DSWx-S1 product. It then further reduces this list of valid tile sets to common RTCs to
+help prevent multiple triggerings of the same products.
+
+The script will output 2 JSON files: `missing_mgrs_sets_by_coverage.json` with the valid and dropped tile set(s) and how
+many RTCs were found to be covering them, and `missing_rtc_mgrs_set_mappings_with_sufficient_coverage_reduced.json` for 
+the final, reduced set of valid RTC native IDs to trigger.
+
+```json
+{
+  "valid": {
+    "count": 1013,
+    "tile_sets": [
+      {
+        "MS_1_56$366$S1C": {
+          "coverage": 22,
+          "native-id": "OPERA_L2_RTC-S1_T001-000659-IW1_20260117T182950Z_20260508T205944Z_S1C_30_v1.0"
+        }
+      },
+      {
+        "MS_30_57$366$S1C": {
+          "coverage": 37,
+          "native-id": "OPERA_L2_RTC-S1_T030-062955-IW1_20260119T181340Z_20260508T205945Z_S1C_30_v1.0"
+        }
+      },
+      ...
+    ]
+  },
+  "dropped": {
+    "count": 29,
+    "tile_sets": [
+      {
+        "MS_72_43$366$S1A": {
+          "coverage": 1,
+          "native-id": "OPERA_L2_RTC-S1_T072-152952-IW3_20260116T151158Z_20260120T163431Z_S1A_30_v1.0"
+        }
+      },
+      {
+        "MS_78_18$365$S1A": {
+          "coverage": 1,
+          "native-id": "OPERA_L2_RTC-S1_T078-165567-IW3_20260105T005154Z_20260508T190732Z_S1A_30_v1.0"
+        }
+      },
+      ...
+    ]
+  }
+}
+```
+
+
+```json
+{
+  "OPERA_L2_RTC-S1_T001-000663-IW1_20260117T183001Z_20260508T205944Z_S1C_30_v1.0": [
+    "MS_1_56$366$S1C",
+    "MS_1_57$366$S1C"
+  ],
+  "OPERA_L2_RTC-S1_T030-062955-IW1_20260119T181340Z_20260508T205945Z_S1C_30_v1.0": [
+    "MS_30_57$366$S1C",
+    "MS_30_56$366$S1C"
+  ],
+  ...
+  "OPERA_L2_RTC-S1_T170-363263-IW3_20260105T081913Z_20260508T204807Z_S1C_30_v1.0": [
+    "MS_170_26$364$S1C"
+  ],
+  "OPERA_L2_RTC-S1_T170-363685-IW1_20260105T083835Z_20260105T164137Z_S1C_30_v1.0": [
+    "MS_170_58$364$S1C"
+  ]
+}        
+
+```
