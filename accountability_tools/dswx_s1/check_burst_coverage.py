@@ -151,7 +151,7 @@ def _tile_set_has_sufficient_coverage(tile_set_id_cyc_sensor, identified_rtcs, t
 
     coverage = _query_for_rtcs_from_native_id(identified_rtcs[0], burst_ids)
 
-    return coverage >= COVERAGE_THRESHOLD, tile_set_id_cyc_sensor, coverage
+    return coverage >= COVERAGE_THRESHOLD, tile_set_id_cyc_sensor, coverage, len(burst_ids)
 
 
 def _reduce_to_common(tile_set_mapping):
@@ -206,12 +206,12 @@ def main():
                 futures.append(executor.submit(_tile_set_has_sufficient_coverage, k, v, thread_local))
 
             for future in as_completed(futures):
-                is_valid, tile_set_id, coverage = future.result()
+                is_valid, tile_set_id, coverage, expected_burst_ids = future.result()
 
                 if is_valid:
-                    valid.append((tile_set_id, coverage))
+                    valid.append((tile_set_id, coverage, expected_burst_ids))
                 else:
-                    dropped.append((tile_set_id, coverage))
+                    dropped.append((tile_set_id, coverage, expected_burst_ids))
                 pbar.update()
 
     logger.info(f'Dropped {len(dropped):,} missing mgrs set cycles ({len(valid):,} valid sets remaining)')
@@ -223,9 +223,10 @@ def main():
                 {
                     ts_id: {
                         'coverage': coverage,
+                        'expected_burst_ids': expected_burst_ids,
                         'native-id': missing[ts_id][0]
                     }
-                } for ts_id, coverage in valid
+                } for ts_id, coverage, expected_burst_ids in valid
             ]
         },
         'dropped': {
@@ -234,9 +235,10 @@ def main():
                 {
                     ts_id: {
                         'coverage': coverage,
+                        'expected_burst_ids': expected_burst_ids,
                         'native-id': missing[ts_id][0]
                     }
-                } for ts_id, coverage in dropped
+                } for ts_id, coverage, expected_burst_ids in dropped
             ]
         },
     }
