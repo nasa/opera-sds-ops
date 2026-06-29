@@ -131,14 +131,7 @@ def _query_for_rtcs_from_native_id(native_id, burst_ids):
 def _tile_set_has_sufficient_coverage(tile_set_id_cyc_sensor, identified_rtcs, thread_local):
     tile_set_id = tile_set_id_cyc_sensor.split('$')[0]
 
-    if len(identified_rtcs) >= COVERAGE_THRESHOLD:
-        logger.info(f'Tile set {tile_set_id_cyc_sensor} already has sufficient coverage from missing RTCs')
-        return True, tile_set_id_cyc_sensor, len(identified_rtcs)
-
-    logger.info(f'Querying CMR to check absolute coverage for tile set {tile_set_id_cyc_sensor}')
-
     conn: sqlite3.Connection = thread_local.conn
-
     cursor = conn.cursor()
     cursor.execute(QUERY, (tile_set_id,))
 
@@ -148,6 +141,12 @@ def _tile_set_has_sufficient_coverage(tile_set_id_cyc_sensor, identified_rtcs, t
 
     burst_ids = json.loads(row[0].replace("'", '"'))
     burst_ids = [bid.replace('_', '-').upper() for bid in burst_ids]
+
+    if len(identified_rtcs) >= COVERAGE_THRESHOLD:
+        logger.info(f'Tile set {tile_set_id_cyc_sensor} already has sufficient coverage from missing RTCs')
+        return True, tile_set_id_cyc_sensor, len(identified_rtcs), len(burst_ids)
+
+    logger.info(f'Querying CMR to check absolute coverage for tile set {tile_set_id_cyc_sensor}')
 
     coverage = _query_for_rtcs_from_native_id(identified_rtcs[0], burst_ids)
 
