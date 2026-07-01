@@ -21,19 +21,19 @@ uv pip install -e ".[dist_s1]"          # DIST-S1 S3 ISO-XML access
 
 ## Supported Products
 
-| Product | Duplicates | Accountability | Strategy | Notes |
-|---------|-----------|----------------|----------|-------|
-| DSWX_HLS | yes | yes | `dswx_hls` / `forward_map` | Chris |
-| RTC_S1 | yes | no | — | Riley |
-| CSLC_S1 | yes | no | — | Riley |
-| DSWX_S1 | yes | yes | `dswx_s1` | Riley, requires `--mgrs-db` |
-| DIST_S1 | yes | yes | `dist_s1` | Kevin, uses ISO-XML extraction |
-| DISP_S1 | yes | yes | `delegated_validator` | Gerald + Chris, supports `--check-end-conflicts` |
-| TROPO | yes | yes | `date_count` | Chris, counts by date |
-| DISP_S1_STATIC | yes | yes | `db_based` | Chris, sample DB included |
-| DIST_ALERT_HLS | yes | no | — | Riley |
-| CSLC_S1_STATIC | yes | no | — | Riley |
-| RTC_S1_STATIC | yes | no | — | Riley |
+| Product | Duplicates | Accountability | Burst Coverage | Strategy | Notes |
+|---------|-----------|----------------|----------------|----------|-------|
+| DSWX_HLS | yes | yes | — | `dswx_hls` / `forward_map` | Chris |
+| RTC_S1 | yes | no | yes | — | Riley |
+| CSLC_S1 | yes | no | yes | — | Riley |
+| DSWX_S1 | yes | yes | — | `dswx_s1` | Riley, requires `--mgrs-db` |
+| DIST_S1 | yes | yes | — | `dist_s1` | Kevin, uses ISO-XML extraction |
+| DISP_S1 | yes | yes | — | `delegated_validator` | Gerald + Chris, supports `--check-end-conflicts` |
+| TROPO | yes | yes | — | `date_count` | Chris, counts by date |
+| DISP_S1_STATIC | yes | yes | — | `db_based` | Chris, sample DB included |
+| DIST_ALERT_HLS | yes | no | — | — | Riley |
+| CSLC_S1_STATIC | yes | no | — | — | Riley |
+| RTC_S1_STATIC | yes | no | — | — | Riley |
 
 **Note on products without accountability:** 5 products (RTC_S1, CSLC_S1, CSLC_S1_STATIC, RTC_S1_STATIC, DIST_ALERT_HLS) are **intermediate inputs** or **static layers** where duplicate detection is sufficient for operational monitoring. See README.md "Why Some Products Don't Have Accountability" for detailed explanation.
 
@@ -115,8 +115,32 @@ Requires `opensearch-py` (`pip install -e ".[grq]"`). Each product's GRQ index p
 ### SLC Burst-Level Coverage Audit
 
 ```bash
-opera-audit burst-coverage --start 2026-02-01 --end 2026-02-07 --save
+# Basic burst coverage audit (CSLC-S1 + RTC-S1)
+opera-audit burst-coverage \
+    --start 2026-02-01T00:00:00Z --end 2026-02-07T23:59:59Z \
+    --geojson north_america.geojson --save
+
+# CSLC-S1 only, save to custom directory
+opera-audit burst-coverage \
+    --start 2026-02-01T00:00:00Z --end 2026-02-07T23:59:59Z \
+    --geojson north_america.geojson --no-rtc \
+    --save --output-dir /path/to/output
+
+# Low-memory mode for long date ranges (streams to JSONL)
+opera-audit burst-coverage \
+    --start 2026-01-01T00:00:00Z --end 2026-06-30T23:59:59Z \
+    --geojson north_america.geojson \
+    --low-memory --output results.jsonl --chunk-days 30
+
+# Multiple polarizations
+opera-audit burst-coverage \
+    --start 2026-02-01T00:00:00Z --end 2026-02-07T23:59:59Z \
+    --geojson north_america.geojson --polarizations VV,VH --save
 ```
+
+When `--save` is used, results are written to
+`<output-dir>/reports/burst_coverage/<timestamp>.json` and automatically
+picked up by the dashboard's Burst Coverage tab.
 
 Replaces the deprecated `cmr_audit_slc.py`. Requires `shapely` (`pip install -e ".[burst_coverage]"`) and EDL credentials.
 
@@ -240,13 +264,14 @@ opera-audit dashboard --data-dir /path/to/output
 ```
 
 Opens browser to `http://localhost:8501` showing:
-- **Overview** — health metrics across all products
+- **Overview** — health metrics across all products (duplicates, accountability, and burst coverage)
 - **Duplicates** — charts and tables per product
 - **Accountability** — missing granule lists, rates, strategy-specific panels
+- **Burst Coverage** — per-product coverage %, found vs missing charts, missing burst detail tables with export
 
 ## Output Files
 
-Reports are saved under `./output/reports/{duplicates,accountability}/{PRODUCT}/`.
+Reports are saved under `./output/reports/{duplicates,accountability,burst_coverage}/`.
 
 ### Duplicates Report JSON
 
@@ -291,6 +316,43 @@ Reports are saved under `./output/reports/{duplicates,accountability}/{PRODUCT}/
 ```
 
 Sibling files: `rtc_survey.json`, `dswx_survey.json`, `missing_rtc_products.json`, `rtc_to_dswx_map.json`.
+
+### Burst Coverage Report
+
+`./output/reports/burst_coverage/2026-05-12_10-30-00.json`
+
+```json
+{
+  "metadata": {
+    "start_datetime": "2026-05-05T00:00:00+00:00",
+    "end_datetime": "2026-05-12T23:59:59+00:00",
+    "geojson": "north_america.geojson",
+    "slc_count": 42,
+    "total_bursts_raw": 200,
+    "unique_bursts": 150,
+    "polarizations": ["VV"],
+    "generated_at": "2026-05-12T10:30:00"
+  },
+  "products": {
+    "CSLC-S1": {
+      "expected_count": 150,
+      "found_count": 145,
+      "missing_count": 5,
+      "coverage_percent": 96.67,
+      "found": ["..."],
+      "missing": [
+        {
+          "burst_pattern": "T064-135524-IW1",
+          "acquisition_time": "2026-05-07T12:00:00",
+          "platform": "S1A",
+          "polarization": "VV",
+          "slc_native_id": "S1A_IW_SLC__1SDV_..."
+        }
+      ]
+    }
+  }
+}
+```
 
 ## Testing
 
