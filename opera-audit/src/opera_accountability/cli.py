@@ -1088,6 +1088,8 @@ def burst_coverage(
     do_rtc: bool = typer.Option(True, help="Check RTC-S1 coverage"),
     polarizations: str = typer.Option("VV", help="Comma-separated polarizations (e.g. VV,VH)"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path"),
+    save: bool = typer.Option(False, "--save", help="Save report to reports/burst_coverage/ for dashboard"),
+    output_dir: str = typer.Option("./output", "--output-dir", help="Output directory (used with --save)"),
     low_memory: bool = typer.Option(False, help="Stream results to JSONL (for long date ranges)"),
     chunk_days: int = typer.Option(30, help="Days per chunk in low-memory mode"),
     buffer_deg: float = typer.Option(0.5, help="Buffer in degrees to expand GeoJSON boundary"),
@@ -1178,6 +1180,19 @@ def burst_coverage(
 
     if low_memory:
         console.print(f"\nDetailed results written to: {output_path}")
+
+    # Save to reports directory for dashboard
+    if save:
+        import json as _json
+        reports_dir = Path(output_dir) / "reports" / "burst_coverage"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        report_path = reports_dir / f"{timestamp}.json"
+        # Add generated_at to metadata for dashboard freshness display
+        results.setdefault("metadata", {})["generated_at"] = datetime.now().isoformat()
+        with open(report_path, "w") as f:
+            _json.dump(results, f, indent=2, default=str)
+        console.print(f"[cyan]Report saved to {report_path}[/cyan]")
 
 
 @app.command()

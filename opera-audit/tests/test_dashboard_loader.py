@@ -34,7 +34,7 @@ def _write_json(path: Path, data) -> None:
 
 def test_load_reports_empty_when_no_reports_dir(tmp_path: Path):
     reports = load_reports(tmp_path)
-    assert reports == {"duplicates": {}, "accountability": {}}
+    assert reports == {"duplicates": {}, "accountability": {}, "burst_coverage": {}}
 
 
 def test_load_reports_flat_dswx_hls_layout(tmp_path: Path):
@@ -331,6 +331,7 @@ def test_overview_topline_handles_disp_s1_end_conflict_reports(monkeypatch):
             },
         },
         "accountability": {},
+        "burst_coverage": {},
     }
 
     # Must not raise.
@@ -369,6 +370,7 @@ def test_overview_chart_reads_results_wrapper(monkeypatch):
             },
         },
         "accountability": {},
+        "burst_coverage": {},
     }
 
     dash._render_overview(reports)
@@ -410,6 +412,7 @@ def test_overview_chart_reads_end_conflicts_for_disp_s1(monkeypatch):
             },
         },
         "accountability": {},
+        "burst_coverage": {},
     }
 
     dash._render_overview(reports)
@@ -451,6 +454,72 @@ def test_delegated_validator_panel_does_not_use_st_info_as_context_manager(monke
     dash._render_generic_strategy_panel("DISP_S1", report, "delegated_validator")
     assert len(info_calls) == 1
     assert "delegated" in info_calls[0].lower()
+
+
+def test_load_reports_burst_coverage_layout(tmp_path: Path):
+    """Burst-coverage: ``reports/burst_coverage/<timestamp>.json`` flat files."""
+    bc_dir = tmp_path / "reports" / "burst_coverage"
+    report_data = {
+        "metadata": {
+            "start_datetime": "2026-01-01T00:00:00Z",
+            "end_datetime": "2026-01-07T23:59:59Z",
+            "geojson": "test.geojson",
+            "slc_count": 42,
+            "total_bursts_raw": 200,
+            "unique_bursts": 150,
+            "polarizations": ["VV"],
+        },
+        "products": {
+            "CSLC-S1": {
+                "expected_count": 150,
+                "found_count": 145,
+                "missing_count": 5,
+                "coverage_percent": 96.67,
+            },
+            "RTC-S1": {
+                "expected_count": 150,
+                "found_count": 148,
+                "missing_count": 2,
+                "coverage_percent": 98.67,
+            },
+        },
+    }
+    _write_json(bc_dir / "2026-01-07_12-00-00.json", report_data)
+
+    reports = load_reports(tmp_path)
+    assert "2026-01-07_12-00-00" in reports["burst_coverage"]
+    loaded = reports["burst_coverage"]["2026-01-07_12-00-00"]
+    assert loaded["metadata"]["slc_count"] == 42
+    assert loaded["products"]["CSLC-S1"]["coverage_percent"] == 96.67
+
+
+def test_overview_with_burst_coverage_reports(monkeypatch):
+    """Overview tab should render without errors when burst_coverage reports
+    are present alongside duplicates and accountability."""
+    from opera_accountability import dashboard as dash
+
+    _make_streamlit_stub(monkeypatch)
+
+    reports = {
+        "duplicates": {},
+        "accountability": {},
+        "burst_coverage": {
+            "2026-01-07_12-00-00": {
+                "metadata": {"slc_count": 10, "unique_bursts": 50},
+                "products": {
+                    "CSLC-S1": {
+                        "expected_count": 50,
+                        "found_count": 48,
+                        "missing_count": 2,
+                        "coverage_percent": 96.0,
+                    },
+                },
+            },
+        },
+    }
+
+    # Must not raise.
+    dash._render_overview(reports)
 
 
 def test_status_pill_uses_material_symbol_icon_names():

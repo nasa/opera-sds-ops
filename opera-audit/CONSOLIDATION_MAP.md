@@ -416,8 +416,15 @@ tools/ops/cmr_audit/slc_annotation_extract.py   (branch: OPERA-2518)
 
 **CLI:**
 ```bash
-opera-audit burst-coverage --start <date> --end <date> [--save] [--output-dir <dir>]
+opera-audit burst-coverage --start <date> --end <date> \
+    --geojson <path-or-url> [--save] [--output-dir <dir>] \
+    [--no-cslc] [--no-rtc] [--polarizations VV,VH] \
+    [--low-memory] [--chunk-days 30] [--output <file>]
 ```
+
+When ``--save`` is passed, results are written to
+``<output-dir>/reports/burst_coverage/<timestamp>.json`` so the dashboard can
+pick them up automatically.
 
 **Optional dependency:** `shapely>=2.0.0` (install with `pip install -e ".[burst_coverage]"`)
 
@@ -451,7 +458,10 @@ opera-audit burst-coverage --start <date> --end <date> [--save] [--output-dir <d
   - Streamlit-based interactive dashboard
   - Visualizations: Altair charts (replacing Riley's static Matplotlib)
   - Product selection, date range filtering
-  - Accountability and duplicate detection results
+  - Four tabs: Overview, Duplicates, Accountability, Burst Coverage
+  - Burst coverage tab: coverage % charts, found vs missing stacked bars,
+    missing-burst detail tables with export
+  - Loads reports from `reports/{duplicates,accountability,burst_coverage}/`
 
 ### Recovery Files
 - `src/opera_accountability/recovery_file.py`
@@ -469,7 +479,8 @@ opera-audit burst-coverage --start <date> --end <date> [--save] [--output-dir <d
     - `opera-audit dashboard` - Launch Streamlit dashboard
     - `opera-audit version` - Show version
   - Options: `--venue PROD|UAT|GRQ`, `--grq-url`, `--save`, `--output-dir`,
-    `--check-end-conflicts`, `--memory-efficient`, `--recovery-format`, etc.
+    `--check-end-conflicts`, `--memory-efficient`, `--recovery-format`,
+    `--low-memory`, `--chunk-days`, etc.
 
 ---
 

@@ -56,7 +56,7 @@ def load_reports(data_dir: Path) -> dict:
         :mod:`strategies.dswx_s1.pipeline`.
     """
     reports_dir = data_dir / "reports"
-    reports = {"duplicates": {}, "accountability": {}}
+    reports = {"duplicates": {}, "accountability": {}, "burst_coverage": {}}
 
     if not reports_dir.exists():
         return reports
@@ -99,6 +99,19 @@ def load_reports(data_dir: Path) -> dict:
                 summary = json.load(f)
             summary["_report_dir"] = str(latest)
             reports["accountability"][product] = summary
+
+    # Burst coverage — flat JSON per run.
+    bc_dir = reports_dir / "burst_coverage"
+    if bc_dir.exists():
+        json_files = sorted(bc_dir.glob("*.json"), reverse=True)
+        for jf in json_files:
+            try:
+                with open(jf) as f:
+                    data = json.load(f)
+                # Use the filename stem as the report key (e.g. "2025-06-30_12-00")
+                reports["burst_coverage"][jf.stem] = data
+            except (json.JSONDecodeError, OSError):
+                continue
 
     return reports
 
@@ -688,7 +701,7 @@ def _render_header(data_dir: Path) -> None:
             '<span class="opera-badge">JPL · SDS</span>'
             '</div>'
             '<div class="opera-subtitle">'
-            'Duplicate detection &amp; accountability analysis for OPERA products'
+            'Duplicate detection, accountability &amp; burst coverage for OPERA products'
             '</div>'
             '</div>'
             '</div>'
@@ -877,12 +890,13 @@ def _download_header(title: str, count: int, file_base: str, items: list[str],
 def _render_overview(reports: dict) -> None:
     _section_label("Overview")
 
-    if not reports["duplicates"] and not reports["accountability"]:
+    if not reports["duplicates"] and not reports["accountability"] and not reports["burst_coverage"]:
         sui.alert(
             title="No reports yet",
             description=(
                 "Run `opera-audit duplicates <PRODUCT> --save` or "
-                "`opera-audit accountability <PRODUCT> --save` to generate reports."
+                "`opera-audit accountability <PRODUCT> --save` or "
+                "`opera-audit burst-coverage --save ...` to generate reports."
             ),
             key=_next_key("alert_empty"),
         )
@@ -905,7 +919,9 @@ def _render_overview(reports: dict) -> None:
     )
     total_accountability_products = len(reports["accountability"])
 
-    cols = st.columns(4)
+    total_bc_reports = len(reports["burst_coverage"])
+
+    cols = st.columns(5)
     with cols[0]:
         sui.metric_card(
             title="Duplicate reports",
@@ -933,6 +949,13 @@ def _render_overview(reports: dict) -> None:
             title="Accountability reports",
             content=f"{total_accountability_products}",
             description="product(s) with accountability analysis",
+            key=_next_key("m"),
+        )
+    with cols[4]:
+        sui.metric_card(
+            title="Burst coverage reports",
+            content=f"{total_bc_reports}",
+            description="CSLC/RTC burst audits",
             key=_next_key("m"),
         )
 
@@ -1046,6 +1069,28 @@ def _render_overview(reports: dict) -> None:
         _render_html_table(
             ["Product", "Expected", "Missing", "Rate", "Status", "Generated"],
             acc_rows,
+        )
+
+    # Burst coverage summary.
+    if reports["burst_coverage"]:
+        _section_label("Burst coverage summary")
+        from html import escape as _ebc
+        bc_rows = []
+        for report_key, report in reports["burst_coverage"].items():
+            meta = report.get("metadata", {})
+            for pt, stats in report.get("products", {}).items():
+                cov = stats.get("coverage_percent", 0)
+                bc_rows.append([
+                    f"<strong>{_ebc(pt)}</strong>",
+                    f"{stats.get('expected_count', 0):,}",
+                    f"{stats.get('found_count', 0):,}",
+                    f"{stats.get('missing_count', 0):,}",
+                    _status_for_accountability_rate(cov),
+                    freshness_chip_html(_ebc(report_key)),
+                ])
+        _render_html_table(
+            ["Product", "Expected", "Found", "Missing", "Status", "Report"],
+            bc_rows,
         )
 
 
@@ -1558,6 +1603,199 @@ def _render_dist_s1_panel(product: str, report: dict) -> None:
         st.caption(f"Report directory: `{report_dir}`")
 
 
+def _render_burst_coverage(reports: dict) -> None:
+    _section_label("Burst coverage analysis")
+
+    if not reports["burst_coverage"]:
+        sui.alert(
+            title="No burst coverage reports",
+            description=(
+                "Run `opera-audit burst-coverage --save --output-dir ./output ...` "
+                "to generate reports."
+            ),
+            key=_next_key("alert"),
+        )
+        return
+
+    # Let the user pick a report by timestamp key.
+    report_keys = list(reports["burst_coverage"].keys())
+    selected = st.selectbox(
+        "Report",
+        report_keys,
+        key="bc_report_selectbox",
+    )
+    if not selected:
+        return
+
+    report = reports["burst_coverage"][selected]
+    meta = report.get("metadata", {})
+    products = report.get("products", {})
+
+    # Meta strip
+    from html import escape as _e
+    meta_parts = []
+    if meta.get("start_datetime"):
+        meta_parts.append(f"<strong>Start:</strong> {_e(str(meta['start_datetime']))}")
+    if meta.get("end_datetime"):
+        meta_parts.append(f"<strong>End:</strong> {_e(str(meta['end_datetime']))}")
+    if meta.get("geojson"):
+        meta_parts.append(f"<strong>GeoJSON:</strong> <code>{_e(str(meta['geojson']))}</code>")
+    if meta.get("polarizations"):
+        meta_parts.append(f"<strong>Polarizations:</strong> {_e(', '.join(meta['polarizations']))}")
+    if meta_parts:
+        st.markdown(
+            '<div class="opera-metastrip"><span>'
+            + "</span><span>".join(meta_parts)
+            + "</span></div>",
+            unsafe_allow_html=True,
+        )
+
+    # Topline metrics
+    cols = st.columns(4)
+    with cols[0]:
+        sui.metric_card(
+            title="SLC granules",
+            content=f"{meta.get('slc_count', 0):,}",
+            description="Sentinel-1 SLCs in AOI",
+            key=_next_key("m"),
+        )
+    with cols[1]:
+        sui.metric_card(
+            title="Raw bursts",
+            content=f"{meta.get('total_bursts_raw', 0):,}",
+            description="before deduplication",
+            key=_next_key("m"),
+        )
+    with cols[2]:
+        sui.metric_card(
+            title="Unique bursts",
+            content=f"{meta.get('unique_bursts', 0):,}",
+            description="after deduplication",
+            key=_next_key("m"),
+        )
+    with cols[3]:
+        # Average coverage across product types
+        coverages = [p.get("coverage_percent", 0) for p in products.values()]
+        avg_cov = sum(coverages) / len(coverages) if coverages else 0
+        sui.metric_card(
+            title="Avg coverage",
+            content=f"{avg_cov:.1f}%",
+            description=f"across {len(products)} product type(s)",
+            key=_next_key("m"),
+        )
+
+    # Per-product coverage cards
+    if products:
+        _section_label("Coverage by product type")
+        prod_cols = st.columns(len(products))
+        for idx, (pt, stats) in enumerate(products.items()):
+            with prod_cols[idx]:
+                cov = stats.get("coverage_percent", 0)
+                sui.metric_card(
+                    title=pt,
+                    content=f"{cov:.1f}%",
+                    description=(
+                        f"{stats.get('found_count', 0):,} found · "
+                        f"{stats.get('missing_count', 0):,} missing · "
+                        f"{stats.get('expected_count', 0):,} expected"
+                    ),
+                    key=_next_key("m"),
+                )
+
+        # Coverage bar chart
+        chart_rows = []
+        for pt, stats in products.items():
+            chart_rows.append({
+                "Product": pt,
+                "Coverage (%)": stats.get("coverage_percent", 0),
+                "Found": stats.get("found_count", 0),
+                "Missing": stats.get("missing_count", 0),
+                "Expected": stats.get("expected_count", 0),
+            })
+        if chart_rows:
+            chart_df = pd.DataFrame(chart_rows)
+            chart = (
+                alt.Chart(chart_df)
+                .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+                .encode(
+                    x=alt.X("Product:N", title=None),
+                    y=alt.Y("Coverage (%):Q", scale=alt.Scale(domain=[0, 100])),
+                    color=alt.value(OPERA_ACCENT),
+                    tooltip=["Product", "Coverage (%)", "Found", "Missing", "Expected"],
+                )
+                .configure(**_altair_theme()["config"])
+                .properties(height=220)
+            )
+            st.altair_chart(chart, use_container_width=True)
+
+        # Found vs missing stacked bar chart
+        stacked_rows = []
+        for pt, stats in products.items():
+            stacked_rows.append({"Product": pt, "Status": "Found", "Count": stats.get("found_count", 0)})
+            stacked_rows.append({"Product": pt, "Status": "Missing", "Count": stats.get("missing_count", 0)})
+        if stacked_rows:
+            _section_label("Found vs missing")
+            stacked_df = pd.DataFrame(stacked_rows)
+            stacked_chart = (
+                alt.Chart(stacked_df)
+                .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+                .encode(
+                    x=alt.X("Product:N", title=None),
+                    y=alt.Y("Count:Q"),
+                    color=alt.Color(
+                        "Status:N",
+                        scale=alt.Scale(domain=["Found", "Missing"], range=[JPL_BLUE, NASA_RED]),
+                        legend=alt.Legend(orient="top"),
+                    ),
+                    tooltip=["Product", "Status", "Count"],
+                )
+                .configure(**_altair_theme()["config"])
+                .properties(height=220)
+            )
+            st.altair_chart(stacked_chart, use_container_width=True)
+
+    # Missing bursts detail per product type
+    for pt, stats in products.items():
+        missing_list = stats.get("missing") or []
+        if not missing_list:
+            continue
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        items = [
+            f"{m.get('burst_pattern', m.get('burst_id', '?'))} | "
+            f"{str(m.get('acquisition_time', ''))[:10]} | "
+            f"{m.get('platform', '?')} {m.get('polarization', '')}"
+            for m in missing_list
+        ]
+        _download_header(
+            title=f"Missing {pt} products",
+            count=len(missing_list),
+            file_base=f"burst_coverage_{pt}_missing_{today}",
+            items=items,
+            include_json=True,
+        )
+        with st.expander(f"Preview first {min(50, len(missing_list))} of {len(missing_list):,}"):
+            from html import escape as _esc
+            preview_rows = []
+            for m in missing_list[:50]:
+                preview_rows.append([
+                    _esc(m.get("burst_pattern", m.get("burst_id", "?"))),
+                    _esc(str(m.get("acquisition_time", ""))[:19]),
+                    _esc(m.get("platform", "?")),
+                    _esc(m.get("polarization", "")),
+                    f"<code>{_esc(m.get('slc_native_id', ''))}</code>",
+                ])
+            _render_html_table(
+                ["Burst", "Acquisition", "Platform", "Pol", "Source SLC"],
+                preview_rows,
+            )
+            if len(missing_list) > 50:
+                sui.badges(
+                    badge_list=[(f"+{len(missing_list) - 50:,} more", "outline")],
+                    key=_next_key("badge"),
+                )
+
+
 # ---------------------------------------------------------------------------
 # Main entrypoint
 # ---------------------------------------------------------------------------
@@ -1586,7 +1824,7 @@ def main():
 
     # Navigation — shadcn tabs.
     tab = sui.tabs(
-        options=["Overview", "Duplicates", "Accountability"],
+        options=["Overview", "Duplicates", "Accountability", "Burst Coverage"],
         default_value="Overview",
         key="nav_tabs",
     )
@@ -1597,6 +1835,8 @@ def main():
         _render_duplicates(reports)
     elif tab == "Accountability":
         _render_accountability(reports)
+    elif tab == "Burst Coverage":
+        _render_burst_coverage(reports)
 
 
 if __name__ == "__main__":
