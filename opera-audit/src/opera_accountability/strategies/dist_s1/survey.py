@@ -17,39 +17,39 @@ logger = logging.getLogger(__name__)
 
 def _native_id(record: dict) -> Optional[str]:
     return (
-        record.get('umm', {}).get('GranuleUR')
-        or record.get('meta', {}).get('native-id')
+        record.get("umm", {}).get("GranuleUR")
+        or record.get("meta", {}).get("native-id")
     )
 
 
 def _dedupe_by_creation_ts(records: list[dict], pattern: re.Pattern, unique_fields: tuple[str, ...]) -> list[dict]:
     latest: dict[tuple, dict] = {}
     for record in records:
-        match = pattern.match(record['id'])
+        match = pattern.match(record["id"])
         if match is None:
-            logger.warning("Skipping granule with unparseable ID: %s", record['id'])
+            logger.warning("Skipping granule with unparseable ID: %s", record["id"])
             continue
         groups = match.groupdict()
         key = tuple(groups[field] for field in unique_fields)
-        creation_ts = groups.get('creation_ts', '')
+        creation_ts = groups.get("creation_ts", "")
         existing = latest.get(key)
-        if existing is None or creation_ts > existing['_creation_ts']:
-            latest[key] = {**record, '_creation_ts': creation_ts}
+        if existing is None or creation_ts > existing["_creation_ts"]:
+            latest[key] = {**record, "_creation_ts": creation_ts}
     for record in latest.values():
-        record.pop('_creation_ts', None)
+        record.pop("_creation_ts", None)
     return list(latest.values())
 
 
-def survey_rtc(start: Optional[datetime], end: Optional[datetime], venue: str = 'PROD') -> list[dict]:
-    ccid = CONFIG['products']['RTC_S1']['ccid'][venue]
-    pattern = re.compile(CONFIG['products']['RTC_S1']['pattern'])
-    unique_fields = tuple(CONFIG['products']['RTC_S1']['unique_fields'])
+def survey_rtc(start: Optional[datetime], end: Optional[datetime], venue: str = "PROD") -> list[dict]:
+    ccid = CONFIG["products"]["RTC_S1"]["ccid"][venue]
+    pattern = re.compile(CONFIG["products"]["RTC_S1"]["pattern"])
+    unique_fields = tuple(CONFIG["products"]["RTC_S1"]["unique_fields"])
 
     cmr_records = query_cmr(ccid, start, end, venue)
     shaped = [
         {
-            'id': granule_id,
-            'revision_timestamp': record.get('meta', {}).get('revision-date'),
+            "id": granule_id,
+            "revision_timestamp": record.get("meta", {}).get("revision-date"),
         }
         for record in cmr_records
         if (granule_id := _native_id(record))
@@ -73,9 +73,9 @@ async def _fetch_dist_product_inputs(
             root = await asyncio.to_thread(obtain_iso_xml, iso_xml_url, max_retries)
             input_rtcs = reduce_input_rtc_list(extract_dist_input_granules(root))
             return {
-                'id': native_id,
-                'input_rtcs': sorted(input_rtcs),
-                'iso_xml_url': iso_xml_url,
+                "id": native_id,
+                "input_rtcs": sorted(input_rtcs),
+                "iso_xml_url": iso_xml_url,
             }
         except Exception as err:
             logger.error("Unable to obtain ISO XML for %s: %s", native_id, err)
@@ -85,20 +85,20 @@ async def _fetch_dist_product_inputs(
 async def survey_dist_async(
     start: Optional[datetime],
     end: Optional[datetime],
-    venue: str = 'PROD',
+    venue: str = "PROD",
     max_concurrent: int = 10,
     max_retries: int = 3,
     prefer_s3: bool = False,
 ) -> tuple[list[dict], set[str]]:
-    cfg = CONFIG['products']['DIST_S1']
-    ccid = cfg['ccid'].get(venue)
+    cfg = CONFIG["products"]["DIST_S1"]
+    ccid = cfg["ccid"].get(venue)
     if ccid:
         cmr_records = query_cmr(ccid, start, end, venue)
     else:
-        collection = cfg['collection'][venue]
+        collection = cfg["collection"][venue]
         cmr_records = query_cmr_by_short_name(
-            collection['short_name'],
-            provider=collection.get('provider'),
+            collection["short_name"],
+            provider=collection.get("provider"),
             start_date=start,
             end_date=end,
             venue=venue,
@@ -125,7 +125,7 @@ async def survey_dist_async(
 def survey_dist(
     start: Optional[datetime],
     end: Optional[datetime],
-    venue: str = 'PROD',
+    venue: str = "PROD",
     max_concurrent: int = 10,
     max_retries: int = 3,
     prefer_s3: bool = False,

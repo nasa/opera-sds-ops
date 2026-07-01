@@ -20,7 +20,7 @@ class AccountabilityStrategy(ABC):
         self,
         start_date: datetime,
         end_date: datetime,
-        venue: str = 'PROD',
+        venue: str = "PROD",
         **kwargs
     ) -> dict[str, Any]:
         """Run accountability analysis for the strategy.

@@ -108,6 +108,17 @@ opera-audit duplicates DISP_S1 --check-end-conflicts --start 2026-02-01 --end 20
 opera-audit duplicates RTC_S1 --start 2026-01-01 --end 2026-03-01 --memory-efficient --save
 ```
 
+**Check for duplicates from GRQ (OpenSearch) instead of CMR:**
+```bash
+opera-audit duplicates DSWX_HLS --venue GRQ --grq-url https://grq.example.com \
+    --start 2026-01-01 --end 2026-01-21 --save
+```
+
+**SLC burst-level coverage audit (replaces legacy cmr_audit_slc.py):**
+```bash
+opera-audit burst-coverage --start 2026-02-01 --end 2026-02-07 --save
+```
+
 **Run accountability analysis for a specific product:**
 ```bash
 # DSWX-HLS (strategy: dswx_hls)
@@ -154,6 +165,35 @@ opera-audit version
 - **Burst DB JSON** (optional, `DIST_S1` only). Without it `opera-audit` runs
   in CMR-only RTC accountability mode. With it, the DIST-S1 strategy can
   cross-check RTC inputs against the burst DB. Provide via `--burst-db <path>`.
+- **Earthdata Login (EDL)** credentials for DIST-S1 ISO-XML downloads. Set
+  the `EARTHDATA_TOKEN` environment variable or configure `~/.netrc` with
+  `machine urs.earthdata.nasa.gov` credentials. Required only when running
+  DIST-S1 accountability or burst-coverage audits.
+
+### Data source selection
+
+By default, duplicate detection queries **CMR** (NASA's Common Metadata
+Repository). Two alternative sources are supported:
+
+| Source | `--venue` value | Extra args | Status |
+| ------ | :-------------: | ---------- | ------ |
+| CMR PROD | `PROD` (default) | — | ✅ Production |
+| CMR UAT | `UAT` | — | ✅ Production |
+| GRQ (OpenSearch) | `GRQ` | `--grq-url <url>` | ✅ New |
+| TRQ | — | — | 🔮 Planned |
+
+**GRQ** queries an on-premises OpenSearch cluster used by the SDS pipeline.
+Install the optional dependency: `pip install opensearch-py` (or
+`pip install -e ".[grq]"`). Each product has a `grq_index` field in
+`config.yaml` that maps to its OpenSearch index pattern.
+
+**TRQ** support is planned but not yet implemented (no public API available).
+
+### Recovery files
+
+Use `--recovery-format txt` (or `json`) with the `accountability` command to
+generate recovery files listing missing product IDs. These can be fed into
+downstream re-processing workflows.
 
 ## Supported Products
 

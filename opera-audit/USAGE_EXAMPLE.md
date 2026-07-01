@@ -12,6 +12,11 @@ cd opera-audit
 uv venv
 source .venv/bin/activate
 uv pip install -e .
+
+# Optional extras:
+uv pip install -e ".[grq]"             # GRQ (OpenSearch) duplicate detection
+uv pip install -e ".[burst_coverage]"   # SLC burst-level coverage audit
+uv pip install -e ".[dist_s1]"          # DIST-S1 S3 ISO-XML access
 ```
 
 ## Supported Products
@@ -93,6 +98,27 @@ opera-audit duplicates RTC_S1 --days-back 30 --memory-efficient
 ```
 
 Processes granules in time-chunked batches to avoid large memory usage for high-volume products.
+
+#### GRQ (OpenSearch) Source
+
+```bash
+# Single product from GRQ
+opera-audit duplicates DSWX_HLS --venue GRQ --grq-url https://grq.example.com \
+    --start 2026-01-01 --end 2026-01-21 --save
+
+# All products from GRQ
+opera-audit duplicates --venue GRQ --grq-url https://grq.example.com --days-back 7 --save
+```
+
+Requires `opensearch-py` (`pip install -e ".[grq]"`). Each product's GRQ index pattern is configured via the `grq_index` field in `config.yaml`.
+
+### SLC Burst-Level Coverage Audit
+
+```bash
+opera-audit burst-coverage --start 2026-02-01 --end 2026-02-07 --save
+```
+
+Replaces the deprecated `cmr_audit_slc.py`. Requires `shapely` (`pip install -e ".[burst_coverage]"`) and EDL credentials.
 
 ### Accountability Analysis
 
@@ -192,6 +218,18 @@ opera-audit accountability DISP_S1 --days-back 7 --save
 ```bash
 opera-audit accountability --days-back 7 --save
 ```
+
+#### Recovery Files
+
+```bash
+# Generate a text recovery file listing missing granule IDs
+opera-audit accountability DSWX_HLS --days-back 7 --save --recovery-format txt
+
+# JSON format
+opera-audit accountability DIST_S1 --days-back 7 --save --recovery-format json
+```
+
+Recovery files are compatible with `daac_data_subscriber.py` for automated re-processing.
 
 ### Launch Dashboard
 
@@ -322,37 +360,52 @@ opera-audit accountability CUSTOM_PRODUCT --strategy date_count --days-back 30 -
 ```python
 from opera_accountability import CONFIG
 from opera_accountability.cmr import query_cmr, query_cmr_by_short_name
-from opera_accountability.duplicates import detect_duplicates, detect_disp_s1_end_conflicts
+from opera_accountability.duplicates import (
+    detect_duplicates,
+    detect_disp_s1_end_conflicts,
+    get_granules_from_grq,
+)
 from opera_accountability.reports import save_reports
 from datetime import datetime, timedelta
 
 end_date = datetime.now()
 start_date = end_date - timedelta(days=7)
 
-# --- Duplicates (by ccid) - Riley ---
-ccid = CONFIG['products']['DSWX_HLS']['ccid']['PROD']
-granules = query_cmr(ccid, start_date, end_date, 'PROD')
-results = detect_duplicates(granules, 'DSWX_HLS')
+# --- Duplicates from CMR (by ccid) - Riley ---
+ccid = CONFIG["products"]["DSWX_HLS"]["ccid"]["PROD"]
+granules = query_cmr(ccid, start_date, end_date, "PROD")
+results = detect_duplicates(granules, "DSWX_HLS")
 print(f"Found {results['duplicates']} duplicates out of {results['total']}")
 
+# --- Duplicates from GRQ (OpenSearch) - Riley ---
+grq_index = CONFIG["products"]["DSWX_HLS"]["grq_index"]
+granules = get_granules_from_grq(
+    grq_url="https://grq.example.com",
+    index=grq_index,
+    product="DSWX_HLS",
+    start=start_date,
+    end=end_date,
+)
+results = detect_duplicates(granules, "DSWX_HLS")
+
 # --- Duplicates (by short_name, e.g. DIST_S1) - Kevin ---
-coll = CONFIG['products']['DIST_S1']['collection']['PROD']
-granules = query_cmr_by_short_name(coll['short_name'], coll['provider'], start_date, end_date)
-results = detect_duplicates(granules, 'DIST_S1')
+coll = CONFIG["products"]["DIST_S1"]["collection"]["PROD"]
+granules = query_cmr_by_short_name(coll["short_name"], coll["provider"], start_date, end_date)
+results = detect_duplicates(granules, "DIST_S1")
 
 # --- DISP-S1 end-conflicts - Gerald ---
-ccid = CONFIG['products']['DISP_S1']['ccid']['PROD']
-granules = query_cmr(ccid, start_date, end_date, 'PROD')
+ccid = CONFIG["products"]["DISP_S1"]["ccid"]["PROD"]
+granules = query_cmr(ccid, start_date, end_date, "PROD")
 results = detect_disp_s1_end_conflicts(granules)
 print(f"Found {results['conflict_groups']} end-conflict groups")
 
 # --- Accountability with strategy - Chris ---
 from opera_accountability.strategies.forward_map import ForwardMapStrategy
-strategy = ForwardMapStrategy('DSWX_HLS')
-results = strategy.analyze(start_date, end_date, 'PROD')
+strategy = ForwardMapStrategy("DSWX_HLS")
+results = strategy.analyze(start_date, end_date, "PROD")
 
 # --- Save reports ---
-files = save_reports(results, './output', 'DSWX_HLS', 'duplicates', 'PROD',
+files = save_reports(results, "./output", "DSWX_HLS", "duplicates", "PROD",
                      start_date=start_date, end_date=end_date)
 ```
 
@@ -408,8 +461,23 @@ for name, prod in CONFIG['products'].items():
 ### Check Which Contributor Code Is Used
 ```python
 # See README.md or CONSOLIDATION_MAP.md for detailed contributor mappings
-from opera_accountability.duplicates import detect_duplicates  # Riley
+from opera_accountability.duplicates import detect_duplicates         # Riley
+from opera_accountability.duplicates import get_granules_from_grq     # Riley (GRQ)
 from opera_accountability.duplicates import detect_disp_s1_end_conflicts  # Gerald
 from opera_accountability.strategies.forward_map import ForwardMapStrategy  # Chris
-from opera_accountability.strategies.dist_s1 import run as run_dist_s1  # Kevin
+from opera_accountability.strategies.dist_s1 import run as run_dist_s1     # Kevin
+```
+
+### Earthdata Login (EDL) Authentication
+
+Required for DIST-S1 accountability and burst-coverage audits:
+
+```bash
+# Option 1: Environment variable
+export EARTHDATA_TOKEN="your-bearer-token"
+
+# Option 2: ~/.netrc file
+machine urs.earthdata.nasa.gov
+    login your_username
+    password your_password
 ```

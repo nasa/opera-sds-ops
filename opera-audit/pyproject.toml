@@ -47,6 +47,12 @@ dist_s1 = [
 burst_db = [
     "data-subscriber>=0.1.0",
 ]
+burst_coverage = [
+    "shapely>=2.0.0",
+]
+grq = [
+    "opensearch-py>=2.4.0",
+]
 
 [project.scripts]
 opera-audit = "opera_accountability.cli:app"
@@ -56,6 +62,16 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 opera_accountability = ["config.yaml"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["Q"]
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "double"
+docstring-quotes = "double"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

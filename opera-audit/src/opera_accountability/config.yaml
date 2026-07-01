@@ -17,6 +17,7 @@ products:
     ccid:
       PROD: "C2617126679-POCLOUD"
       UAT: ""
+    grq_index: "grq_*_l3_dswx_hls-*"
     pattern: 'OPERA_L3_DSWx-HLS_(?P<tile_id>T[^\W_]{5})_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_(?P<sensor>S2A|S2B|S2C|S2D|L8|L9)_30_v\d+[.]\d+'
     unique_fields: ["tile_id", "acquisition_ts", "sensor"]
     aggregation_field: "acquisition_ts"
@@ -46,6 +47,7 @@ products:
     ccid:
       PROD: "C2777436413-ASF"
       UAT: "C1259974840-ASF"
+    grq_index: "grq_*_l2_rtc_s1-*"
     pattern: 'OPERA_L2_RTC-S1_(?P<burst_id>\w{4}-\w{6}-\w{3})_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_(?P<sensor>S1[A-D])_30_v\d+[.]\d+'
     unique_fields: ["burst_id", "acquisition_ts", "sensor"]
     aggregation_field: "acquisition_ts"
@@ -59,6 +61,7 @@ products:
     ccid:
       PROD: "C2777443834-ASF"
       UAT: ""
+    grq_index: "grq_*_l2_cslc_s1-*"
     pattern: '(?P<id>OPERA_L2_CSLC-S1_(?P<burst_id>\w{4}-\w{6}-\w{3})_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_(?P<sensor>S1[A-D])_(?P<pol>VV|VH|HH|HV|VV\+VH|HH\+HV)_v\d+[.]\d+)'
     unique_fields: ["burst_id", "acquisition_ts", "sensor", "pol"]
     aggregation_field: "acquisition_ts"
@@ -72,6 +75,7 @@ products:
     ccid:
       PROD: "C2949811996-POCLOUD"
       UAT: ""
+    grq_index: "grq_*_l3_dswx_s1-*"
     pattern: '(?P<id>OPERA_L3_DSWx-S1_(?P<tile_id>T[^\W_]{5})_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_(?P<sensor>S1[A-D])_30_v\d+[.]\d+)'
     unique_fields: ["tile_id", "acquisition_ts", "sensor"]
     aggregation_field: "acquisition_ts"
@@ -99,7 +103,8 @@ products:
     name: "Disturbance - Sentinel-1"
     ccid:
       PROD: "C4090131664-ASF"
-      UAT: ""
+      UAT: "C1275699124-ASF"
+    grq_index: "grq_*_l3_dist_s1-*"
     collection:
       PROD:
         provider: "ASF"
@@ -124,6 +129,7 @@ products:
     ccid:
       PROD: "C3294057315-ASF"
       UAT: ""
+    grq_index: "grq_*_l3_disp_s1-*"
     pattern: '(?P<id>OPERA_L3_DISP-S1_IW_(?P<frame_id>F\d{5})_(?P<pol>VV|VH|HH|HV|VV\+VH|HH\+HV)_(?P<ref_datetime>\d{8}T\d{6}Z)_(?P<sec_datetime>\d{8}T\d{6}Z)_v\d+[.]\d+_(?P<creation_ts>\d{8}T\d{6}Z))'
     unique_fields: ["frame_id", "pol", "ref_datetime", "sec_datetime"]
     aggregation_field: "creation_ts"
@@ -152,6 +158,7 @@ products:
     ccid:
       PROD: "C3717139408-ASF"
       UAT: ""
+    grq_index: "grq_*_l4_tropo-*"
     pattern: '(?P<id>OPERA_L4_TROPO-ZENITH_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_(?P<model>.+?)_v\d+[.]\d+)'
     unique_fields: ["acquisition_ts", "model"]
     aggregation_field: "acquisition_ts"
@@ -168,6 +175,7 @@ products:
     ccid:
       PROD: "C2746980408-LPCLOUD"
       UAT: ""
+    grq_index: null  # no GRQ index for this product
     pattern: '(?P<id>OPERA_L3_DIST-ALERT-HLS_(?P<tile_id>T[^\W_]{5})_(?P<acquisition_ts>\d{8}T\d{6}Z)_(?P<creation_ts>\d{8}T\d{6}Z)_(?P<sensor>S2A|S2B|S2C|S2D|L8|L9)_30_v\d+([.]\d+)?)'
     unique_fields: ["tile_id", "acquisition_ts", "sensor"]
     aggregation_field: "acquisition_ts"
@@ -181,6 +189,7 @@ products:
     ccid:
       PROD: "C2795135668-ASF"
       UAT: ""
+    grq_index: "grq_*_l2_cslc_s1_static-*"
     pattern: '(?P<id>OPERA_L2_CSLC-S1-STATIC_(?P<burst_id>\w{4}-\w{6}-\w{3})_(?P<validity_ts>\d{8})_(?P<sensor>S1[A-D])_v\d+[.]\d+)'
     unique_fields: ["burst_id", "validity_ts", "sensor"]
     aggregation_field: "validity_ts"
@@ -196,6 +205,7 @@ products:
     ccid:
       PROD: "C2795135174-ASF"
       UAT: ""
+    grq_index: "grq_*_l2_rtc_s1_static-*"
     pattern: '(?P<id>OPERA_L2_RTC-S1-STATIC_(?P<burst_id>\w{4}-\w{6}-\w{3})_(?P<validity_ts>\d{8})_(?P<sensor>S1[A-D])_30_v\d+[.]\d+)'
     unique_fields: ["burst_id", "validity_ts", "sensor"]
     aggregation_field: "validity_ts"
@@ -211,6 +221,7 @@ products:
     ccid:
       PROD: "C3959290248-ASF"  # DISP-S1-STATIC collection
       UAT: ""
+    grq_index: "grq_*_l3_disp_s1_static-*"
     collection:
       PROD:
         provider: "ASF"

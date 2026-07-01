@@ -25,8 +25,8 @@ def _tile_set_sort_key(key: str) -> tuple:
     Expects ``<mgrs_set_id>$<cycle>$<sensor>`` where ``mgrs_set_id`` has the
     shape ``MS_<n1>_<n2>``.
     """
-    tile_set, cycle, sensor = key.split('$')
-    tile_set_parts = tile_set.split('_')
+    tile_set, cycle, sensor = key.split("$")
+    tile_set_parts = tile_set.split("_")
     # mgrs_set_id like "MS_1_3" → (1, 3). Fallback to (0, 0) if unparseable.
     try:
         n1, n2 = int(tile_set_parts[1]), int(tile_set_parts[2])
@@ -51,10 +51,10 @@ def expand_with_cycle_indices(
             match = _RTC_GRANULE_PATTERN.match(rtc)
             if match is None:
                 raise ValueError(f"Failed to parse RTC granule ID: {rtc!r}")
-            sensor = match.groupdict()['sensor']
+            sensor = match.groupdict()["sensor"]
             cycle = determine_acquisition_cycle_for_rtc_granule(rtc)
 
-            key = f'{tile_set}${cycle}${sensor}'
+            key = f"{tile_set}${cycle}${sensor}"
             expanded.setdefault(key, []).append(rtc)
 
     # Sort inner lists and outer keys deterministically.

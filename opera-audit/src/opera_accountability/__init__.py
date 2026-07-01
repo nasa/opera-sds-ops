@@ -14,7 +14,7 @@ __version__ = "0.1.0"
 # the loader walked up from ``__file__`` to the project root, which worked
 # for editable installs but silently broke for installed wheels where the
 # project root no longer contains ``config.yaml``.
-_config_resource = _pkg_files('opera_accountability').joinpath('config.yaml')
+_config_resource = _pkg_files("opera_accountability").joinpath("config.yaml")
 CONFIG = yaml.safe_load(_config_resource.read_text())
 
-__all__ = ['CONFIG', '__version__']
+__all__ = ["CONFIG", "__version__"]

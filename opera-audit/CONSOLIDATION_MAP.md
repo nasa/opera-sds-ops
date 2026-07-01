@@ -5,10 +5,11 @@ This document maps the original tools from multiple contributors to their consol
 ## Overview
 
 The `opera-audit` package consolidates accountability and duplicate detection tools from four contributors:
-- **Phase 1 (Riley)**: Duplicate detection and DSWx-S1 accountability pipeline
+- **Phase 1 (Riley)**: Duplicate detection (CMR + GRQ) and DSWx-S1 accountability pipeline
 - **Phase 2 (Gerald)**: DISP-S1 end-conflict detection
 - **Phase 3 (Chris)**: Multi-strategy accountability suite
 - **Phase 4 (Kevin)**: DIST-S1 ISO-XML tools
+- **Phase 5 (Gerald)**: SLC burst-level coverage audit
 
 ---
 
@@ -25,12 +26,13 @@ duplicates/duplicate_check.py (branch: main)
 - `src/opera_accountability/duplicates.py`
   - `detect_duplicates()` - Core duplicate detection with monthly/daily aggregation
   - `detect_duplicates_memory_efficient()` - Memory-efficient batched processing
+  - `get_granules_from_grq()` - GRQ (OpenSearch) duplicate detection (Riley)
   - Algorithm: Group by unique fields, sort by creation timestamp, identify duplicates
 
 **Configuration:**
 - `src/opera_accountability/config.yaml`
   - Product definitions for: TROPO, DIST_ALERT_HLS, CSLC_S1_STATIC, RTC_S1_STATIC
-  - Fields: `ccid`, `pattern`, `unique_fields`, `creation_field`
+  - Fields: `ccid`, `grq_index`, `pattern`, `unique_fields`, `creation_field`
 
 **Tests:**
 - `tests/test_duplicates.py` - Unit tests for duplicate detection
@@ -39,7 +41,11 @@ duplicates/duplicate_check.py (branch: main)
 
 **CLI:**
 ```bash
-opera-audit duplicates <PRODUCT> [--start-date] [--end-date] [--venue] [--save]
+# CMR source (default)
+opera-audit duplicates <PRODUCT> [--start] [--end] [--venue PROD|UAT] [--save]
+
+# GRQ source (requires opensearch-py)
+opera-audit duplicates <PRODUCT> --venue GRQ --grq-url <url> [--start] [--end] [--save]
 ```
 
 ---
@@ -376,6 +382,47 @@ opera-audit accountability DIST_S1 --start-date <date> --end-date <date>
 
 ---
 
+## Phase 5: Gerald's SLC Burst-Level Coverage Audit
+
+**Original Location:**
+```
+tools/ops/cmr_audit/cmr_audit_burst_coverage.py (branch: OPERA-2518)
+tools/ops/cmr_audit/slc_annotation_extract.py   (branch: OPERA-2518)
+```
+
+**Consolidated To:**
+
+### 5.1 SLC Annotations
+- `src/opera_accountability/slc_annotations.py`
+  - `HTTPRangeFile` - HTTP range-request reader for remote ZIP annotations
+  - `extract_annotations()` - Extract burst timing from SLC annotation ZIPs
+  - `parse_burst_anx_times()` - Parse burst ANX times from XML annotation
+  - `derive_burst_ids()` - Derive OPERA burst IDs from swath/burst metadata
+  - `get_edl_token()` - EDL authentication (EARTHDATA_TOKEN or ~/.netrc)
+
+### 5.2 Burst Coverage Pipeline
+- `src/opera_accountability/burst_coverage.py`
+  - `BurstInfo`, `SLCGranule` - Data classes for burst/SLC metadata
+  - `RequestCache` - Thread-safe HTTP caching
+  - `query_asf_burst_catalog()` - ASF burst catalog API queries
+  - `query_cmr_slc_granules()` - CMR SLC product queries
+  - `check_burst_coverage()` - Coverage audit logic
+  - `write_geojson()` - GeoJSON output for coverage maps
+  - JSONL streaming for memory-efficient processing
+  - Replaces deprecated `cmr_audit_slc.py`
+
+**Tests:**
+- `tests/test_burst_coverage.py` - 23 tests for both modules
+
+**CLI:**
+```bash
+opera-audit burst-coverage --start <date> --end <date> [--save] [--output-dir <dir>]
+```
+
+**Optional dependency:** `shapely>=2.0.0` (install with `pip install -e ".[burst_coverage]"`)
+
+---
+
 ## Shared Infrastructure
 
 ### CMR Client
@@ -406,14 +453,23 @@ opera-audit accountability DIST_S1 --start-date <date> --end-date <date>
   - Product selection, date range filtering
   - Accountability and duplicate detection results
 
+### Recovery Files
+- `src/opera_accountability/recovery_file.py`
+  - `write_recovery_file()` - Generate recovery files for missing products
+  - Formats: `txt` (newline-separated IDs), `json` (structured)
+  - Compatible with `daac_data_subscriber.py` for automated re-processing
+
 ### CLI
 - `src/opera_accountability/cli.py`
   - Unified CLI for all operations
   - Commands:
-    - `opera-audit duplicates <PRODUCT>` - Duplicate detection
+    - `opera-audit duplicates <PRODUCT>` - Duplicate detection (CMR or GRQ)
     - `opera-audit accountability <PRODUCT>` - Accountability analysis
+    - `opera-audit burst-coverage` - SLC burst-level coverage audit
     - `opera-audit dashboard` - Launch Streamlit dashboard
-  - Options: `--venue`, `--save`, `--output-dir`, `--check-end-conflicts`, etc.
+    - `opera-audit version` - Show version
+  - Options: `--venue PROD|UAT|GRQ`, `--grq-url`, `--save`, `--output-dir`,
+    `--check-end-conflicts`, `--memory-efficient`, `--recovery-format`, etc.
 
 ---
 
@@ -453,6 +509,9 @@ opera-audit/
 │   ├── dashboard.py                    # Streamlit dashboard
 │   ├── cli.py                          # Unified CLI
 │   ├── burst_db.py                     # Kevin's burst utilities
+│   ├── recovery_file.py                # Recovery file generation
+│   ├── burst_coverage.py               # Gerald's SLC burst coverage
+│   ├── slc_annotations.py              # Gerald's SLC annotation parsing
 │   └── strategies/
 │       ├── base.py                     # Strategy interface
 │       ├── date_count.py               # Chris (TROPO)
@@ -470,13 +529,21 @@ opera-audit/
 │           ├── survey.py
 │           ├── accountability.py
 │           ├── pipeline.py
-│           └── iso_xml.py
+│           ├── iso_xml.py
+│           └── utils.py
 └── tests/
     ├── test_duplicates.py
     ├── test_end_conflict_detection.py
-    ├── test_dswx_s1_accountability.py
+    ├── test_dswx_s1_strategy.py
     ├── test_strategies.py
-    ├── test_dist_s1_iso_xml.py
+    ├── test_burst_coverage.py
+    ├── test_accountability.py
+    ├── test_memory_efficient.py
+    ├── test_recovery_file.py
+    ├── test_cli_dispatch.py
+    ├── test_product_patterns.py
+    ├── test_dashboard_loader.py
+    ├── test_cmr_async.py
     └── test_cmr_integration.py
 ```
 
@@ -515,6 +582,7 @@ src/opera_accountability/config.yaml
 
 Environment variables:
 - `OPERA_DIST_S1_BURST_DB` - Path to DIST-S1 burst database (optional)
+- `OPERA_MGRS_DB` - Path to MGRS tile-collection SQLite DB (DSWX_S1 only)
 - `EARTHDATA_TOKEN` - Earthdata Login token for ISO XML downloads (optional)
 
 ### Output Format Compatibility
@@ -534,16 +602,21 @@ All phases have been verified for **exact code parity** with original implementa
 - ✅ **Phase 2**: DISP-S1 end-conflict detection matches `detect_cmr_duplicates_for_disp_s1.py` exactly
 - ✅ **Phase 3**: Multi-strategy suite matches Chris's `cmr_audit_*.py` tools exactly
 - ✅ **Phase 4**: DIST-S1 ISO-XML tools match `cmr_audit_dist_s1.py` exactly
+- ✅ **Phase 5**: SLC burst coverage matches `cmr_audit_burst_coverage.py` + `slc_annotation_extract.py`
 
-See commit history for detailed verification of each algorithm, regex pattern, and data structure.
+**166 unit tests pass** (0 failures). See commit history for detailed verification of each algorithm, regex pattern, and data structure.
+
+### Items Not Yet Ported (blocked on PCM dependencies)
+- `dist_s1_input_tool.py` (1758 lines) — requires `data_subscriber.cmr.async_query_cmr_v2`
+- `dist_s1_confirmation.py` (585 lines) — requires `rasterio` + S3 access
 
 ---
 
 ## Contributors
 
-- **Riley**: Duplicate detection, DSWx-S1 accountability pipeline
-- **Gerald**: DISP-S1 end-conflict detection
-- **Chris**: Multi-strategy accountability suite, async CMR client
+- **Riley**: Duplicate detection (CMR + GRQ), DSWx-S1 accountability pipeline
+- **Gerald**: DISP-S1 end-conflict detection, SLC burst-level coverage audit
+- **Chris**: Multi-strategy accountability suite, async CMR client, recovery files
 - **Kevin**: DIST-S1 ISO-XML tools, burst-to-tile mapping
 
-Consolidation performed: June 2026
+Consolidation performed: June–July 2026

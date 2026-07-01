@@ -16,7 +16,7 @@ def save_reports(
     output_dir: str,
     product: str,
     report_type: str,
-    venue: str = 'PROD',
+    venue: str = "PROD",
     start_date: datetime | None = None,
     end_date: datetime | None = None,
 ) -> dict[str, Path]:
@@ -38,7 +38,7 @@ def save_reports(
     base_dir.mkdir(parents=True, exist_ok=True)
 
     # Use current date for filenames
-    date_str = datetime.now().strftime('%Y-%m-%d')
+    date_str = datetime.now().strftime("%Y-%m-%d")
 
     files_created = {}
 
@@ -60,41 +60,41 @@ def save_reports(
         "results": results,
     }
 
-    with open(json_path, 'w') as f:
+    with open(json_path, "w") as f:
         json.dump(report_data, f, indent=2)
     logger.info(f"Saved JSON report: {json_path}")
-    files_created['json'] = json_path
+    files_created["json"] = json_path
 
     # 2. Text format (DAAC format - list of granule IDs)
-    if report_type == 'duplicates' and 'conflicts' in results:
+    if report_type == "duplicates" and "conflicts" in results:
         txt_path = base_dir / f"{date_str}_conflicts.txt"
-        with open(txt_path, 'w') as f:
-            for conflict_key, conflict in results['conflicts'].items():
+        with open(txt_path, "w") as f:
+            for conflict_key, conflict in results["conflicts"].items():
                 f.write(f"# {conflict_key}\n")
-                for product_id in conflict['products']:
+                for product_id in conflict["products"]:
                     f.write(f"{product_id}\n")
         logger.info(f"Saved conflict list: {txt_path}")
-        files_created['text'] = txt_path
+        files_created["text"] = txt_path
 
-    elif report_type == 'duplicates' and 'duplicate_list' in results:
+    elif report_type == "duplicates" and "duplicate_list" in results:
         txt_path = base_dir / f"{date_str}.txt"
-        with open(txt_path, 'w') as f:
-            for granule_id in results['duplicate_list']:
+        with open(txt_path, "w") as f:
+            for granule_id in results["duplicate_list"]:
                 f.write(f"{granule_id}\n")
         logger.info(f"Saved text list: {txt_path}")
-        files_created['text'] = txt_path
+        files_created["text"] = txt_path
 
-    elif report_type == 'accountability' and 'missing' in results:
+    elif report_type == "accountability" and "missing" in results:
         txt_path = base_dir / f"{date_str}_missing.txt"
-        with open(txt_path, 'w') as f:
-            for granule_id in results['missing']:
+        with open(txt_path, "w") as f:
+            for granule_id in results["missing"]:
                 f.write(f"{granule_id}\n")
         logger.info(f"Saved missing list: {txt_path}")
-        files_created['text'] = txt_path
+        files_created["text"] = txt_path
 
     # 3. Summary text (human-readable)
     summary_path = base_dir / f"{date_str}_summary.txt"
-    with open(summary_path, 'w') as f:
+    with open(summary_path, "w") as f:
         f.write(f"OPERA {report_type.title()} Report\n")
         f.write("=" * 50 + "\n")
         f.write(f"Product:        {product}\n")
@@ -102,41 +102,41 @@ def save_reports(
         f.write(f"Generated:      {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write("\n")
 
-        if report_type == 'duplicates':
+        if report_type == "duplicates":
             f.write("SUMMARY\n")
             f.write("-" * 50 + "\n")
-            if 'conflict_groups' in results:
+            if "conflict_groups" in results:
                 f.write(f"Total Granules:         {results['total']:,}\n")
                 f.write(f"Conflict Groups:        {results['conflict_groups']:,}\n")
                 f.write(f"Conflicting Products:   {results['conflicting_products']:,}\n")
-                if results['total'] > 0:
-                    conflict_rate = (results['conflicting_products'] / results['total']) * 100
+                if results["total"] > 0:
+                    conflict_rate = (results["conflicting_products"] / results["total"]) * 100
                     f.write(f"Conflict Rate:          {conflict_rate:.2f}%\n")
             else:
                 f.write(f"Total Granules:     {results['total']:,}\n")
                 f.write(f"Unique Granules:    {results['unique']:,}\n")
                 f.write(f"Duplicate Count:    {results['duplicates']:,}\n")
-                if results['total'] > 0:
-                    dup_rate = (results['duplicates'] / results['total']) * 100
+                if results["total"] > 0:
+                    dup_rate = (results["duplicates"] / results["total"]) * 100
                     f.write(f"Duplicate Rate:     {dup_rate:.2f}%\n")
 
-        elif report_type == 'accountability':
+        elif report_type == "accountability":
             f.write("SUMMARY\n")
             f.write("-" * 50 + "\n")
             f.write(f"Expected Granules:  {results['expected']:,}\n")
             f.write(f"Actual Granules:    {results['actual']:,}\n")
             f.write(f"Missing Granules:   {results['missing_count']:,}\n")
-            if results['expected'] > 0:
-                acc_rate = (results['actual'] / results['expected']) * 100
+            if results["expected"] > 0:
+                acc_rate = (results["actual"] / results["expected"]) * 100
                 f.write(f"Accountability:     {acc_rate:.2f}%\n")
 
         f.write("\n")
         f.write("Files Generated:\n")
         f.write(f"- Full report:  {json_path}\n")
-        if 'text' in files_created:
+        if "text" in files_created:
             f.write(f"- List file:    {files_created['text']}\n")
 
     logger.info(f"Saved summary: {summary_path}")
-    files_created['summary'] = summary_path
+    files_created["summary"] = summary_path
 
     return files_created

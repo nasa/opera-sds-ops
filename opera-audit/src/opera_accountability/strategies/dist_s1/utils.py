@@ -5,18 +5,18 @@ from datetime import datetime, timedelta
 
 
 DIST_S1_NATIVE_ID_RE = re.compile(
-    r'OPERA_L3_DIST(?:-ALERT)?-S1_'
-    r'(?P<tile_id>T?\w+)_'
-    r'(?P<acq_time>\d{8}T\d{6}Z)_'
-    r'(?P<prod_time>\d{8}T\d{6}Z)_'
-    r'S1[A-D]?_30_v\d+(?:[.]\d+)?'
+    r"OPERA_L3_DIST(?:-ALERT)?-S1_"
+    r"(?P<tile_id>T?\w+)_"
+    r"(?P<acq_time>\d{8}T\d{6}Z)_"
+    r"(?P<prod_time>\d{8}T\d{6}Z)_"
+    r"S1[A-D]?_30_v\d+(?:[.]\d+)?"
 )
 RTC_ID_RE = re.compile(
-    r'OPERA_L2_RTC-S1_'
-    r'(?P<burst_id>\w{4}-\w{6}-\w{3})_'
-    r'(?P<acquisition_ts>\d{8}T\d{6}Z)_'
-    r'(?P<creation_ts>\d{8}T\d{6}Z)_'
-    r'(?P<sensor>S1[A-D])_30_v\d+[.]\d+'
+    r"OPERA_L2_RTC-S1_"
+    r"(?P<burst_id>\w{4}-\w{6}-\w{3})_"
+    r"(?P<acquisition_ts>\d{8}T\d{6}Z)_"
+    r"(?P<creation_ts>\d{8}T\d{6}Z)_"
+    r"(?P<sensor>S1[A-D])_30_v\d+[.]\d+"
 )
 
 

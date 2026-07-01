@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import itertools
+import json
 import logging
 import math
 import os
@@ -19,13 +20,28 @@ from . import CONFIG
 logger = logging.getLogger(__name__)
 
 
-async def async_cmr_posts(url, request_bodies: list, sem: Optional[asyncio.Semaphore] = None):
-    """Given a list of request bodies, performs CMR queries asynchronously, returning the response JSONs."""
+async def async_cmr_posts(url, request_bodies: list, sem: Optional[asyncio.Semaphore] = None,
+                           output_dir: Optional[str] = None):
+    """Given a list of request bodies, performs CMR queries asynchronously, returning the response JSONs.
+
+    When *output_dir* is set, streams results to JSONL files on disk and returns
+    list of file paths instead (ported from PCM cmr_client.py).
+    """
     async with aiohttp.ClientSession() as session:
         tasks = []
 
         concurrency = 1 if len(request_bodies) == 1 else min(len(request_bodies), 15)
         sem = asyncio.Semaphore(concurrency) if not sem else sem
+
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            paths = []
+            for i, request_body in enumerate(request_bodies):
+                path = os.path.join(output_dir, f"cmr_batch_{i}.jsonl")
+                paths.append(path)
+                tasks.append(async_cmr_post(url, request_body, session, sem, output_path=path))
+            await asyncio.gather(*tasks)
+            return paths
 
         for request_body in request_bodies:
             tasks.append(async_cmr_post(url, request_body, session, sem))
@@ -34,8 +50,13 @@ async def async_cmr_posts(url, request_bodies: list, sem: Optional[asyncio.Semap
     return list(itertools.chain.from_iterable(responses))
 
 
-async def async_cmr_post(url, data: str, session: aiohttp.ClientSession, sem: Optional[asyncio.Semaphore] = None):
-    """Issues a request asynchronously. If a semaphore is provided, it will use it as a context manager."""
+async def async_cmr_post(url, data: str, session: aiohttp.ClientSession, sem: Optional[asyncio.Semaphore] = None,
+                         output_path: Optional[str] = None):
+    """Issues a request asynchronously. If a semaphore is provided, it will use it as a context manager.
+
+    When *output_path* is set, streams items to a JSONL file on disk instead of
+    accumulating in memory (ported from PCM cmr_client.py).
+    """
     sem = sem if sem is not None else contextlib.nullcontext()
 
     async with sem:
@@ -48,8 +69,8 @@ async def async_cmr_post(url, data: str, session: aiohttp.ClientSession, sem: Op
 
         current_page = 1
         headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Client-Id': f'nasa.jpl.opera.sds.pcm.data_subscriber.{os.environ.get("USER", "unknown")}'
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Client-Id": f'nasa.jpl.opera.sds.pcm.data_subscriber.{os.environ.get("USER", "unknown")}'
         }
 
         logger.info("Issuing request. This may take a while depending on search page size and number of pages/results.")
@@ -58,6 +79,12 @@ async def async_cmr_post(url, data: str, session: aiohttp.ClientSession, sem: Op
         while current_page <= max_pages:
             async with await fetch_post_url(session, url, data, headers) as response:
                 response_json = await response.json()
+
+            if output_path:
+                with open(output_path, "a") as f:
+                    for item in response_json["items"]:
+                        f.write(json.dumps(item) + "\n")
+            else:
                 response_jsons.append(response_json)
 
             if current_page == 1:
@@ -79,12 +106,15 @@ async def async_cmr_post(url, data: str, session: aiohttp.ClientSession, sem: Op
                 break
 
             current_page += 1
-            if not current_page <= max_pages:
-                logger.warning(
-                    "Reached max pages limit (%d). Not all search results exhausted. "
-                    "Adjust limit or time ranges to process all hits, then re-run this script.",
-                    max_pages
-                )
+            if current_page > max_pages:
+                if cmr_search_after:
+                    logger.warning(
+                        "Reached max pages limit (%d). Not all search results exhausted. "
+                        "Adjust limit or time ranges to process all hits, then re-run this script.",
+                        max_pages
+                    )
+                else:
+                    logger.info("All search results retrieved (hit count was exact multiple of page size).")
 
         return response_jsons
 
@@ -134,6 +164,55 @@ def try_request_get(request_url, params, headers=None, raise_for_status=True):
     return response
 
 
+def extract_native_ids(paths: Iterable[str]) -> set[str]:
+    """Scan JSONL files and return set of ``meta.native-id`` strings.
+
+    Companion to the disk-streaming ``output_dir`` / ``output_path`` feature:
+    write large CMR results to JSONL with :func:`async_cmr_posts`, then read
+    back just the native IDs without loading everything into memory.
+
+    Ported from PCM ``cmr_audit_utils.py``.
+    """
+    native_ids: set[str] = set()
+    for path in paths:
+        with open(path) as f:
+            for line in f:
+                item = json.loads(line)
+                native_ids.add(item["meta"]["native-id"])
+    return native_ids
+
+
+def extract_fields(paths: Iterable[str], fields: list[str]) -> list[dict]:
+    """Read JSONL files and extract specified nested fields per item.
+
+    Fields use dot-notation (e.g. ``"meta.native-id"``, ``"umm.InputGranules"``).
+    Returns list of flat dicts keyed by field path.
+
+    Ported from PCM ``cmr_audit_utils.py``.
+    """
+    records: list[dict] = []
+    for path in paths:
+        with open(path) as f:
+            for line in f:
+                item = json.loads(line)
+                records.append({field: _get_nested(item, field) for field in fields})
+    return records
+
+
+def _get_nested(obj, path: str):
+    """Extract nested value using dot notation (e.g. ``"meta.native-id"``)."""
+    for key in path.split("."):
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            if key not in obj:
+                raise KeyError(f"Key '{key}' not found in path '{path}'")
+            obj = obj[key]
+        else:
+            raise KeyError(f"Cannot access key '{key}' in non-dict object (path: '{path}')")
+    return obj
+
+
 def paramss_to_request_body(paramss: Iterable[dict]):
     """See params_to_request_body"""
     return [params_to_request_body(params) for params in paramss]
@@ -148,7 +227,7 @@ def params_to_request_body(params: dict):
     """
     s = ""
     for k, v in params.items():
-        if k == 'token' and v is None:
+        if k == "token" and v is None:
             continue
 
         if isinstance(v, Iterable) and not isinstance(v, str):

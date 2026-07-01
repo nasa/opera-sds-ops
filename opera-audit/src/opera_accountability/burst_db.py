@@ -11,7 +11,7 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
-_RTC_BURST_RE = re.compile(r'T\d{3}-\d{6}-IW\d')
+_RTC_BURST_RE = re.compile(r"T\d{3}-\d{6}-IW\d")
 
 
 def extract_rtc_burst_id(granule_id: str) -> Optional[str]:
@@ -30,8 +30,8 @@ def normalize_burst_id(burst_id: str) -> str:
 def _coerce_bursts_to_products(data: Any) -> dict[str, list[str]]:
     if isinstance(data, tuple) and len(data) >= 2:
         data = data[1]
-    elif isinstance(data, dict) and 'bursts_to_products' in data:
-        data = data['bursts_to_products']
+    elif isinstance(data, dict) and "bursts_to_products" in data:
+        data = data["bursts_to_products"]
 
     if not isinstance(data, dict):
         raise ValueError("Could not locate bursts_to_products mapping in burst DB data")
@@ -49,19 +49,19 @@ def _coerce_bursts_to_products(data: Any) -> dict[str, list[str]]:
 
 
 def load_dist_s1_bursts_to_products(db_file: Optional[str] = None) -> Optional[dict[str, list[str]]]:
-    candidate = db_file or os.environ.get('OPERA_DIST_S1_BURST_DB')
+    candidate = db_file or os.environ.get("OPERA_DIST_S1_BURST_DB")
 
     if candidate:
         path = Path(candidate).expanduser().resolve()
         if not path.exists():
             raise FileNotFoundError(f"DIST-S1 burst DB path does not exist: {path}")
 
-        if path.suffix.lower() == '.json':
+        if path.suffix.lower() == ".json":
             with open(path) as f:
                 return _coerce_bursts_to_products(json.load(f))
 
-        if path.suffix.lower() in {'.pickle', '.pkl'}:
-            with open(path, 'rb') as f:
+        if path.suffix.lower() in {".pickle", ".pkl"}:
+            with open(path, "rb") as f:
                 return _coerce_bursts_to_products(pickle.load(f))
 
         try:

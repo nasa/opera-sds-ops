@@ -27,7 +27,7 @@ class ForwardMapStrategy(AccountabilityStrategy):
     
     def __init__(self, product: str):
         self.product = product
-        self.product_config = CONFIG['products'][product]
+        self.product_config = CONFIG["products"][product]
     
     def get_strategy_name(self) -> str:
         return "forward_map"
@@ -36,7 +36,7 @@ class ForwardMapStrategy(AccountabilityStrategy):
         self,
         start_date: datetime,
         end_date: datetime,
-        venue: str = 'PROD',
+        venue: str = "PROD",
         **kwargs
     ) -> dict[str, Any]:
         """Run forward-map accountability analysis.
@@ -47,25 +47,25 @@ class ForwardMapStrategy(AccountabilityStrategy):
         3. Query CMR for actual outputs
         4. Find missing outputs (inputs that should have been processed but weren't)
         """
-        input_config = self.product_config.get('accountability', {}).get('forward_map', {})
+        input_config = self.product_config.get("accountability", {}).get("forward_map", {})
         
         if not input_config:
             raise ValueError(f"No forward_map configuration found for {self.product}")
         
         # Get input collection info
-        input_ccid = input_config.get('input_ccid', {}).get(venue)
+        input_ccid = input_config.get("input_ccid", {}).get(venue)
         if not input_ccid:
             raise ValueError(f"No input CCID configured for {self.product} in {venue}")
         
         # Get output collection info
-        output_ccid = self.product_config['ccid'].get(venue)
+        output_ccid = self.product_config["ccid"].get(venue)
         if not output_ccid:
             raise ValueError(f"No output CCID configured for {self.product} in {venue}")
         
         # Step 1: Query CMR for INPUT products (Chris's line 217-218, 220-222)
         logger.info(f"Querying CMR for input products from {start_date} to {end_date}")
         input_granules = self._query_cmr(input_ccid, start_date, end_date, venue)
-        input_ids = set(g['umm']['GranuleUR'] for g in input_granules)
+        input_ids = set(g["umm"]["GranuleUR"] for g in input_granules)
         logger.info(f"Expected input (granules): {len(input_ids):,}")
         
         # Step 2: Generate expected output patterns from inputs (Chris's line 224-228)
@@ -78,10 +78,10 @@ class ForwardMapStrategy(AccountabilityStrategy):
         # Step 3: Query CMR for actual OUTPUT products (Chris's line 231)
         logger.info(f"Querying CMR for {self.product} outputs")
         output_granules = self._query_cmr(output_ccid, start_date, end_date, venue)
-        actual_output_ids = set(g['umm']['GranuleUR'] for g in output_granules)
+        actual_output_ids = set(g["umm"]["GranuleUR"] for g in output_granules)
         
         # Step 4: Extract output prefixes (Chris's line 233-235)
-        expected_output_prefixes = {pattern.rstrip('*') for pattern in expected_output_patterns}
+        expected_output_prefixes = {pattern.rstrip("*") for pattern in expected_output_patterns}
         actual_output_prefixes = self._extract_output_prefixes(actual_output_ids)
         missing_output_prefixes = expected_output_prefixes - actual_output_prefixes
         
@@ -93,21 +93,27 @@ class ForwardMapStrategy(AccountabilityStrategy):
             missing_inputs = functools.reduce(set.union, missing_input_sets)
         
         # Calculate accountability metrics (Chris's line 246-248)
-        expected_count = len(input_ids)
-        actual_count = len(actual_output_prefixes)
-        missing_count = len(missing_inputs)
+        # All counts are in the OUTPUT-prefix domain for consistency:
+        #   expected = output prefixes we should see (derived from inputs)
+        #   actual   = output prefixes we found in CMR
+        #   missing  = expected - actual (output prefixes)
+        expected_output_count = len(expected_output_prefixes)
+        actual_output_count = len(actual_output_prefixes)
+        missing_output_count = len(missing_output_prefixes)
         
-        logger.info(f"Fully published (granules): {actual_count:,}")
-        logger.info(f"Missing processed (granules): {missing_count:,}")
+        logger.info(f"Expected output prefixes: {expected_output_count:,}")
+        logger.info(f"Actual output prefixes: {actual_output_count:,}")
+        logger.info(f"Missing output prefixes: {missing_output_count:,}")
         
         return {
-            'strategy': self.get_strategy_name(),
-            'expected': expected_count,
-            'actual': actual_count,
-            'missing_count': missing_count,
-            'missing': sorted(list(missing_inputs)),
-            'input_surveyed': len(input_granules),
-            'output_surveyed': len(output_granules),
+            "strategy": self.get_strategy_name(),
+            "expected": expected_output_count,
+            "actual": actual_output_count,
+            "missing_count": missing_output_count,
+            "missing": sorted(list(missing_output_prefixes)),
+            "input_surveyed": len(input_granules),
+            "output_surveyed": len(output_granules),
+            "missing_input_granules": sorted(list(missing_inputs)),
         }
     
     def _query_cmr(self, ccid: str, start_date: datetime, end_date: datetime, venue: str) -> list[dict]:
@@ -129,12 +135,12 @@ class ForwardMapStrategy(AccountabilityStrategy):
         For HLS inputs: HLS.L30.T15SXR.2024001T180732.v2.0
         Generate DSWx pattern: OPERA_L3_DSWx-HLS_T15SXR_20240101T180732Z_*
         """
-        forward_map_config = self.product_config.get('accountability', {}).get('forward_map', {})
-        input_product_type = forward_map_config.get('input_product_type', 'HLS')
+        forward_map_config = self.product_config.get("accountability", {}).get("forward_map", {})
+        input_product_type = forward_map_config.get("input_product_type", "HLS")
         
-        if input_product_type == 'HLS':
+        if input_product_type == "HLS":
             return self._hls_to_dswx_patterns(input_ids, input_to_outputs_map, output_to_inputs_map)
-        elif input_product_type == 'SLC':
+        elif input_product_type == "SLC":
             logger.warning("SLC forward-map not yet implemented")
             return set()
         else:
@@ -157,10 +163,10 @@ class ForwardMapStrategy(AccountabilityStrategy):
         for granule in hls_ids:
             # HLS pattern (Chris's line 143-149)
             m = re.match(
-                r'(?P<product_shortname>HLS[.]([LS])30)[.]'
-                r'(?P<tile_id>T[^\W_]{5})[.]'
-                r'(?P<acquisition_ts>(?P<year>\d{4})(?P<day_of_year>\d{3})T(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2}))[.]'
-                r'(?P<collection_version>v\d+[.]\d+)$',
+                r"(?P<product_shortname>HLS[.]([LS])30)[.]"
+                r"(?P<tile_id>T[^\W_]{5})[.]"
+                r"(?P<acquisition_ts>(?P<year>\d{4})(?P<day_of_year>\d{3})T(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2}))[.]"
+                r"(?P<collection_version>v\d+[.]\d+)$",
                 granule
             )
             if not m:
@@ -176,7 +182,7 @@ class ForwardMapStrategy(AccountabilityStrategy):
             dswx_acquisition_dt_str = f"{date.strftime('%Y%m%d')}T{time_of_day}"
             
             # Generate DSWx pattern (Chris's line 157)
-            dswx_native_id_pattern = f'OPERA_L3_DSWx-HLS_{tile}_{dswx_acquisition_dt_str}Z_*'
+            dswx_native_id_pattern = f"OPERA_L3_DSWx-HLS_{tile}_{dswx_acquisition_dt_str}Z_*"
             dswx_native_id_patterns.add(dswx_native_id_pattern)
             
             # Bidirectional mapping (Chris's line 160-162)
@@ -192,11 +198,11 @@ class ForwardMapStrategy(AccountabilityStrategy):
         Exact port of Chris's cmr_audit_hls.py:167-175 (dswx_native_ids_to_prefixes)
         """
         dswx_regex_pattern = (
-            r'(?P<project>OPERA)_'
-            r'(?P<level>L3)_'
-            r'(?P<product_type>DSWx)-(?P<source>HLS)_'
-            r'(?P<tile_id>T[^\W_]{5})_'
-            r'(?P<acquisition_ts>(?P<acq_year>\d{4})(?P<acq_month>\d{2})(?P<acq_day>\d{2})T(?P<acq_hour>\d{2})(?P<acq_minute>\d{2})(?P<acq_second>\d{2})Z)_'
+            r"(?P<project>OPERA)_"
+            r"(?P<level>L3)_"
+            r"(?P<product_type>DSWx)-(?P<source>HLS)_"
+            r"(?P<tile_id>T[^\W_]{5})_"
+            r"(?P<acquisition_ts>(?P<acq_year>\d{4})(?P<acq_month>\d{2})(?P<acq_day>\d{2})T(?P<acq_hour>\d{2})(?P<acq_minute>\d{2})(?P<acq_second>\d{2})Z)_"
         )
         prefixes = set()
         for prefix in output_ids:

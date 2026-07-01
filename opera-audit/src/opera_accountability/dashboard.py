@@ -56,7 +56,7 @@ def load_reports(data_dir: Path) -> dict:
         :mod:`strategies.dswx_s1.pipeline`.
     """
     reports_dir = data_dir / "reports"
-    reports = {'duplicates': {}, 'accountability': {}}
+    reports = {"duplicates": {}, "accountability": {}}
 
     if not reports_dir.exists():
         return reports
@@ -69,7 +69,7 @@ def load_reports(data_dir: Path) -> dict:
                 json_files = sorted(product_dir.glob("*.json"), reverse=True)
                 if json_files:
                     with open(json_files[0]) as f:
-                        reports['duplicates'][product_dir.name] = json.load(f)
+                        reports["duplicates"][product_dir.name] = json.load(f)
 
     # Accountability — flat OR nested-by-date.
     acc_dir = reports_dir / "accountability"
@@ -82,7 +82,7 @@ def load_reports(data_dir: Path) -> dict:
             flat_jsons = sorted(product_dir.glob("*.json"), reverse=True)
             if flat_jsons:
                 with open(flat_jsons[0]) as f:
-                    reports['accountability'][product] = json.load(f)
+                    reports["accountability"][product] = json.load(f)
                 continue
 
             date_dirs = sorted(
@@ -97,26 +97,26 @@ def load_reports(data_dir: Path) -> dict:
 
             with open(summary_path) as f:
                 summary = json.load(f)
-            summary['_report_dir'] = str(latest)
-            reports['accountability'][product] = summary
+            summary["_report_dir"] = str(latest)
+            reports["accountability"][product] = summary
 
     return reports
 
 
 def _unwrap_accountability_results(report: dict) -> dict:
     """Return the canonical results dict regardless of report shape."""
-    if 'results' in report and isinstance(report['results'], dict):
-        return report['results']
+    if "results" in report and isinstance(report["results"], dict):
+        return report["results"]
     return report
 
 
 def _is_dswx_s1_report(report: dict) -> bool:
     """Heuristic: DSWX_S1 summary.json carries pipeline-specific keys."""
-    return 'tile_set_count' in report and 'rtc_surveyed' in report
+    return "tile_set_count" in report and "rtc_surveyed" in report
 
 
 def _is_dist_s1_report(report: dict) -> bool:
-    return 'dist_surveyed' in report and report.get('metadata', {}).get('strategy') == 'dist_s1'
+    return "dist_surveyed" in report and report.get("metadata", {}).get("strategy") == "dist_s1"
 
 
 def _extract_generated_at(report: dict) -> str | None:
@@ -125,10 +125,10 @@ def _extract_generated_at(report: dict) -> str | None:
     - DSWX_HLS / duplicates: ``report['report_metadata']['generated_at']``
     - DSWX_S1 pipeline:      ``report['metadata']['generated_at']``
     """
-    if 'report_metadata' in report and isinstance(report['report_metadata'], dict):
-        return report['report_metadata'].get('generated_at')
-    if 'metadata' in report and isinstance(report['metadata'], dict):
-        return report['metadata'].get('generated_at')
+    if "report_metadata" in report and isinstance(report["report_metadata"], dict):
+        return report["report_metadata"].get("generated_at")
+    if "metadata" in report and isinstance(report["metadata"], dict):
+        return report["metadata"].get("generated_at")
     return None
 
 
@@ -145,7 +145,7 @@ def _format_age(generated_at: str | None) -> str:
         return "unknown"
     try:
         # Handle both "...Z" and naive ISO strings.
-        ts = generated_at.replace('Z', '+00:00')
+        ts = generated_at.replace("Z", "+00:00")
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is not None:
             dt = dt.astimezone()
@@ -155,7 +155,7 @@ def _format_age(generated_at: str | None) -> str:
     except (ValueError, TypeError):
         return "unknown"
 
-    return dt.strftime('%Y-%m-%d %H:%M %Z')
+    return dt.strftime("%Y-%m-%d %H:%M %Z")
 
 
 # Status thresholds — single source of truth used by the helpers AND rendered
@@ -197,7 +197,7 @@ def status_pill_html(icon: str, rate_pct: float, label: str | None = None) -> st
     "Healthy" / "Warning" / "Critical" words instead of percentages.
     """
     from html import escape
-    body = escape(label) if label is not None else f'{rate_pct:.2f}%'
+    body = escape(label) if label is not None else f"{rate_pct:.2f}%"
     return (
         f'<span class="opera-pill {_PILL_CLASS[icon]}">'
         f'<span class="material-symbols-rounded">{icon}</span>'
@@ -705,7 +705,7 @@ def _render_header(data_dir: Path) -> None:
 
 def _build_meta_strip(data_dir: Path) -> str:
     """Produce the meta strip HTML + inline legend <details> disclosure."""
-    loaded = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    loaded = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     dup_healthy = DUPLICATE_THRESHOLDS["healthy"]
     dup_warning = DUPLICATE_THRESHOLDS["warning"]
@@ -754,7 +754,7 @@ def _format_meta_timestamp(value: str | None) -> str | None:
     if not value:
         return None
     try:
-        ts = value.replace('Z', '+00:00')
+        ts = value.replace("Z", "+00:00")
         dt = datetime.fromisoformat(ts)
         # Keep in UTC
         if dt.tzinfo is not None:
@@ -764,7 +764,7 @@ def _format_meta_timestamp(value: str | None) -> str | None:
             dt = dt.replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
         return value
-    return dt.strftime('%Y-%m-%d %H:%M UTC')
+    return dt.strftime("%Y-%m-%d %H:%M UTC")
 
 
 def _format_meta_timestamp_local(value: str | None) -> str | None:
@@ -772,7 +772,7 @@ def _format_meta_timestamp_local(value: str | None) -> str | None:
     if not value:
         return None
     try:
-        ts = value.replace('Z', '+00:00')
+        ts = value.replace("Z", "+00:00")
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is not None:
             dt = dt.astimezone()
@@ -781,7 +781,7 @@ def _format_meta_timestamp_local(value: str | None) -> str | None:
             dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
     except (ValueError, TypeError):
         return value
-    return dt.strftime('%Y-%m-%d %H:%M %Z')
+    return dt.strftime("%Y-%m-%d %H:%M %Z")
 
 
 def _render_report_meta_strip(report: dict) -> None:
@@ -792,15 +792,15 @@ def _render_report_meta_strip(report: dict) -> None:
     - DSWX_S1 pipeline:      ``report['metadata']``
     """
     meta = {}
-    if isinstance(report.get('report_metadata'), dict):
-        meta = report['report_metadata']
-    elif isinstance(report.get('metadata'), dict):
-        meta = report['metadata']
+    if isinstance(report.get("report_metadata"), dict):
+        meta = report["report_metadata"]
+    elif isinstance(report.get("metadata"), dict):
+        meta = report["metadata"]
 
-    start = _format_meta_timestamp(meta.get('start_date'))
-    end = _format_meta_timestamp(meta.get('end_date'))
-    generated = _format_meta_timestamp_local(meta.get('generated_at'))
-    venue = meta.get('venue')
+    start = _format_meta_timestamp(meta.get("start_date"))
+    end = _format_meta_timestamp(meta.get("end_date"))
+    generated = _format_meta_timestamp_local(meta.get("generated_at"))
+    venue = meta.get("venue")
 
     from html import escape as _e
     parts = []
@@ -817,8 +817,8 @@ def _render_report_meta_strip(report: dict) -> None:
 
     st.markdown(
         '<div class="opera-metastrip"><span>'
-        + '</span><span>'.join(parts)
-        + '</span></div>',
+        + "</span><span>".join(parts)
+        + "</span></div>",
         unsafe_allow_html=True,
     )
 
@@ -877,7 +877,7 @@ def _download_header(title: str, count: int, file_base: str, items: list[str],
 def _render_overview(reports: dict) -> None:
     _section_label("Overview")
 
-    if not reports['duplicates'] and not reports['accountability']:
+    if not reports["duplicates"] and not reports["accountability"]:
         sui.alert(
             title="No reports yet",
             description=(
@@ -897,13 +897,13 @@ def _render_overview(reports: dict) -> None:
     # to take down the entire Overview tab whenever an end-conflict report
     # was loaded alongside ordinary duplicate reports.
     total_granules = sum(
-        r['results'].get('total', 0) for r in reports['duplicates'].values()
+        r["results"].get("total", 0) for r in reports["duplicates"].values()
     )
     total_duplicates = sum(
-        r['results'].get('duplicates', r['results'].get('conflicting_products', 0))
-        for r in reports['duplicates'].values()
+        r["results"].get("duplicates", r["results"].get("conflicting_products", 0))
+        for r in reports["duplicates"].values()
     )
-    total_accountability_products = len(reports['accountability'])
+    total_accountability_products = len(reports["accountability"])
 
     cols = st.columns(4)
     with cols[0]:
@@ -939,20 +939,20 @@ def _render_overview(reports: dict) -> None:
     # (Legend now lives in the header popover — see _render_legend_popover.)
 
     # Duplicate rate bar chart across products.
-    if reports['duplicates']:
+    if reports["duplicates"]:
         _section_label("Duplicate rate by product")
         chart_rows = []
-        for product, report in reports['duplicates'].items():
+        for product, report in reports["duplicates"].items():
             # All duplicate reports written by ``save_reports`` are wrapped
             # under ``results``; reading from the top-level ``report`` dict
             # silently produced 0% rates for every product.
-            results = report.get('results', report)
-            total = results.get('total', 0)
+            results = report.get("results", report)
+            total = results.get("total", 0)
             # End-conflict reports (DISP_S1 ``--check-end-conflicts``) expose
             # ``conflicting_products`` instead of ``duplicates``; surface
             # whichever metric the report actually contains.
             duplicates = results.get(
-                'duplicates', results.get('conflicting_products', 0)
+                "duplicates", results.get("conflicting_products", 0)
             )
             rate = (duplicates / total * 100) if total else 0.0
             chart_rows.append({
@@ -965,10 +965,10 @@ def _render_overview(reports: dict) -> None:
             alt.Chart(chart_df)
             .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
             .encode(
-                x=alt.X('Product:N', sort='-y', title=None),
-                y=alt.Y('Rate (%):Q'),
+                x=alt.X("Product:N", sort="-y", title=None),
+                y=alt.Y("Rate (%):Q"),
                 color=alt.value(JPL_BLUE),
-                tooltip=['Product', 'Rate (%)', 'Duplicates'],
+                tooltip=["Product", "Rate (%)", "Duplicates"],
             )
             .configure(**_altair_theme()["config"])
             .properties(height=220)
@@ -976,17 +976,17 @@ def _render_overview(reports: dict) -> None:
         st.altair_chart(chart, use_container_width=True)
 
     # Per-product duplicate summary with freshness + status columns.
-    if reports['duplicates']:
+    if reports["duplicates"]:
         _section_label("Products — duplicate summary")
         from html import escape as _e
         rows = []
-        for product, report in reports['duplicates'].items():
+        for product, report in reports["duplicates"].items():
             # Check if this is an end-conflict report
-            if product == 'DISP_S1' and 'conflict_groups' in report.get('results', {}):
-                results = report['results']
-                total = results.get('total', 0)
-                conflict_groups = results.get('conflict_groups', 0)
-                conflicting_products = results.get('conflicting_products', 0)
+            if product == "DISP_S1" and "conflict_groups" in report.get("results", {}):
+                results = report["results"]
+                total = results.get("total", 0)
+                conflict_groups = results.get("conflict_groups", 0)
+                conflicting_products = results.get("conflicting_products", 0)
                 rate = (conflicting_products / total * 100) if total else 0.0
                 status = _status_for_duplicate_rate(rate)
                 rows.append([
@@ -998,8 +998,8 @@ def _render_overview(reports: dict) -> None:
                     freshness_chip_html(_format_age(_extract_generated_at(report))),
                 ])
             else:
-                results = report['results']
-                rate = (results['duplicates'] / results['total'] * 100) if results['total'] else 0.0
+                results = report["results"]
+                rate = (results["duplicates"] / results["total"] * 100) if results["total"] else 0.0
                 rows.append([
                     f"<strong>{_e(product)}</strong>",
                     f"{results['total']:,}",
@@ -1014,25 +1014,25 @@ def _render_overview(reports: dict) -> None:
         )
 
     # Per-product accountability summary (with freshness + status).
-    if reports['accountability']:
+    if reports["accountability"]:
         _section_label("Products — accountability summary")
         from html import escape as _e
         acc_rows = []
-        for product, report in reports['accountability'].items():
+        for product, report in reports["accountability"].items():
             if _is_dswx_s1_report(report) or _is_dist_s1_report(report):
-                filtered = report.get('filtered_rtc_count', 0)
-                missing = report.get('missing_count', 0)
-                expected = report.get('expected', filtered)
-                actual = report.get('actual', report.get('used_rtc_count', 0))
+                filtered = report.get("filtered_rtc_count", 0)
+                missing = report.get("missing_count", 0)
+                expected = report.get("expected", filtered)
+                actual = report.get("actual", report.get("used_rtc_count", 0))
                 # actual / expected is bounded to [0, 100] (used/filtered
                 # can overshoot when DSWx references pre-window RTCs).
                 rate = (actual / expected * 100) if expected else 0.0
                 expected_label = f"{expected:,}"
             else:
                 r = _unwrap_accountability_results(report)
-                expected = r.get('expected', 0)
-                actual = r.get('actual', 0)
-                missing = r.get('missing_count', 0)
+                expected = r.get("expected", 0)
+                actual = r.get("actual", 0)
+                missing = r.get("missing_count", 0)
                 rate = (actual / expected * 100) if expected else 0.0
                 expected_label = f"{expected:,}"
             acc_rows.append([
@@ -1052,7 +1052,7 @@ def _render_overview(reports: dict) -> None:
 def _render_duplicates(reports: dict) -> None:
     _section_label("Duplicate analysis")
 
-    if not reports['duplicates']:
+    if not reports["duplicates"]:
         sui.alert(
             title="No duplicate reports",
             description="Run `opera-audit duplicates [PRODUCT] --save` to generate reports.",
@@ -1062,18 +1062,18 @@ def _render_duplicates(reports: dict) -> None:
 
     selected = st.selectbox(
         "Product",
-        list(reports['duplicates'].keys()),
+        list(reports["duplicates"].keys()),
         key="dup_product_selectbox",
     )
     if not selected:
         return
 
-    report = reports['duplicates'][selected]
+    report = reports["duplicates"][selected]
     _render_report_meta_strip(report)
-    results = report['results']
+    results = report["results"]
 
     # Check if this is an end-conflict report
-    is_end_conflict = 'conflict_groups' in results
+    is_end_conflict = "conflict_groups" in results
 
     if is_end_conflict:
         cols = st.columns(4)
@@ -1087,7 +1087,7 @@ def _render_duplicates(reports: dict) -> None:
             sui.metric_card(title="Conflicting products", content=f"{results['conflicting_products']:,}",
                             description="different begin dates", key=_next_key("m"))
         with cols[3]:
-            rate = (results['conflicting_products'] / results['total'] * 100) if results['total'] else 0.0
+            rate = (results["conflicting_products"] / results["total"] * 100) if results["total"] else 0.0
             sui.metric_card(title="Conflict rate", content=f"{rate:.2f}%",
                             description="conflicts ÷ total", key=_next_key("m"))
     else:
@@ -1102,52 +1102,52 @@ def _render_duplicates(reports: dict) -> None:
             sui.metric_card(title="Duplicates", content=f"{results['duplicates']:,}",
                             description="older copies superseded", key=_next_key("m"))
         with cols[3]:
-            rate = (results['duplicates'] / results['total'] * 100) if results['total'] else 0.0
+            rate = (results["duplicates"] / results["total"] * 100) if results["total"] else 0.0
             sui.metric_card(title="Duplicate rate", content=f"{rate:.2f}%",
                             description="duplicates ÷ total", key=_next_key("m"))
 
     # Altair bar chart — one bar per date, two layers (total vs duplicates).
-    by_date = results.get('by_date') or {}
+    by_date = results.get("by_date") or {}
     if by_date:
         _section_label("Duplicates by date")
         df = pd.DataFrame([
             {
                 "Date": d, 
-                "Total": by_date[d].get('total', by_date[d].get('n_granules', 0)), 
-                "Duplicates": by_date[d].get('n_duplicates', 0)
+                "Total": by_date[d].get("total", by_date[d].get("n_granules", 0)), 
+                "Duplicates": by_date[d].get("n_duplicates", 0)
             }
             for d in sorted(by_date.keys())
         ])
-        melted = df.melt('Date', var_name='Series', value_name='Count')
+        melted = df.melt("Date", var_name="Series", value_name="Count")
         chart = (
             alt.Chart(melted)
             .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
             .encode(
-                x=alt.X('Date:N', title=None),
-                y=alt.Y('Count:Q', title='Granules'),
-                color=alt.Color('Series:N', legend=alt.Legend(orient='top')),
-                xOffset='Series:N',
-                tooltip=['Date', 'Series', 'Count'],
+                x=alt.X("Date:N", title=None),
+                y=alt.Y("Count:Q", title="Granules"),
+                color=alt.Color("Series:N", legend=alt.Legend(orient="top")),
+                xOffset="Series:N",
+                tooltip=["Date", "Series", "Count"],
             )
             .configure(**_altair_theme()["config"])
             .properties(height=260)
         )
         st.altair_chart(chart, use_container_width=True)
 
-    dup_list = results.get('duplicate_list') or []
+    dup_list = results.get("duplicate_list") or []
     
     # Show conflict details if end-conflict report
-    if is_end_conflict and 'conflicts' in results:
+    if is_end_conflict and "conflicts" in results:
         _section_label("End conflicts by frame")
-        conflicts = results['conflicts']
+        conflicts = results["conflicts"]
         if conflicts:
             conflict_data = []
             for key, conf in conflicts.items():
                 conflict_data.append({
-                    "Frame": conf['frame_id'],
-                    "End Date": conf['end_dt'],
-                    "Begin Dates": ", ".join(conf['begin_dts']),
-                    "Count": conf['count']
+                    "Frame": conf["frame_id"],
+                    "End Date": conf["end_dt"],
+                    "Begin Dates": ", ".join(conf["begin_dts"]),
+                    "Count": conf["count"]
                 })
             df_conflicts = pd.DataFrame(conflict_data)
             st.dataframe(df_conflicts, use_container_width=True)
@@ -1156,7 +1156,7 @@ def _render_duplicates(reports: dict) -> None:
     
     # Show duplicate list for regular reports
     if not is_end_conflict and dup_list:
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = datetime.now().strftime("%Y-%m-%d")
         _download_header(
             title="Duplicate granule IDs",
             count=len(dup_list),
@@ -1177,7 +1177,7 @@ def _render_duplicates(reports: dict) -> None:
 def _render_accountability(reports: dict) -> None:
     _section_label("Accountability analysis")
 
-    if not reports['accountability']:
+    if not reports["accountability"]:
         sui.alert(
             title="No accountability reports",
             description="Run `opera-audit accountability [PRODUCT] --save` to generate reports.",
@@ -1187,21 +1187,21 @@ def _render_accountability(reports: dict) -> None:
 
     selected = st.selectbox(
         "Product",
-        list(reports['accountability'].keys()),
+        list(reports["accountability"].keys()),
         key="acc_product_selectbox",
     )
     if not selected:
         return
 
-    report = reports['accountability'][selected]
+    report = reports["accountability"][selected]
     results = _unwrap_accountability_results(report)
-    strategy = results.get('strategy', 'unknown')
+    strategy = results.get("strategy", "unknown")
     
     if _is_dswx_s1_report(report):
         _render_dswx_s1_panel(selected, report)
     elif _is_dist_s1_report(report):
         _render_dist_s1_panel(selected, report)
-    elif strategy in ['date_count', 'db_based', 'forward_map', 'delegated_validator']:
+    elif strategy in ["date_count", "db_based", "forward_map", "delegated_validator"]:
         _render_generic_strategy_panel(selected, report, strategy)
     else:
         _render_dswx_hls_panel(selected, report)
@@ -1227,15 +1227,15 @@ def _render_dswx_hls_panel(product: str, report: dict) -> None:
                         description="HLS without DSWx",
                         key=_next_key("m"))
     with cols[3]:
-        rate = (results['actual'] / results['expected'] * 100) if results['expected'] else 0.0
+        rate = (results["actual"] / results["expected"] * 100) if results["expected"] else 0.0
         sui.metric_card(title="Accountability rate",
                         content=f"{rate:.2f}%",
                         description="matched ÷ expected",
                         key=_next_key("m"))
 
-    missing = results.get('missing') or []
+    missing = results.get("missing") or []
     if missing:
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = datetime.now().strftime("%Y-%m-%d")
         _download_header(
             title=f"Missing {product} outputs",
             count=len(missing),
@@ -1256,7 +1256,7 @@ def _render_generic_strategy_panel(product: str, report: dict, strategy: str) ->
     _section_label(f"Accountability summary (strategy: {strategy})")
     
     # Handle different result structures based on strategy
-    if strategy == 'date_count':
+    if strategy == "date_count":
         cols = st.columns(3)
         with cols[0]:
             sui.metric_card(title="Expected Per Day", content=f"{results.get('expected_per_day', 0)}",
@@ -1269,20 +1269,20 @@ def _render_generic_strategy_panel(product: str, report: dict, strategy: str) ->
                             description="date range coverage", key=_next_key("m"))
         
         # Show date counts if available
-        if 'date_counts' in results:
+        if "date_counts" in results:
             _section_label("Granule counts by date")
-            date_data = [{"Date": d, "Count": c} for d, c in results['date_counts'].items()]
+            date_data = [{"Date": d, "Count": c} for d, c in results["date_counts"].items()]
             df_dates = pd.DataFrame(date_data).sort_values("Date")
             st.dataframe(df_dates, use_container_width=True)
             
             # Highlight missing dates
-            missing_dates = {d: c for d, c in results['date_counts'].items() 
-                           if c < results.get('expected_per_day', 1)}
+            missing_dates = {d: c for d, c in results["date_counts"].items() 
+                           if c < results.get("expected_per_day", 1)}
             if missing_dates:
                 _section_label(f"Dates with missing granules ({len(missing_dates)})")
                 st.json(missing_dates)
     
-    elif strategy == 'db_based':
+    elif strategy == "db_based":
         cols = st.columns(4)
         with cols[0]:
             sui.metric_card(title="Expected", content=f"{results.get('expected', 0):,}",
@@ -1309,7 +1309,7 @@ def _render_generic_strategy_panel(product: str, report: dict, strategy: str) ->
             sui.metric_card(title="Missing", content=f"{results.get('missing_count', 0):,}",
                             description="missing products", key=_next_key("m"))
         
-        if strategy == 'delegated_validator':
+        if strategy == "delegated_validator":
             # ``st.info`` is not a context manager and requires the message
             # as a positional arg; using ``with st.info():`` raised
             # AttributeError every time a delegated_validator panel rendered.
@@ -1319,20 +1319,20 @@ def _render_generic_strategy_panel(product: str, report: dict, strategy: str) ->
             )
     
     # Show missing items if available
-    if 'missing' in results and results['missing']:
+    if "missing" in results and results["missing"]:
         _section_label(f"Missing items ({len(results['missing'])})")
-        st.json(results['missing'][:100])  # Show first 100
+        st.json(results["missing"][:100])  # Show first 100
 
 
 def _render_dswx_s1_panel(product: str, report: dict) -> None:
     _render_report_meta_strip(report)
 
     _section_label("Accountability")
-    filtered = report.get('filtered_rtc_count', 0)
-    used = report.get('used_rtc_count', 0)
-    missing = report.get('missing_count', 0)
-    expected = report.get('expected', filtered)
-    actual = report.get('actual', used)
+    filtered = report.get("filtered_rtc_count", 0)
+    used = report.get("used_rtc_count", 0)
+    missing = report.get("missing_count", 0)
+    expected = report.get("expected", filtered)
+    actual = report.get("actual", used)
 
     cols = st.columns(4)
     with cols[0]:
@@ -1383,9 +1383,9 @@ def _render_dswx_s1_panel(product: str, report: dict) -> None:
                         key=_next_key("m"))
 
     # Missing RTC list.
-    missing_list = report.get('missing') or []
+    missing_list = report.get("missing") or []
     if missing_list:
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = datetime.now().strftime("%Y-%m-%d")
         _download_header(
             title="Missing RTC products",
             count=len(missing_list),
@@ -1398,7 +1398,7 @@ def _render_dswx_s1_panel(product: str, report: dict) -> None:
                 st.code(granule_id, language=None)
 
     # Cycle / tile-set drill-down.
-    report_dir = report.get('_report_dir')
+    report_dir = report.get("_report_dir")
     if not report_dir:
         return
 
@@ -1441,10 +1441,10 @@ def _render_dist_s1_panel(product: str, report: dict) -> None:
     _render_report_meta_strip(report)
 
     _section_label("Accountability")
-    expected = report.get('expected', 0)
-    actual = report.get('actual', 0)
-    missing = report.get('missing_count', 0)
-    used = report.get('used_rtc_count', 0)
+    expected = report.get("expected", 0)
+    actual = report.get("actual", 0)
+    missing = report.get("missing_count", 0)
+    used = report.get("used_rtc_count", 0)
 
     cols = st.columns(4)
     with cols[0]:
@@ -1483,7 +1483,7 @@ def _render_dist_s1_panel(product: str, report: dict) -> None:
                         key=_next_key("m"))
     with cols[2]:
         sui.metric_card(title="Burst DB mode",
-                        content="On" if report.get('burst_db_enabled') else "CMR-only",
+                        content="On" if report.get("burst_db_enabled") else "CMR-only",
                         description="optional RTC → tile mapping",
                         key=_next_key("m"))
     with cols[3]:
@@ -1492,9 +1492,9 @@ def _render_dist_s1_panel(product: str, report: dict) -> None:
                         description="after existing product filter",
                         key=_next_key("m"))
 
-    missing_rtcs = report.get('missing') or []
+    missing_rtcs = report.get("missing") or []
     if missing_rtcs:
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = datetime.now().strftime("%Y-%m-%d")
         _download_header(
             title="Missing RTC products",
             count=len(missing_rtcs),
@@ -1506,9 +1506,9 @@ def _render_dist_s1_panel(product: str, report: dict) -> None:
             for granule_id in missing_rtcs[:100]:
                 st.code(granule_id, language=None)
 
-    missing_dist = report.get('missing_dist_products') or []
+    missing_dist = report.get("missing_dist_products") or []
     if missing_dist:
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = datetime.now().strftime("%Y-%m-%d")
         _download_header(
             title="Potential missing DIST-S1 product times",
             count=len(missing_dist),
@@ -1520,7 +1520,7 @@ def _render_dist_s1_panel(product: str, report: dict) -> None:
             for value in missing_dist[:100]:
                 st.code(value, language=None)
 
-    report_dir = report.get('_report_dir')
+    report_dir = report.get("_report_dir")
     if not report_dir:
         return
 
@@ -1537,9 +1537,9 @@ def _render_dist_s1_panel(product: str, report: dict) -> None:
         if rows:
             table_rows = [
                 {
-                    "Tile/acq group": row.get('mgrs_tile_id_acq_group'),
-                    "RTC count": len(row.get('rtc_granules') or []),
-                    "Product times": len(row.get('product_id_time') or []),
+                    "Tile/acq group": row.get("mgrs_tile_id_acq_group"),
+                    "RTC count": len(row.get("rtc_granules") or []),
+                    "Product times": len(row.get("product_id_time") or []),
                 }
                 for row in rows[:200]
             ]

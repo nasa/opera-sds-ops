@@ -17,7 +17,8 @@ from opera_accountability.cmr import query_cmr, query_cmr_by_short_name
 from opera_accountability.duplicates import (
     detect_duplicates,
     detect_disp_s1_end_conflicts,
-    detect_duplicates_memory_efficient
+    detect_duplicates_memory_efficient,
+    get_granules_from_grq,
 )
 from opera_accountability.reports import save_reports
 from .strategies.dswx_hls import analyze_accountability
@@ -25,7 +26,7 @@ from .strategies.dswx_hls import analyze_accountability
 # Set up logging (default to WARNING, not INFO)
 logging.basicConfig(
     level=logging.WARNING,
-    format='%(asctime)s [%(levelname)s] %(message)s'
+    format="%(asctime)s [%(levelname)s] %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,8 @@ def duplicates(
     days_back: int = typer.Option(7, "--days-back", "-d", help="Number of days to look back"),
     start: Optional[str] = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD)"),
     end: Optional[str] = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
-    venue: str = typer.Option("PROD", "--venue", "-v", help="Venue (PROD or UAT)"),
+    venue: str = typer.Option("PROD", "--venue", "-v", help="Venue (PROD, UAT, or GRQ)"),
+    grq_url: Optional[str] = typer.Option(None, "--grq-url", help="GRQ OpenSearch URL (required when --venue GRQ)"),
     save: bool = typer.Option(False, "--save", help="Save reports to files (default: stdout only)"),
     output_dir: str = typer.Option("./output", "--output-dir", "-o", help="Output directory (used with --save)"),
     check_end_conflicts: bool = typer.Option(False, "--check-end-conflicts", help="Check for DISP-S1 end conflicts (same frame+end date, different begin date)"),
@@ -59,6 +61,14 @@ def duplicates(
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    # Validate venue
+    if venue == "GRQ" and not grq_url:
+        console.print("[red]Error: --grq-url is required when --venue is GRQ[/red]")
+        raise typer.Exit(1)
+    if venue not in ("PROD", "UAT", "GRQ"):
+        console.print(f"[red]Error: Unknown venue '{venue}'. Use PROD, UAT, or GRQ.[/red]")
+        raise typer.Exit(1)
+
     # If no product specified, run for all products
     if product is None:
         _run_duplicates_all(
@@ -66,6 +76,7 @@ def duplicates(
             start=start,
             end=end,
             venue=venue,
+            grq_url=grq_url,
             save=save,
             output_dir=output_dir,
             check_end_conflicts=check_end_conflicts,
@@ -75,91 +86,128 @@ def duplicates(
         return
 
     # Validate product
-    if product not in CONFIG['products']:
+    if product not in CONFIG["products"]:
         console.print(f"[red]Error: Unknown product '{product}'[/red]")
         console.print(f"Available products: {', '.join(CONFIG['products'].keys())}")
         raise typer.Exit(1)
 
     # Calculate date range
     if start and end:
-        start_date = datetime.strptime(start, '%Y-%m-%d')
-        end_date = datetime.strptime(end, '%Y-%m-%d')
+        start_date = datetime.strptime(start, "%Y-%m-%d")
+        end_date = datetime.strptime(end, "%Y-%m-%d")
     else:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days_back)
 
+    # Build source info for report summary
+    source_info: dict = {"venue": venue}
+    if venue == "GRQ":
+        grq_index = CONFIG["products"][product].get("grq_index")
+        if not grq_index:
+            console.print(f"[red]Error: No grq_index configured for {product}[/red]")
+            raise typer.Exit(1)
+        source_info["grq_url"] = grq_url
+        source_info["grq_index"] = grq_index
+    else:
+        ccid = CONFIG["products"][product]["ccid"].get(venue, "")
+        source_info["ccid"] = ccid
+
     if not quiet:
         mode_str = "save to files" if save else "stdout only"
+        source_line = f"Source: GRQ ({grq_url})" if venue == "GRQ" else f"Venue: {venue}"
         console.print(Panel(
             f"[bold]Duplicate Detection[/bold]\n"
             f"Product: {product}\n"
-            f"Venue: {venue}\n"
+            f"{source_line}\n"
             f"Date Range: {start_date.date()} to {end_date.date()}\n"
             f"Mode: {mode_str}",
             title="OPERA Audit",
             border_style="cyan"
         ))
 
-    # Get collection ID (fall back to short_name query if ccid is empty)
-    ccid = CONFIG['products'][product]['ccid'][venue]
-    has_collection = 'collection' in CONFIG['products'][product] and CONFIG['products'][product]['collection'].get(venue)
-    if not ccid and not has_collection:
-        console.print(f"[red]Error: No collection ID or short_name configured for {product} in {venue}[/red]")
-        raise typer.Exit(1)
-
-    # Query CMR (progress bar shown by query_cmr)
-    # End-conflict detection requires the full granule list, so disable
-    # memory-efficient mode when both flags are set.
-    # Also disable if no CCID (memory-efficient path lacks short-name fallback).
-    is_static = CONFIG['products'][product].get('static', False)
-    use_memory_efficient = memory_efficient and not (check_end_conflicts and product == 'DISP_S1') and not is_static and bool(ccid)
-
-    if use_memory_efficient:
-        if not quiet:
-            console.print("\n[cyan]Using memory-efficient batched processing...[/cyan]")
-        results = detect_duplicates_memory_efficient(product, start_date, end_date, venue)
-    else:
-        if ccid:
-            cmr_granules = query_cmr(ccid, start_date, end_date, venue, skip_temporal=is_static)
-        else:
-            coll = CONFIG['products'][product]['collection'][venue]
-            cmr_granules = query_cmr_by_short_name(
-                coll['short_name'], coll['provider'], start_date, end_date, venue
-            )
-
+    # --- GRQ path ---
+    if venue == "GRQ":
+        import re
+        pattern = re.compile(CONFIG["products"][product]["pattern"])
+        cmr_granules = get_granules_from_grq(
+            grq_url=grq_url,
+            index=grq_index,
+            product=product,
+            start=start_date,
+            end=end_date,
+            test_pattern=pattern,
+        )
         if len(cmr_granules) == 0:
-            console.print("[yellow]No granules found in date range[/yellow]")
+            console.print("[yellow]No granules found in GRQ[/yellow]")
             return
-
-        # Detect duplicates or end conflicts
         if not quiet:
-            console.print("\n[cyan]Analyzing for duplicates...[/cyan]")
+            console.print("\n[cyan]Analyzing for duplicates (GRQ source)...[/cyan]")
+        results = detect_duplicates(cmr_granules, product)
+    else:
+        # --- CMR path ---
+        # Get collection ID (fall back to short_name query if ccid is empty)
+        ccid = CONFIG["products"][product]["ccid"].get(venue, "")
+        has_collection = "collection" in CONFIG["products"][product] and CONFIG["products"][product]["collection"].get(venue)
+        if not ccid and not has_collection:
+            console.print(f"[red]Error: No collection ID or short_name configured for {product} in {venue}[/red]")
+            raise typer.Exit(1)
 
-        if check_end_conflicts and product == 'DISP_S1':
-            results = detect_disp_s1_end_conflicts(cmr_granules)
+        # Query CMR (progress bar shown by query_cmr)
+        # End-conflict detection requires the full granule list, so disable
+        # memory-efficient mode when both flags are set.
+        # Also disable if no CCID (memory-efficient path lacks short-name fallback).
+        is_static = CONFIG["products"][product].get("static", False)
+        use_memory_efficient = memory_efficient and not (check_end_conflicts and product == "DISP_S1") and not is_static and bool(ccid)
+
+        if use_memory_efficient:
+            if not quiet:
+                console.print("\n[cyan]Using memory-efficient batched processing...[/cyan]")
+            results = detect_duplicates_memory_efficient(product, start_date, end_date, venue)
         else:
-            results = detect_duplicates(cmr_granules, product)
+            if ccid:
+                cmr_granules = query_cmr(ccid, start_date, end_date, venue, skip_temporal=is_static)
+            else:
+                coll = CONFIG["products"][product]["collection"][venue]
+                cmr_granules = query_cmr_by_short_name(
+                    coll["short_name"], coll["provider"], start_date, end_date, venue
+                )
+
+            if len(cmr_granules) == 0:
+                console.print("[yellow]No granules found in date range[/yellow]")
+                return
+
+            # Detect duplicates or end conflicts
+            if not quiet:
+                console.print("\n[cyan]Analyzing for duplicates...[/cyan]")
+
+            if check_end_conflicts and product == "DISP_S1":
+                results = detect_disp_s1_end_conflicts(cmr_granules)
+            else:
+                results = detect_duplicates(cmr_granules, product)
+
+    # Attach source info to results for downstream reporting
+    results["source"] = source_info
 
     # Save reports to files only if --save flag is used
     if save:
         if not quiet:
             console.print("[cyan]Saving reports...[/cyan]")
         files = save_reports(
-            results, output_dir, product, 'duplicates', venue,
+            results, output_dir, product, "duplicates", venue,
             start_date=start_date, end_date=end_date,
         )
 
     # Display summary (always show unless quiet)
     if not quiet:
-        if check_end_conflicts and product == 'DISP_S1':
+        if check_end_conflicts and product == "DISP_S1":
             table = Table(title=f"DISP-S1 End Conflict Summary")
             table.add_column("Metric", style="cyan")
             table.add_column("Count", justify="right", style="green")
             table.add_row("Total granules", f"{results['total']:,}")
             table.add_row("Conflict groups", f"{results['conflict_groups']:,}", style="yellow")
             table.add_row("Conflicting products", f"{results['conflicting_products']:,}", style="yellow")
-            if results['total'] > 0:
-                conflict_rate = (results['conflicting_products'] / results['total']) * 100
+            if results["total"] > 0:
+                conflict_rate = (results["conflicting_products"] / results["total"]) * 100
                 table.add_row("Conflict rate", f"{conflict_rate:.2f}%")
             console.print(table)
         else:
@@ -171,8 +219,8 @@ def duplicates(
             table.add_row("Unique granules", f"{results['unique']:,}")
             table.add_row("Duplicates", f"{results['duplicates']:,}", style="yellow")
 
-            if results['total'] > 0:
-                dup_rate = (results['duplicates'] / results['total']) * 100
+            if results["total"] > 0:
+                dup_rate = (results["duplicates"] / results["total"]) * 100
                 table.add_row("Duplicate rate", f"{dup_rate:.2f}%")
 
             console.print(table)
@@ -184,7 +232,7 @@ def duplicates(
 
     # In quiet mode, just print the numbers
     if quiet:
-        if check_end_conflicts and product == 'DISP_S1':
+        if check_end_conflicts and product == "DISP_S1":
             print(f"{results['total']},{results['conflict_groups']},{results['conflicting_products']}")
         else:
             print(f"{results['total']},{results['unique']},{results['duplicates']}")
@@ -273,28 +321,28 @@ def accountability(
         return
 
     # Validate product
-    product_cfg = CONFIG['products'].get(product)
+    product_cfg = CONFIG["products"].get(product)
     if product_cfg is None:
         console.print(f"[red]Error: Unknown product '{product}'[/red]")
         console.print(f"Available products: {', '.join(CONFIG['products'].keys())}")
         raise typer.Exit(1)
 
-    acc_cfg = product_cfg.get('accountability') or {}
+    acc_cfg = product_cfg.get("accountability") or {}
 
     # Use provided strategy or auto-detect from config
     if strategy:
         strategy_name = strategy
     else:
-        if not acc_cfg.get('enabled'):
+        if not acc_cfg.get("enabled"):
             console.print(f"[red]Error: accountability not enabled for {product} in config.yaml[/red]")
             console.print("[dim]Tip: use --strategy to force a specific strategy even if not enabled in config[/dim]")
             raise typer.Exit(1)
-        strategy_name = acc_cfg.get('strategy', 'dswx_hls')
+        strategy_name = acc_cfg.get("strategy", "dswx_hls")
 
     # Calculate date range
     if start and end:
-        start_date = datetime.strptime(start, '%Y-%m-%d')
-        end_date = datetime.strptime(end, '%Y-%m-%d')
+        start_date = datetime.strptime(start, "%Y-%m-%d")
+        end_date = datetime.strptime(end, "%Y-%m-%d")
     else:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days_back)
@@ -313,32 +361,32 @@ def accountability(
         ))
 
     # Dispatch by strategy
-    if strategy_name == 'dswx_hls':
+    if strategy_name == "dswx_hls":
         _run_dswx_hls_accountability(
             product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
         )
-    elif strategy_name == 'dswx_s1':
+    elif strategy_name == "dswx_s1":
         _run_dswx_s1_accountability(
             start_date, end_date, venue, save, output_dir, mgrs_db, quiet, recovery_format
         )
-    elif strategy_name == 'dist_s1':
+    elif strategy_name == "dist_s1":
         _run_dist_s1_accountability(
             start_date, end_date, venue, save, output_dir,
             burst_db, max_concurrent, max_retries, prefer_s3, quiet, recovery_format
         )
-    elif strategy_name == 'forward_map':
+    elif strategy_name == "forward_map":
         _run_forward_map_accountability(
             product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
         )
-    elif strategy_name == 'date_count':
+    elif strategy_name == "date_count":
         _run_date_count_accountability(
             product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
         )
-    elif strategy_name == 'delegated_validator':
+    elif strategy_name == "delegated_validator":
         _run_delegated_validator_accountability(
             product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
         )
-    elif strategy_name == 'db_based':
+    elif strategy_name == "db_based":
         _run_db_based_accountability(
             product, start_date, end_date, venue, save, output_dir, quiet, db_path, recovery_format
         )
@@ -375,7 +423,7 @@ def _run_forward_map_accountability(
         console.print(table)
     
     if save:
-        save_reports(results, output_dir, product, 'accountability', venue, start_date=start_date, end_date=end_date)
+        save_reports(results, output_dir, product, "accountability", venue, start_date=start_date, end_date=end_date)
     
     if recovery_format:
         from opera_accountability.recovery_file import write_recovery_file
@@ -415,7 +463,7 @@ def _run_date_count_accountability(
         console.print(table)
     
     if save:
-        save_reports(results, output_dir, product, 'accountability', venue, start_date=start_date, end_date=end_date)
+        save_reports(results, output_dir, product, "accountability", venue, start_date=start_date, end_date=end_date)
     
     if recovery_format:
         from opera_accountability.recovery_file import write_recovery_files_by_date
@@ -441,14 +489,14 @@ def _run_delegated_validator_accountability(
     from opera_accountability.strategies.delegated_validator import DelegatedValidatorStrategy
     
     # Get validator parameters from config
-    product_cfg = CONFIG['products'][product]
-    validator_cfg = product_cfg.get('accountability', {}).get('delegated_validator', {})
+    product_cfg = CONFIG["products"][product]
+    validator_cfg = product_cfg.get("accountability", {}).get("delegated_validator", {})
     
     # Pass validator parameters from config and kwargs
     validator_kwargs = {
-        'processing_mode': kwargs.get('processing_mode', validator_cfg.get('processing_mode', 'forward')),
-        'k': kwargs.get('k', validator_cfg.get('k', 15)),
-        'frames_only': kwargs.get('frames_only'),
+        "processing_mode": kwargs.get("processing_mode", validator_cfg.get("processing_mode", "forward")),
+        "k": kwargs.get("k", validator_cfg.get("k", 15)),
+        "frames_only": kwargs.get("frames_only"),
     }
     
     strategy = DelegatedValidatorStrategy(product)
@@ -459,15 +507,23 @@ def _run_delegated_validator_accountability(
         table.add_column("Metric", style="cyan")
         table.add_column("Count", justify="right", style="green")
         
-        table.add_row("Expected", f"{results['expected']:,}")
+        if results.get("expected") is not None:
+            table.add_row("Expected", f"{results['expected']:,}")
+        else:
+            table.add_row("Expected", "N/A (no validator)")
         table.add_row("Actual", f"{results['actual']:,}")
-        table.add_row("Missing", f"{results['missing_count']:,}", style="yellow")
-        table.add_row("Delegated", "Yes" if results.get('delegated') else "No")
+        if results.get("missing_count") is not None:
+            table.add_row("Missing", f"{results['missing_count']:,}", style="yellow")
+        else:
+            table.add_row("Missing", "N/A (no validator)", style="yellow")
+        table.add_row("Delegated", "Yes" if results.get("delegated") else "No")
+        if results.get("validated") is False:
+            table.add_row("Validated", "No — configure external validator", style="red")
         
         console.print(table)
     
     if save:
-        save_reports(results, output_dir, product, 'accountability', venue, start_date=start_date, end_date=end_date)
+        save_reports(results, output_dir, product, "accountability", venue, start_date=start_date, end_date=end_date)
     
     if recovery_format:
         from opera_accountability.recovery_file import write_recovery_file
@@ -507,7 +563,7 @@ def _run_db_based_accountability(
         console.print(table)
     
     if save:
-        save_reports(results, output_dir, product, 'accountability', venue, start_date=start_date, end_date=end_date)
+        save_reports(results, output_dir, product, "accountability", venue, start_date=start_date, end_date=end_date)
     
     if recovery_format:
         from opera_accountability.recovery_file import write_recovery_file
@@ -528,9 +584,9 @@ def _run_dswx_hls_accountability(
     recovery_format: Optional[str] = None,
 ) -> dict:
     """Existing DSWX_HLS pipeline, extracted so the CLI can dispatch by strategy."""
-    dswx_ccid = CONFIG['products'][product]['ccid'][venue]
-    hls_s30_ccid = CONFIG['products'][product]['accountability']['hls_s30_ccid'][venue]
-    hls_l30_ccid = CONFIG['products'][product]['accountability']['hls_l30_ccid'][venue]
+    dswx_ccid = CONFIG["products"][product]["ccid"][venue]
+    hls_s30_ccid = CONFIG["products"][product]["accountability"]["hls_s30_ccid"][venue]
+    hls_l30_ccid = CONFIG["products"][product]["accountability"]["hls_l30_ccid"][venue]
 
     dswx_granules = query_cmr(dswx_ccid, start_date, end_date, venue)
     hls_s30_granules = query_cmr(hls_s30_ccid, start_date, end_date, venue)
@@ -551,11 +607,11 @@ def _run_dswx_hls_accountability(
         if not quiet:
             console.print("[cyan]Saving reports...[/cyan]")
         files = save_reports(
-            results, output_dir, product, 'accountability', venue,
+            results, output_dir, product, "accountability", venue,
             start_date=start_date, end_date=end_date,
         )
 
-    if recovery_format and results.get('missing'):
+    if recovery_format and results.get("missing"):
         from opera_accountability.recovery_file import write_recovery_file
         output_path = f"{output_dir}/recovery_{product}"
         write_recovery_file(results, output_path, recovery_format)
@@ -571,8 +627,8 @@ def _run_dswx_hls_accountability(
         table.add_row("Matched DSWx Granules", f"{results['actual']:,}")
         table.add_row("Missing DSWx Outputs", f"{results['missing_count']:,}", style="yellow")
 
-        if results['expected'] > 0:
-            acc_rate = (results['actual'] / results['expected']) * 100
+        if results["expected"] > 0:
+            acc_rate = (results["actual"] / results["expected"]) * 100
             table.add_row("Accountability Rate", f"{acc_rate:.2f}%")
 
         console.print(table)
@@ -620,11 +676,11 @@ def _run_dist_s1_accountability(
         prefer_s3=prefer_s3,
     )
 
-    if recovery_format and results.get('missing'):
+    if recovery_format and results.get("missing"):
         from opera_accountability.recovery_file import write_recovery_file
         output_path = f"{output_dir}/recovery_DIST_S1"
         write_recovery_file(
-            {'missing': results['missing']}, output_path, recovery_format
+            {"missing": results["missing"]}, output_path, recovery_format
         )
         if not quiet:
             console.print(f"[cyan]Recovery file written to {output_path}.{recovery_format}[/cyan]")
@@ -637,16 +693,16 @@ def _run_dist_s1_accountability(
         table.add_row("DIST-S1 surveyed", f"{results['dist_surveyed']:,}")
         table.add_row("RTCs used in DIST-S1", f"{results['used_rtc_count']:,}")
         table.add_row("Missing RTCs", f"{results['missing_count']:,}", style="yellow")
-        if results['expected']:
-            rate = results['actual'] / results['expected'] * 100
+        if results["expected"]:
+            rate = results["actual"] / results["expected"] * 100
             table.add_row("Accountability rate", f"{rate:.2f}%")
-        table.add_row("Burst DB enabled", "yes" if results['burst_db_enabled'] else "no")
+        table.add_row("Burst DB enabled", "yes" if results["burst_db_enabled"] else "no")
         table.add_row("Missing DIST-S1 product times", f"{results['missing_dist_product_count']:,}")
         console.print(table)
 
-        if save and results['files']:
+        if save and results["files"]:
             console.print("\n[bold]Files created:[/bold]")
-            for file_type, path in results['files'].items():
+            for file_type, path in results["files"].items():
                 console.print(f"  {file_type}: {path}")
 
     if quiet:
@@ -687,11 +743,11 @@ def _run_dswx_s1_accountability(
         mgrs_db_override=mgrs_db,
     )
 
-    if recovery_format and results.get('missing'):
+    if recovery_format and results.get("missing"):
         from opera_accountability.recovery_file import write_recovery_file
         output_path = f"{output_dir}/recovery_DSWX_S1"
         write_recovery_file(
-            {'missing': results['missing']}, output_path, recovery_format
+            {"missing": results["missing"]}, output_path, recovery_format
         )
         if not quiet:
             console.print(f"[cyan]Recovery file written to {output_path}.{recovery_format}[/cyan]")
@@ -707,17 +763,17 @@ def _run_dswx_s1_accountability(
         table.add_row("RTCs used in DSWx-S1", f"{results['used_rtc_count']:,}")
         table.add_row("Missing RTCs", f"{results['missing_count']:,}", style="yellow")
         # actual / expected is bounded to [0, 100] — see pipeline._write_summary.
-        if results['expected']:
-            acc_rate = results['actual'] / results['expected'] * 100
+        if results["expected"]:
+            acc_rate = results["actual"] / results["expected"] * 100
             table.add_row("Accountability rate", f"{acc_rate:.2f}%")
         table.add_row("MGRS tile sets affected", f"{results['tile_set_count']:,}")
         table.add_row("Cycle/sensor buckets", f"{results['cycle_bucket_count']:,}")
 
         console.print(table)
 
-        if save and results['files']:
+        if save and results["files"]:
             console.print("\n[bold]Files created:[/bold]")
-            for file_type, path in results['files'].items():
+            for file_type, path in results["files"].items():
                 console.print(f"  {file_type}: {path}")
 
     if quiet:
@@ -768,13 +824,14 @@ def _run_duplicates_all(
     check_end_conflicts: bool,
     memory_efficient: bool,
     quiet: bool,
+    grq_url: Optional[str] = None,
 ) -> None:
     """Internal helper to run duplicate detection for all products."""
     
     # Calculate date range
     if start and end:
-        start_date = datetime.strptime(start, '%Y-%m-%d')
-        end_date = datetime.strptime(end, '%Y-%m-%d')
+        start_date = datetime.strptime(start, "%Y-%m-%d")
+        end_date = datetime.strptime(end, "%Y-%m-%d")
     else:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days_back)
@@ -791,64 +848,91 @@ def _run_duplicates_all(
     
     # Run duplicate detection for each product
     all_results = {}
-    for product in CONFIG['products'].keys():
-        ccid = CONFIG['products'][product]['ccid'][venue]
-        has_collection = 'collection' in CONFIG['products'][product] and CONFIG['products'][product]['collection'].get(venue)
-        if not ccid and not has_collection:
-            if not quiet:
-                console.print(f"[yellow]Skipping {product}: No collection ID or short_name configured[/yellow]")
-            continue
-        
+    for product in CONFIG["products"].keys():
         if not quiet:
             console.print(f"\n[cyan]Processing {product}...[/cyan]")
         
         try:
-            # Query CMR
-            # End-conflict detection requires the full granule list.
-            # Also disable memory-efficient if no CCID (lacks short-name fallback).
-            is_static = CONFIG['products'][product].get('static', False)
-            use_mem_eff = memory_efficient and not (check_end_conflicts and product == 'DISP_S1') and not is_static and bool(ccid)
-            if use_mem_eff:
-                results = detect_duplicates_memory_efficient(product, start_date, end_date, venue)
-            else:
-                if ccid:
-                    cmr_granules = query_cmr(ccid, start_date, end_date, venue, skip_temporal=is_static)
-                else:
-                    coll = CONFIG['products'][product]['collection'][venue]
-                    cmr_granules = query_cmr_by_short_name(
-                        coll['short_name'], coll['provider'], start_date, end_date, venue
-                    )
+            # --- GRQ path ---
+            if venue == "GRQ":
+                import re
+                grq_index = CONFIG["products"][product].get("grq_index")
+                if not grq_index:
+                    if not quiet:
+                        console.print(f"  [yellow]Skipping {product}: No grq_index configured[/yellow]")
+                    continue
+                pattern = re.compile(CONFIG["products"][product]["pattern"])
+                cmr_granules = get_granules_from_grq(
+                    grq_url=grq_url,
+                    index=grq_index,
+                    product=product,
+                    start=start_date,
+                    end=end_date,
+                    test_pattern=pattern,
+                )
                 if len(cmr_granules) == 0:
                     if not quiet:
                         console.print(f"  [yellow]No granules found[/yellow]")
-                    zero_results = {'total': 0, 'unique': 0, 'duplicates': 0}
+                    zero_results = {"total": 0, "unique": 0, "duplicates": 0}
                     all_results[product] = zero_results
                     if save:
-                        save_reports(zero_results, output_dir, product, 'duplicates', venue, start_date=start_date, end_date=end_date)
+                        save_reports(zero_results, output_dir, product, "duplicates", venue, start_date=start_date, end_date=end_date)
                     continue
-                
-                # Detect duplicates
-                if check_end_conflicts and product == 'DISP_S1':
-                    results = detect_disp_s1_end_conflicts(cmr_granules)
+                results = detect_duplicates(cmr_granules, product)
+            else:
+                # --- CMR path ---
+                ccid = CONFIG["products"][product]["ccid"].get(venue, "")
+                has_collection = "collection" in CONFIG["products"][product] and CONFIG["products"][product]["collection"].get(venue)
+                if not ccid and not has_collection:
+                    if not quiet:
+                        console.print(f"  [yellow]Skipping {product}: No collection ID or short_name configured[/yellow]")
+                    continue
+
+                # End-conflict detection requires the full granule list.
+                # Also disable memory-efficient if no CCID (lacks short-name fallback).
+                is_static = CONFIG["products"][product].get("static", False)
+                use_mem_eff = memory_efficient and not (check_end_conflicts and product == "DISP_S1") and not is_static and bool(ccid)
+                if use_mem_eff:
+                    results = detect_duplicates_memory_efficient(product, start_date, end_date, venue)
                 else:
-                    results = detect_duplicates(cmr_granules, product)
+                    if ccid:
+                        cmr_granules = query_cmr(ccid, start_date, end_date, venue, skip_temporal=is_static)
+                    else:
+                        coll = CONFIG["products"][product]["collection"][venue]
+                        cmr_granules = query_cmr_by_short_name(
+                            coll["short_name"], coll["provider"], start_date, end_date, venue
+                        )
+                    if len(cmr_granules) == 0:
+                        if not quiet:
+                            console.print(f"  [yellow]No granules found[/yellow]")
+                        zero_results = {"total": 0, "unique": 0, "duplicates": 0}
+                        all_results[product] = zero_results
+                        if save:
+                            save_reports(zero_results, output_dir, product, "duplicates", venue, start_date=start_date, end_date=end_date)
+                        continue
+                    
+                    # Detect duplicates
+                    if check_end_conflicts and product == "DISP_S1":
+                        results = detect_disp_s1_end_conflicts(cmr_granules)
+                    else:
+                        results = detect_duplicates(cmr_granules, product)
             
             all_results[product] = results
             
             if not quiet:
-                if check_end_conflicts and product == 'DISP_S1':
+                if check_end_conflicts and product == "DISP_S1":
                     console.print(f"  Total: {results['total']:,}, Conflicts: {results['conflicting_products']:,}")
                 else:
                     console.print(f"  Total: {results['total']:,}, Duplicates: {results['duplicates']:,}")
             
             # Save reports
             if save:
-                save_reports(results, output_dir, product, 'duplicates', venue, start_date=start_date, end_date=end_date)
+                save_reports(results, output_dir, product, "duplicates", venue, start_date=start_date, end_date=end_date)
         
         except Exception as e:
             if not quiet:
                 console.print(f"  [red]Error: {e}[/red]")
-            all_results[product] = {'error': str(e)}
+            all_results[product] = {"error": str(e)}
     
     # Display summary table
     if not quiet:
@@ -860,12 +944,12 @@ def _run_duplicates_all(
         table.add_column("Rate", justify="right")
         
         for product, results in all_results.items():
-            if 'error' in results:
-                table.add_row(product, "ERROR", results['error'], "")
-            elif 'conflicting_products' in results:  # DISP_S1 end conflicts
+            if "error" in results:
+                table.add_row(product, "ERROR", results["error"], "")
+            elif "conflicting_products" in results:  # DISP_S1 end conflicts
                 table.add_row(product, f"{results['total']:,}", f"{results['conflicting_products']:,}", "N/A")
             else:
-                dup_rate = (results['duplicates'] / results['total'] * 100) if results['total'] > 0 else 0
+                dup_rate = (results["duplicates"] / results["total"] * 100) if results["total"] > 0 else 0
                 table.add_row(product, f"{results['total']:,}", f"{results['duplicates']:,}", f"{dup_rate:.2f}%")
         
         console.print(table)
@@ -887,15 +971,15 @@ def _run_accountability_all(
     
     # Calculate date range
     if start and end:
-        start_date = datetime.strptime(start, '%Y-%m-%d')
-        end_date = datetime.strptime(end, '%Y-%m-%d')
+        start_date = datetime.strptime(start, "%Y-%m-%d")
+        end_date = datetime.strptime(end, "%Y-%m-%d")
     else:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days_back)
     
     # Get products with accountability enabled
-    enabled_products = [p for p, config in CONFIG['products'].items() 
-                       if config.get('accountability', {}).get('enabled', False)]
+    enabled_products = [p for p, config in CONFIG["products"].items() 
+                       if config.get("accountability", {}).get("enabled", False)]
     
     if not quiet:
         console.print(Panel(
@@ -911,103 +995,60 @@ def _run_accountability_all(
         console.print("[yellow]No products have accountability enabled[/yellow]")
         return
     
-    # Run accountability for each enabled product
+    # Run accountability for each enabled product by delegating to single-product helpers.
+    # This avoids duplicating strategy-specific logic inline.
     all_results = {}
     for product in enabled_products:
-        strategy = CONFIG['products'][product]['accountability']['strategy']
+        strategy_name = CONFIG["products"][product]["accountability"]["strategy"]
         
         if not quiet:
-            console.print(f"\n[cyan]Processing {product} (strategy: {strategy})...[/cyan]")
+            console.print(f"\n[cyan]Processing {product} (strategy: {strategy_name})...[/cyan]")
         
         try:
-            if strategy == 'dswx_hls':
+            # Dispatch table — same helpers used by the single-product path
+            if strategy_name == "dswx_hls":
                 results = _run_dswx_hls_accountability(
                     product, start_date, end_date, venue, save, output_dir, quiet
                 )
-                if results:
-                    all_results[product] = results
-            elif strategy == 'dswx_s1':
-                results = _run_dswx_s1_accountability(start_date, end_date, venue, save, output_dir, mgrs_db, quiet)
-                all_results[product] = {
-                    'expected': results.get('expected', results.get('filtered_rtc_count', 0)),
-                    'actual': results.get('actual', results.get('used_rtc_count', 0)),
-                    'missing_count': results.get('missing_count', 0),
-                }
-            elif strategy == 'dist_s1':
-                prefer_s3 = CONFIG['products'][product]['accountability'].get('prefer_s3_iso_xml', False)
-                results = _run_dist_s1_accountability(start_date, end_date, venue, save, output_dir, None, None, None, prefer_s3, quiet)
-                all_results[product] = {
-                    'expected': results.get('expected', 0),
-                    'actual': results.get('actual', 0),
-                    'missing_count': results.get('missing_count', 0),
-                }
-            elif strategy == 'forward_map':
-                from opera_accountability.strategies.forward_map import ForwardMapStrategy
-                fm_strategy = ForwardMapStrategy(product)
-                results = fm_strategy.analyze(start_date, end_date, venue)
-                if not quiet:
-                    table = Table(title=f"Forward-Map Accountability - {product}")
-                    table.add_column("Metric", style="cyan")
-                    table.add_column("Count", justify="right", style="green")
-                    table.add_row("Expected", f"{results['expected']:,}")
-                    table.add_row("Actual", f"{results['actual']:,}")
-                    table.add_row("Missing", f"{results['missing_count']:,}", style="yellow")
-                    console.print(table)
-                if save:
-                    save_reports(results, output_dir, product, 'accountability', venue, start_date=start_date, end_date=end_date)
-                all_results[product] = results
-            elif strategy == 'date_count':
-                results = _run_date_count_accountability(product, start_date, end_date, venue, save, output_dir, quiet)
-                all_results[product] = {
-                    'expected': results.get('expected_total', 0),
-                    'actual': results.get('actual_total', 0),
-                    'missing_count': results.get('missing_count', 0),
-                }
-            elif strategy == 'delegated_validator':
-                from opera_accountability.strategies.delegated_validator import DelegatedValidatorStrategy
-                product_cfg_inner = CONFIG['products'][product]
-                validator_cfg = product_cfg_inner.get('accountability', {}).get('delegated_validator', {})
-                validator_kwargs = {
-                    'processing_mode': validator_cfg.get('processing_mode', 'forward'),
-                    'k': validator_cfg.get('k', 15),
-                }
-                dv_strategy = DelegatedValidatorStrategy(product)
-                results = dv_strategy.analyze(start_date, end_date, venue, **validator_kwargs)
-                if not quiet:
-                    table = Table(title=f"Delegated-Validator Accountability - {product}")
-                    table.add_column("Metric", style="cyan")
-                    table.add_column("Count", justify="right", style="green")
-                    table.add_row("Expected", f"{results['expected']:,}")
-                    table.add_row("Actual", f"{results['actual']:,}")
-                    table.add_row("Missing", f"{results['missing_count']:,}", style="yellow")
-                    console.print(table)
-                if save:
-                    save_reports(results, output_dir, product, 'accountability', venue, start_date=start_date, end_date=end_date)
-                all_results[product] = results
-            elif strategy == 'db_based':
-                from opera_accountability.strategies.db_based import DBBasedStrategy
-                db_strategy = DBBasedStrategy(product)
-                results = db_strategy.analyze(start_date, end_date, venue, db_path=db_path)
-                if not quiet:
-                    table = Table(title=f"DB-Based Accountability - {product}")
-                    table.add_column("Metric", style="cyan")
-                    table.add_column("Count", justify="right", style="green")
-                    table.add_row("Expected", f"{results['expected']:,}")
-                    table.add_row("Actual", f"{results['actual']:,}")
-                    table.add_row("Missing", f"{results['missing_count']:,}", style="yellow")
-                    table.add_row("Coverage", f"{results['coverage_pct']:.1f}%")
-                    console.print(table)
-                if save:
-                    save_reports(results, output_dir, product, 'accountability', venue, start_date=start_date, end_date=end_date)
-                all_results[product] = results
+            elif strategy_name == "dswx_s1":
+                results = _run_dswx_s1_accountability(
+                    start_date, end_date, venue, save, output_dir, mgrs_db, quiet
+                )
+            elif strategy_name == "dist_s1":
+                prefer_s3 = CONFIG["products"][product]["accountability"].get("prefer_s3_iso_xml", False)
+                results = _run_dist_s1_accountability(
+                    start_date, end_date, venue, save, output_dir, None, None, None, prefer_s3, quiet
+                )
+            elif strategy_name == "forward_map":
+                _run_forward_map_accountability(
+                    product, start_date, end_date, venue, save, output_dir, quiet
+                )
+                results = None  # already displayed by helper
+            elif strategy_name == "date_count":
+                results = _run_date_count_accountability(
+                    product, start_date, end_date, venue, save, output_dir, quiet
+                )
+            elif strategy_name == "delegated_validator":
+                _run_delegated_validator_accountability(
+                    product, start_date, end_date, venue, save, output_dir, quiet
+                )
+                results = None  # already displayed by helper
+            elif strategy_name == "db_based":
+                _run_db_based_accountability(
+                    product, start_date, end_date, venue, save, output_dir, quiet, db_path
+                )
+                results = None  # already displayed by helper
             else:
-                console.print(f"  [red]Unknown strategy: {strategy}[/red]")
+                console.print(f"  [red]Unknown strategy: {strategy_name}[/red]")
                 continue
+
+            if results is not None:
+                all_results[product] = results
         
         except Exception as e:
             if not quiet:
                 console.print(f"  [red]Error: {e}[/red]")
-            all_results[product] = {'error': str(e)}
+            all_results[product] = {"error": str(e)}
     
     # Display summary table
     if not quiet:
@@ -1020,18 +1061,123 @@ def _run_accountability_all(
         table.add_column("Rate", justify="right")
         
         for product, results in all_results.items():
-            if 'error' in results:
-                table.add_row(product, "ERROR", results['error'], "", "")
+            if "error" in results:
+                table.add_row(product, "ERROR", results["error"], "", "")
             else:
-                expected = results.get('expected', 0)
-                actual = results.get('actual', 0)
-                missing = results.get('missing_count', 0)
-                acc_rate = (actual / expected * 100) if expected > 0 else 0
-                table.add_row(product, f"{expected:,}", f"{actual:,}",
-                            f"{missing:,}", f"{acc_rate:.2f}%")
+                expected = results.get("expected")
+                actual = results.get("actual", 0)
+                missing = results.get("missing_count")
+                if expected is not None:
+                    acc_rate = (actual / expected * 100) if expected > 0 else 0
+                    table.add_row(product, f"{expected:,}", f"{actual:,}",
+                                f"{missing:,}" if missing is not None else "N/A",
+                                f"{acc_rate:.2f}%")
+                else:
+                    table.add_row(product, "N/A", f"{actual:,}", "N/A", "N/A")
         
         console.print(table)
         console.print("[green]Done![/green]")
+
+
+@app.command()
+def burst_coverage(
+    start: str = typer.Option(..., "--start", help="Start datetime (ISO format, e.g. 2024-01-01T00:00:00Z)"),
+    end: str = typer.Option(..., "--end", help="End datetime (ISO format, e.g. 2024-01-07T23:59:59Z)"),
+    geojson: str = typer.Option(..., "--geojson", "-g", help="Path or URL to GeoJSON file"),
+    do_cslc: bool = typer.Option(True, help="Check CSLC-S1 coverage"),
+    do_rtc: bool = typer.Option(True, help="Check RTC-S1 coverage"),
+    polarizations: str = typer.Option("VV", help="Comma-separated polarizations (e.g. VV,VH)"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path"),
+    low_memory: bool = typer.Option(False, help="Stream results to JSONL (for long date ranges)"),
+    chunk_days: int = typer.Option(30, help="Days per chunk in low-memory mode"),
+    buffer_deg: float = typer.Option(0.5, help="Buffer in degrees to expand GeoJSON boundary"),
+    cache_dir: Optional[str] = typer.Option(None, help="Cache directory path"),
+    no_cache: bool = typer.Option(False, help="Disable caching"),
+    clear_cache: bool = typer.Option(False, help="Clear all cached data before running"),
+    recheck_dates: Optional[str] = typer.Option(None, help="Comma-separated dates (YYYY-MM-DD) to recheck"),
+    show_missing: int = typer.Option(20, help="Show first N missing products in console"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
+):
+    """Audit OPERA CSLC-S1 and RTC-S1 coverage at the burst level."""
+    import asyncio
+    from dateutil.parser import isoparse
+
+    try:
+        from opera_accountability.burst_coverage import (
+            audit_burst_coverage, init_cache as bc_init_cache,
+            print_report as bc_print_report,
+        )
+    except ImportError as e:
+        console.print(f"[red]Missing dependency: {e}[/red]")
+        console.print("Install with: pip install opera-accountability[burst_coverage]")
+        raise typer.Exit(1)
+
+    if verbose:
+        logging.getLogger("opera_accountability").setLevel(logging.DEBUG)
+
+    start_dt = isoparse(start)
+    end_dt = isoparse(end)
+    if not start_dt.tzinfo or not end_dt.tzinfo:
+        console.print("[red]Datetimes must include timezone (e.g. 2024-01-01T00:00:00Z)[/red]")
+        raise typer.Exit(1)
+
+    product_types = []
+    if do_cslc:
+        product_types.append("CSLC-S1")
+    if do_rtc:
+        product_types.append("RTC-S1")
+    if not product_types:
+        console.print("[red]At least one product type must be enabled[/red]")
+        raise typer.Exit(1)
+
+    if low_memory and not output:
+        console.print("[red]--output required with --low-memory[/red]")
+        raise typer.Exit(1)
+
+    # Setup cache
+    recheck_set = set()
+    if recheck_dates:
+        recheck_set = {d.strip() for d in recheck_dates.split(",")}
+
+    cache = bc_init_cache(
+        Path(cache_dir) if cache_dir else None,
+        not no_cache,
+        recheck_set,
+    )
+    if clear_cache:
+        deleted = cache.clear()
+        console.print(f"Cleared {deleted} cached files")
+
+    # Ensure JSONL extension for low-memory mode
+    output_path = output
+    if low_memory and output_path and not output_path.endswith(".jsonl"):
+        output_path = output_path.rsplit(".", 1)[0] + ".jsonl"
+
+    pol_list = [p.strip() for p in polarizations.split(",")]
+
+    results = asyncio.run(audit_burst_coverage(
+        start_datetime=start_dt,
+        end_datetime=end_dt,
+        geojson_path=geojson,
+        product_types=product_types,
+        polarizations=pol_list,
+        low_memory=low_memory,
+        output_path=output_path,
+        chunk_days=chunk_days,
+        buffer_deg=buffer_deg,
+    ))
+
+    bc_print_report(results, show_missing=show_missing if not low_memory else 0)
+
+    # Write output (non-low-memory mode)
+    if output_path and not low_memory:
+        import json
+        with open(output_path, "w") as f:
+            json.dump(results, f, indent=2, default=str)
+        console.print(f"Results written to {output_path}")
+
+    if low_memory:
+        console.print(f"\nDetailed results written to: {output_path}")
 
 
 @app.command()
