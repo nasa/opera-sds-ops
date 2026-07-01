@@ -27,11 +27,14 @@ for detailed documentation of the consolidation process.
     - `db_based` — Map using external frame/burst database. *[Chris]*
 - **Output formats**: structured JSON (full report), plain-text granule lists,
   and human-readable summaries.
+- **Burst-level coverage audit** for CSLC-S1 and RTC-S1: query expected
+  bursts from the ASF catalog, check CMR for matching products, report
+  coverage gaps with streaming JSONL support for long date ranges. *[Gerald]*
 - **CLI** built on Typer + Rich (`opera-audit duplicates`, `accountability`,
-  `dashboard`).
+  `burst-coverage`, `dashboard`).
 - **Streamlit dashboard** with per-product panels, status pills
   (healthy / warning / critical), Altair charts, and per-artifact JSON
-  previews.
+  previews — including a dedicated **Burst Coverage** tab.
 
 ## Quick Start
 
@@ -197,19 +200,19 @@ downstream re-processing workflows.
 
 ## Supported Products
 
-| Product           | Duplicates | Accountability strategy | Status | Source |
-| ----------------- | :--------: | ----------------------- | ------ | ------ |
-| `DSWX_HLS`        |     ✅     | `dswx_hls` / `forward_map` | ✅ Production | Chris |
-| `RTC_S1`          |     ✅     | —                       | — | Riley |
-| `CSLC_S1`         |     ✅     | —                       | — | Riley |
-| `DSWX_S1`         |     ✅     | `dswx_s1` (needs MGRS DB) | ✅ Production | Riley |
-| `DIST_S1`         |     ✅     | `dist_s1`               | ✅ Production | Kevin |
-| `DISP_S1`         |     ✅     | `delegated_validator` ⚠️ | ⚠️ Needs validator | Gerald + Chris |
-| `TROPO`           |     ✅     | `date_count`            | ✅ Production | Chris |
-| `DISP_S1_STATIC`  |     ✅     | `db_based`              | ✅ Production | Chris |
-| `DIST_ALERT_HLS`  |     ✅     | —                       | — | Riley |
-| `CSLC_S1_STATIC`  |     ✅     | —                       | — | Riley |
-| `RTC_S1_STATIC`   |     ✅     | —                       | — | Riley |
+| Product           | Duplicates | Accountability strategy | Burst Coverage | Status | Source |
+| ----------------- | :--------: | ----------------------- | :------------: | ------ | ------ |
+| `DSWX_HLS`        |     ✅     | `dswx_hls` / `forward_map` | — | ✅ Production | Chris |
+| `RTC_S1`          |     ✅     | —                       | ✅ | — | Riley |
+| `CSLC_S1`         |     ✅     | —                       | ✅ | — | Riley |
+| `DSWX_S1`         |     ✅     | `dswx_s1` (needs MGRS DB) | — | ✅ Production | Riley |
+| `DIST_S1`         |     ✅     | `dist_s1`               | — | ✅ Production | Kevin |
+| `DISP_S1`         |     ✅     | `delegated_validator` ⚠️ | — | ⚠️ Needs validator | Gerald + Chris |
+| `TROPO`           |     ✅     | `date_count`            | — | ✅ Production | Chris |
+| `DISP_S1_STATIC`  |     ✅     | `db_based`              | — | ✅ Production | Chris |
+| `DIST_ALERT_HLS`  |     ✅     | —                       | — | — | Riley |
+| `CSLC_S1_STATIC`  |     ✅     | —                       | — | — | Riley |
+| `RTC_S1_STATIC`   |     ✅     | —                       | — | — | Riley |
 
 **Legend:**
 - ✅ Production: Fully functional and production-ready
@@ -293,11 +296,13 @@ output/reports/
 │   │   ├── 2026-05-11.txt           # newline-separated duplicate granule IDs
 │   │   └── 2026-05-11_summary.txt   # human-readable summary
 │   └── …                            # one folder per product
-└── accountability/
-    └── DSWX_HLS/
-        ├── 2026-05-11.json
-        ├── 2026-05-11_missing.txt
-        └── 2026-05-11_summary.txt
+├── accountability/
+│   └── DSWX_HLS/
+│       ├── 2026-05-11.json
+│       ├── 2026-05-11_missing.txt
+│       └── 2026-05-11_summary.txt
+└── burst_coverage/
+    └── 2026-05-11_10-30-00.json     # timestamped burst-coverage report
 ```
 
 **Nested layout** (used by the `dswx_s1` and `dist_s1` strategies — one
@@ -314,8 +319,9 @@ output/reports/accountability/DSWX_S1/2026-05-11/
 └── missing_mgrs_set_cycle_indices.json
 ```
 
-The dashboard's `load_reports` helper picks up both layouts automatically and
-always surfaces the newest report per product.
+The dashboard's `load_reports` helper picks up all three report categories
+(duplicates, accountability, burst coverage) automatically and always
+surfaces the newest report per product.
 
 ## Dashboard
 
@@ -323,11 +329,11 @@ always surfaces the newest report per product.
 opera-audit dashboard --data-dir ./output
 ```
 
-The dashboard has three tabs:
+The dashboard has four tabs:
 
 - **Overview** — shadcn metric cards, an Altair bar chart of duplicate rates
-  by product, and per-product summary tables for both duplicates and
-  accountability with status pills.
+  by product, and per-product summary tables for duplicates, accountability,
+  and burst coverage with status pills.
 - **Duplicates** — per-product detail view with a by-date Altair chart, the
   duplicate granule-ID preview, and JSON / TXT export popovers. DISP-S1
   reports automatically render the end-conflict view when `--check-end-conflicts`
@@ -337,6 +343,9 @@ The dashboard has three tabs:
   artifact previews) and `dist_s1` (per tile/time-group rows), plus a
   generic panel for `date_count`, `delegated_validator`, `db_based`, and
   `forward_map`.
+- **Burst Coverage** — CSLC-S1 / RTC-S1 burst-level coverage audit results:
+  coverage % bar chart, found vs missing stacked chart, missing burst
+  detail tables with TXT / JSON export.
 
 ## Configuration
 
@@ -394,6 +403,7 @@ Key files:
 - `recovery_file.py` — recovery-file writers for missing products.
 - `cli.py` — Typer-based CLI (`opera-audit …`).
 - `dashboard.py` — Streamlit dashboard.
+- `burst_coverage.py` / `slc_annotations.py` — Gerald’s SLC burst coverage.
 - `strategies/dswx_hls/` — DSWX-HLS accountability (HLS input mapping).
 - `strategies/dswx_s1/` — DSWX-S1 accountability (4-step RTC → DSWx pipeline).
 - `strategies/dist_s1/` — DIST-S1 accountability (ISO-XML pipeline).
@@ -476,8 +486,10 @@ This package consolidates tools from 4 contributors:
 
 ### Gerald
 - **DISP-S1 end-conflict detection** — same frame+end-date, different begin-dates
+- **SLC burst-level coverage audit** — CSLC-S1 / RTC-S1 burst coverage using ASF catalog + CMR
 - Source: `opera-sds-pcm/tools/ops/cmr_audit/detect_cmr_duplicates_for_disp_s1.py`
-- Branch: `frame-states-via-cmr-audit`
+- Source: `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_burst_coverage.py`
+- Branch: `frame-states-via-cmr-audit`, `OPERA-2518`
 
 ### Chris
 - **Multi-strategy suite** — `forward_map`, `date_count`, `delegated_validator`, `db_based`
