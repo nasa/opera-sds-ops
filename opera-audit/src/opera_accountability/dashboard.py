@@ -1036,6 +1036,41 @@ def _render_overview(reports: dict) -> None:
             rows,
         )
 
+    # Accountability rate bar chart across products.
+    if reports["accountability"]:
+        _section_label("Accountability rate by product")
+        acc_chart_rows = []
+        for product, report in reports["accountability"].items():
+            if _is_dswx_s1_report(report) or _is_dist_s1_report(report):
+                filtered = report.get("filtered_rtc_count", 0)
+                expected = report.get("expected", filtered)
+                actual = report.get("actual", report.get("used_rtc_count", 0))
+            else:
+                r = _unwrap_accountability_results(report)
+                expected = r.get("expected") or 0
+                actual = r.get("actual") or 0
+            rate = (actual / expected * 100) if expected else 0.0
+            acc_chart_rows.append({
+                "Product": product,
+                "Coverage (%)": round(rate, 2),
+                "Expected": expected,
+                "Actual": actual,
+            })
+        acc_chart_df = pd.DataFrame(acc_chart_rows).sort_values("Coverage (%)", ascending=False)
+        acc_chart = (
+            alt.Chart(acc_chart_df)
+            .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+            .encode(
+                x=alt.X("Product:N", sort="-y", title=None),
+                y=alt.Y("Coverage (%):Q", scale=alt.Scale(domain=[0, 100])),
+                color=alt.value(JPL_BLUE),
+                tooltip=["Product", "Coverage (%)", "Expected", "Actual"],
+            )
+            .configure(**_altair_theme()["config"])
+            .properties(height=220)
+        )
+        st.altair_chart(acc_chart, use_container_width=True)
+
     # Per-product accountability summary (with freshness + status).
     if reports["accountability"]:
         _section_label("Products — accountability summary")
@@ -1071,7 +1106,37 @@ def _render_overview(reports: dict) -> None:
             acc_rows,
         )
 
-    # Burst coverage summary.
+    # Burst coverage bar chart.
+    if reports["burst_coverage"]:
+        _section_label("Burst coverage by product")
+        bc_chart_rows = []
+        for report_key, report in reports["burst_coverage"].items():
+            for pt, stats in report.get("products", {}).items():
+                found = stats.get("found_count", 0)
+                missing = stats.get("missing_count", 0)
+                bc_chart_rows.append({"Product": pt, "Status": "Found", "Count": found})
+                bc_chart_rows.append({"Product": pt, "Status": "Missing", "Count": missing})
+        if bc_chart_rows:
+            bc_chart_df = pd.DataFrame(bc_chart_rows)
+            bc_chart = (
+                alt.Chart(bc_chart_df)
+                .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+                .encode(
+                    x=alt.X("Product:N", title=None),
+                    y=alt.Y("Count:Q", stack=True),
+                    color=alt.Color(
+                        "Status:N",
+                        scale=alt.Scale(domain=["Found", "Missing"], range=[JPL_BLUE, OPERA_ACCENT]),
+                        legend=alt.Legend(orient="top"),
+                    ),
+                    tooltip=["Product", "Status", "Count"],
+                )
+                .configure(**_altair_theme()["config"])
+                .properties(height=220)
+            )
+            st.altair_chart(bc_chart, use_container_width=True)
+
+    # Burst coverage summary table.
     if reports["burst_coverage"]:
         _section_label("Burst coverage summary")
         from html import escape as _ebc
@@ -1330,28 +1395,28 @@ def _render_generic_strategy_panel(product: str, report: dict, strategy: str) ->
     elif strategy == "db_based":
         cols = st.columns(4)
         with cols[0]:
-            sui.metric_card(title="Expected", content=f"{results.get('expected', 0):,}",
+            sui.metric_card(title="Expected", content=f"{results.get('expected') or 0:,}",
                             description="items in database", key=_next_key("m"))
         with cols[1]:
-            sui.metric_card(title="Actual", content=f"{results.get('actual', 0):,}",
+            sui.metric_card(title="Actual", content=f"{results.get('actual') or 0:,}",
                             description="items in CMR", key=_next_key("m"))
         with cols[2]:
-            sui.metric_card(title="Missing", content=f"{results.get('missing_count', 0):,}",
+            sui.metric_card(title="Missing", content=f"{results.get('missing_count') or 0:,}",
                             description="items not found", key=_next_key("m"))
         with cols[3]:
-            sui.metric_card(title="Coverage", content=f"{results.get('coverage_pct', 0):.1f}%",
+            sui.metric_card(title="Coverage", content=f"{results.get('coverage_pct') or 0:.1f}%",
                             description="actual ÷ expected", key=_next_key("m"))
     
     else:  # forward_map, delegated_validator, or generic
         cols = st.columns(3)
         with cols[0]:
-            sui.metric_card(title="Expected", content=f"{results.get('expected', 0):,}",
+            sui.metric_card(title="Expected", content=f"{results.get('expected') or 0:,}",
                             description="expected products", key=_next_key("m"))
         with cols[1]:
-            sui.metric_card(title="Actual", content=f"{results.get('actual', 0):,}",
+            sui.metric_card(title="Actual", content=f"{results.get('actual') or 0:,}",
                             description="found products", key=_next_key("m"))
         with cols[2]:
-            sui.metric_card(title="Missing", content=f"{results.get('missing_count', 0):,}",
+            sui.metric_card(title="Missing", content=f"{results.get('missing_count') or 0:,}",
                             description="missing products", key=_next_key("m"))
         
         if strategy == "delegated_validator":
@@ -1720,7 +1785,7 @@ def _render_burst_coverage(reports: dict) -> None:
                 .encode(
                     x=alt.X("Product:N", title=None),
                     y=alt.Y("Coverage (%):Q", scale=alt.Scale(domain=[0, 100])),
-                    color=alt.value(OPERA_ACCENT),
+                    color=alt.value(JPL_BLUE),
                     tooltip=["Product", "Coverage (%)", "Found", "Missing", "Expected"],
                 )
                 .configure(**_altair_theme()["config"])
@@ -1744,7 +1809,7 @@ def _render_burst_coverage(reports: dict) -> None:
                     y=alt.Y("Count:Q"),
                     color=alt.Color(
                         "Status:N",
-                        scale=alt.Scale(domain=["Found", "Missing"], range=[JPL_BLUE, NASA_RED]),
+                        scale=alt.Scale(domain=["Found", "Missing"], range=[JPL_BLUE, OPERA_ACCENT]),
                         legend=alt.Legend(orient="top"),
                     ),
                     tooltip=["Product", "Status", "Count"],
