@@ -30,7 +30,7 @@ def _validate_sensor_config() -> None:
     configuration up-front saves the operator from a painful rerun.
     """
     sensor_starts = (
-        CONFIG['products']['DSWX_S1']['accountability'].get('sensor_start_dates') or {}
+        CONFIG["products"]["DSWX_S1"]["accountability"].get("sensor_start_dates") or {}
     )
     bad = [s for s in sensor_starts if not has_known_epoch(s)]
     if bad:
@@ -46,13 +46,13 @@ def _validate_sensor_config() -> None:
 
 def _write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, 'w') as f:
+    with open(path, "w") as f:
         json.dump(data, f, indent=2)
     logger.info("Wrote %s (%s)", path, _human_size(path.stat().st_size))
 
 
 def _human_size(num_bytes: int) -> str:
-    for unit in ('B', 'KB', 'MB', 'GB'):
+    for unit in ("B", "KB", "MB", "GB"):
         if num_bytes < 1024:
             return f"{num_bytes:.1f}{unit}"
         num_bytes /= 1024
@@ -61,16 +61,16 @@ def _human_size(num_bytes: int) -> str:
 
 def _write_summary(path: Path, results: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, 'w') as f:
+    with open(path, "w") as f:
         f.write("OPERA DSWx-S1 Accountability Report\n")
         f.write("=" * 50 + "\n")
         for key, label in (
-            ('venue', 'Venue'),
-            ('start_date', 'Start date'),
-            ('end_date', 'End date'),
-            ('generated_at', 'Generated'),
+            ("venue", "Venue"),
+            ("start_date", "Start date"),
+            ("end_date", "End date"),
+            ("generated_at", "Generated"),
         ):
-            if key in results['metadata']:
+            if key in results["metadata"]:
                 f.write(f"{label:<22}{results['metadata'][key]}\n")
         f.write("\n")
         f.write("SURVEY\n")
@@ -87,8 +87,8 @@ def _write_summary(path: Path, results: dict[str, Any]) -> None:
         # can include RTCs outside the surveyed window (e.g. DSWx products
         # that reference older RTCs), which made the older ``used/filtered``
         # formula exceed 100% on window edges.
-        if results['expected']:
-            pct = results['actual'] / results['expected'] * 100
+        if results["expected"]:
+            pct = results["actual"] / results["expected"] * 100
             f.write(f"Accountability rate:           {pct:.2f}%\n")
         f.write("\n")
         f.write("TILE SETS\n")
@@ -102,7 +102,7 @@ def run(
     start_date: Optional[datetime],
     end_date: Optional[datetime],
     output_dir: str | Path,
-    venue: str = 'PROD',
+    venue: str = "PROD",
     save: bool = True,
     mgrs_db_override: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -118,8 +118,8 @@ def run(
     _validate_sensor_config()
 
     generated_at = datetime.now()
-    date_str = generated_at.strftime('%Y-%m-%d')
-    report_dir = Path(output_dir) / 'reports' / 'accountability' / 'DSWX_S1' / date_str
+    date_str = generated_at.strftime("%Y-%m-%d")
+    report_dir = Path(output_dir) / "reports" / "accountability" / "DSWX_S1" / date_str
     files: dict[str, Path] = {}
 
     # --- Step 1: CMR survey -------------------------------------------------
@@ -127,26 +127,26 @@ def run(
     dswx_products = survey.survey_dswx(start_date, end_date, venue)
 
     if save:
-        _write_json(report_dir / 'rtc_survey.json', rtc_products)
-        _write_json(report_dir / 'dswx_survey.json', dswx_products)
-        files['rtc_survey'] = report_dir / 'rtc_survey.json'
-        files['dswx_survey'] = report_dir / 'dswx_survey.json'
+        _write_json(report_dir / "rtc_survey.json", rtc_products)
+        _write_json(report_dir / "dswx_survey.json", dswx_products)
+        files["rtc_survey"] = report_dir / "rtc_survey.json"
+        files["dswx_survey"] = report_dir / "dswx_survey.json"
 
     # --- Step 2: RTC → DSWx mapping + missing RTC set ----------------------
     map_results = mapping.analyze(rtc_products, dswx_products)
-    missing_rtcs: list[str] = map_results['missing']
+    missing_rtcs: list[str] = map_results["missing"]
 
     if save:
         _write_json(
-            report_dir / 'missing_rtc_products.json',
+            report_dir / "missing_rtc_products.json",
             missing_rtcs,
         )
         _write_json(
-            report_dir / 'rtc_to_dswx_map.json',
-            map_results['rtc_to_dswx_map'],
+            report_dir / "rtc_to_dswx_map.json",
+            map_results["rtc_to_dswx_map"],
         )
-        files['missing_rtc_products'] = report_dir / 'missing_rtc_products.json'
-        files['rtc_to_dswx_map'] = report_dir / 'rtc_to_dswx_map.json'
+        files["missing_rtc_products"] = report_dir / "missing_rtc_products.json"
+        files["rtc_to_dswx_map"] = report_dir / "rtc_to_dswx_map.json"
 
     # --- Steps 3 & 4: tile-set resolution + cycle/sensor expansion ---------
     tile_set_map: dict[str, list[str]] = {}
@@ -160,43 +160,43 @@ def run(
         logger.info("No missing RTCs — skipping tile-set resolution and cycle expansion.")
 
     if save:
-        _write_json(report_dir / 'missing_rtcs_to_tile_sets.json', tile_set_map)
-        _write_json(report_dir / 'missing_mgrs_set_cycle_indices.json', cycle_map)
-        files['missing_rtcs_to_tile_sets'] = report_dir / 'missing_rtcs_to_tile_sets.json'
-        files['missing_mgrs_set_cycle_indices'] = report_dir / 'missing_mgrs_set_cycle_indices.json'
+        _write_json(report_dir / "missing_rtcs_to_tile_sets.json", tile_set_map)
+        _write_json(report_dir / "missing_mgrs_set_cycle_indices.json", cycle_map)
+        files["missing_rtcs_to_tile_sets"] = report_dir / "missing_rtcs_to_tile_sets.json"
+        files["missing_mgrs_set_cycle_indices"] = report_dir / "missing_mgrs_set_cycle_indices.json"
 
     # --- Final results payload --------------------------------------------
     # Reserve summary artifact paths up-front so the on-disk summary.json and
     # the returned ``results['files']`` agree on the full artifact list.
     if save:
-        files['summary_json'] = report_dir / 'summary.json'
-        files['summary_txt'] = report_dir / 'summary.txt'
+        files["summary_json"] = report_dir / "summary.json"
+        files["summary_txt"] = report_dir / "summary.txt"
 
     results = {
-        'metadata': {
-            'product': 'DSWX_S1',
-            'strategy': 'dswx_s1',
-            'venue': venue,
-            'start_date': start_date.isoformat() if start_date else None,
-            'end_date': end_date.isoformat() if end_date else None,
-            'generated_at': generated_at.isoformat(),
+        "metadata": {
+            "product": "DSWX_S1",
+            "strategy": "dswx_s1",
+            "venue": venue,
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
+            "generated_at": generated_at.isoformat(),
         },
-        'rtc_surveyed': len(rtc_products),
-        'dswx_surveyed': len(dswx_products),
-        'filtered_rtc_count': map_results['filtered_rtc_count'],
-        'used_rtc_count': map_results['used_rtc_count'],
-        'missing_count': map_results['missing_count'],
+        "rtc_surveyed": len(rtc_products),
+        "dswx_surveyed": len(dswx_products),
+        "filtered_rtc_count": map_results["filtered_rtc_count"],
+        "used_rtc_count": map_results["used_rtc_count"],
+        "missing_count": map_results["missing_count"],
         # opera-audit-wide accountability contract:
-        'expected': map_results['expected'],
-        'actual': map_results['actual'],
-        'missing': map_results['missing'],
-        'tile_set_count': len(tile_set_map),
-        'cycle_bucket_count': len(cycle_map),
-        'files': {k: str(v) for k, v in files.items()},
+        "expected": map_results["expected"],
+        "actual": map_results["actual"],
+        "missing": map_results["missing"],
+        "tile_set_count": len(tile_set_map),
+        "cycle_bucket_count": len(cycle_map),
+        "files": {k: str(v) for k, v in files.items()},
     }
 
     if save:
-        _write_json(report_dir / 'summary.json', results)
-        _write_summary(report_dir / 'summary.txt', results)
+        _write_json(report_dir / "summary.json", results)
+        _write_summary(report_dir / "summary.txt", results)
 
     return results

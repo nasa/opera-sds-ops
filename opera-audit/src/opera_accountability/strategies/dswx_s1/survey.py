@@ -28,43 +28,41 @@ def _dedupe_by_creation_ts(
 ) -> list[dict]:
     """Keep the record with the newest ``creation_ts`` for each unique-field tuple.
 
-    Records whose granule ID does not match ``pattern`` are logged at WARNING
-    level and skipped. This keeps the survey resilient to unexpected CMR
-    records (e.g. new product versions, off-pattern IDs) rather than aborting
-    the entire pipeline — mirroring ``duplicates.detect_duplicates``.
+    Exact port of Riley's survey() deduplication logic:
+    - Raises RuntimeError if granule ID does not match pattern
+    - Groups by unique-field tuple
+    - Sorts by creation_ts (reverse=True) and keeps first
     """
-    latest: dict[tuple, dict] = {}
-    skipped = 0
+    grouping_products_map = {}
+
     for item in items:
-        match = pattern.match(item['id'])
+        granule_id = item["id"]
+        match = pattern.match(granule_id)
+
         if match is None:
-            skipped += 1
-            logger.warning(
-                "Skipping granule with ID that does not match %s: %s",
-                pattern.pattern, item['id'],
-            )
-            continue
-        groups = match.groupdict()
-        key = tuple(groups[f] for f in unique_fields)
-        incoming_creation = groups['creation_ts']
-        existing = latest.get(key)
-        if existing is None or incoming_creation > existing['_creation_ts']:
-            latest[key] = {**item, '_creation_ts': incoming_creation}
-    if skipped:
-        logger.warning(
-            "Skipped %d / %d records with unparseable granule IDs",
-            skipped, len(items),
-        )
-    # Drop the internal sort key before returning.
-    for record in latest.values():
-        record.pop('_creation_ts', None)
-    return list(latest.values())
+            raise RuntimeError(f"Failed to parse granule ID {granule_id} with pattern {pattern.pattern}")
+
+        group_dict = match.groupdict()
+
+        id_tuple = tuple([group_dict[grp] for grp in unique_fields])
+        item["_timestamp"] = group_dict["creation_ts"]
+
+        if id_tuple not in grouping_products_map:
+            grouping_products_map[id_tuple] = []
+        grouping_products_map[id_tuple].append(item)
+
+    for id_tuple in grouping_products_map:
+        grouping_products_map[id_tuple].sort(key=lambda x: x["_timestamp"], reverse=True)
+        grouping_products_map[id_tuple] = grouping_products_map[id_tuple][0]
+        del grouping_products_map[id_tuple]["_timestamp"]
+
+    return list(grouping_products_map.values())
 
 
 def survey_rtc(
     start: Optional[datetime],
     end: Optional[datetime],
-    venue: str = 'PROD',
+    venue: str = "PROD",
 ) -> list[dict]:
     """Query CMR for RTC-S1 granules and dedupe by ``(burst_id, acq_ts, sensor)``.
 
@@ -73,9 +71,9 @@ def survey_rtc(
     # Use RTC_S1.ccid as the single source of truth — previously a
     # DSWX_S1.accountability.rtc_s1_ccid block duplicated this value and
     # invited silent drift.
-    ccid = CONFIG['products']['RTC_S1']['ccid'][venue]
-    pattern = re.compile(CONFIG['products']['RTC_S1']['pattern'])
-    unique_fields = tuple(CONFIG['products']['RTC_S1']['unique_fields'])
+    ccid = CONFIG["products"]["RTC_S1"]["ccid"][venue]
+    pattern = re.compile(CONFIG["products"]["RTC_S1"]["pattern"])
+    unique_fields = tuple(CONFIG["products"]["RTC_S1"]["unique_fields"])
 
     logger.info("Surveying RTC-S1 granules (ccid=%s, venue=%s)", ccid, venue)
     cmr_records = query_cmr(ccid, start, end, venue)
@@ -83,8 +81,8 @@ def survey_rtc(
     # Shape to the intermediate form used by Riley's survey: id + revision_timestamp.
     shaped = [
         {
-            'id': r['umm']['GranuleUR'],
-            'revision_timestamp': r['meta']['revision-date'],
+            "id": r["umm"]["GranuleUR"],
+            "revision_timestamp": r["meta"]["revision-date"],
         }
         for r in cmr_records
     ]
@@ -98,23 +96,23 @@ def survey_rtc(
 def survey_dswx(
     start: Optional[datetime],
     end: Optional[datetime],
-    venue: str = 'PROD',
+    venue: str = "PROD",
 ) -> list[dict]:
     """Query CMR for DSWx-S1 granules and dedupe by ``(tile_id, acq_ts, sensor)``.
 
     Returns a list of ``{"id": <granule_id>, "input_rtcs": [<rtc_id>, ...]}``.
     """
-    ccid = CONFIG['products']['DSWX_S1']['ccid'][venue]
-    pattern = re.compile(CONFIG['products']['DSWX_S1']['pattern'])
-    unique_fields = tuple(CONFIG['products']['DSWX_S1']['unique_fields'])
+    ccid = CONFIG["products"]["DSWX_S1"]["ccid"][venue]
+    pattern = re.compile(CONFIG["products"]["DSWX_S1"]["pattern"])
+    unique_fields = tuple(CONFIG["products"]["DSWX_S1"]["unique_fields"])
 
     logger.info("Surveying DSWx-S1 granules (ccid=%s, venue=%s)", ccid, venue)
     cmr_records = query_cmr(ccid, start, end, venue)
 
     shaped = [
         {
-            'id': r['umm']['GranuleUR'],
-            'input_rtcs': reduce_input_rtc_list(r['umm'].get('InputGranules', [])),
+            "id": r["umm"]["GranuleUR"],
+            "input_rtcs": reduce_input_rtc_list(r["umm"].get("InputGranules", [])),
         }
         for r in cmr_records
     ]

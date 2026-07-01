@@ -1,0 +1,33 @@
+{
+  "data": {
+    "16938": {
+      "frame_id": 16938,
+      "is_north_america": true,
+      "burst_ids": ["T078-165524-IW1", "T078-165524-IW2", "T078-165524-IW3"]
+    },
+    "36542": {
+      "frame_id": 36542,
+      "is_north_america": true,
+      "burst_ids": ["T114-242990-IW1", "T114-242990-IW2"]
+    },
+    "39355": {
+      "frame_id": 39355,
+      "is_north_america": true,
+      "burst_ids": ["T122-259600-IW1", "T122-259600-IW2"]
+    },
+    "8622": {
+      "frame_id": 8622,
+      "is_north_america": false,
+      "burst_ids": ["T027-056900-IW1"]
+    },
+    "8882": {
+      "frame_id": 8882,
+      "is_north_america": false,
+      "burst_ids": ["T028-058200-IW2"]
+    }
+  },
+  "_metadata": {
+    "description": "Sample frame-to-burst mapping for DISP-S1-STATIC accountability testing",
+    "note": "Replace with full opera-s1-disp-frame-to-burst.json from JPL Artifactory for production use"
+  }
+}

@@ -19,16 +19,16 @@ from .rtc_utils import rtc_to_id_tuple
 
 logger = logging.getLogger(__name__)
 
-_GRANULE_TIME_FMT = '%Y%m%dT%H%M%SZ'
+_GRANULE_TIME_FMT = "%Y%m%dT%H%M%SZ"
 
 
 def _parse_iso(ts: str) -> datetime:
     """Parse an ISO-8601 timestamp (e.g. ``"2024-08-21T00:11:56Z"``)."""
-    return datetime.strptime(ts.replace('Z', '+0000'), '%Y-%m-%dT%H:%M:%S%z').replace(tzinfo=None)
+    return datetime.strptime(ts.replace("Z", "+0000"), "%Y-%m-%dT%H:%M:%S%z").replace(tzinfo=None)
 
 
 def _load_sensor_start_dates() -> dict[str, datetime]:
-    raw = CONFIG['products']['DSWX_S1']['accountability']['sensor_start_dates']
+    raw = CONFIG["products"]["DSWX_S1"]["accountability"]["sensor_start_dates"]
     return {sensor: _parse_iso(ts) for sensor, ts in raw.items()}
 
 
@@ -99,7 +99,7 @@ def analyze(
     _warned_sensors.clear()
 
     logger.info("Loaded RTC survey with %d products", len(rtc_products))
-    rtc_filtered = [rtc for rtc in rtc_products if should_include_rtc(rtc['id'], sensor_start_dates)]
+    rtc_filtered = [rtc for rtc in rtc_products if should_include_rtc(rtc["id"], sensor_start_dates)]
     logger.info(
         "Filtered RTC products from %d to %d using sensor start dates",
         len(rtc_products), len(rtc_filtered),
@@ -111,8 +111,8 @@ def analyze(
     # (burst_id, acq_ts, sensor) -> [dswx_granule_id, ...]
     rtc_to_dswx_map: dict[tuple[str, str, str], list[str]] = {}
     for dswx in dswx_products:
-        dswx_id = dswx['id']
-        for rtc_in in dswx['input_rtcs']:
+        dswx_id = dswx["id"]
+        for rtc_in in dswx["input_rtcs"]:
             try:
                 key = rtc_to_id_tuple(rtc_in)
             except ValueError:
@@ -125,7 +125,7 @@ def analyze(
     # Build latest-ID lookup from surveyed (filtered) RTCs.
     rtc_id_to_latest: dict[tuple[str, str, str], str] = {}
     for rec in rtc_filtered:
-        rtc_id_to_latest[rtc_to_id_tuple(rec['id'])] = rec['id']
+        rtc_id_to_latest[rtc_to_id_tuple(rec["id"])] = rec["id"]
 
     used_rtc_ids = set(rtc_to_dswx_map.keys())
     avail_rtc_ids = set(rtc_id_to_latest.keys())
@@ -146,16 +146,16 @@ def analyze(
 
     # Serializable form of the mapping (str keys).
     rtc_to_dswx_map_serializable = {
-        '$'.join(key): sorted(set(dswx_ids))
+        "$".join(key): sorted(set(dswx_ids))
         for key, dswx_ids in rtc_to_dswx_map.items()
     }
 
     return {
-        'expected': len(avail_rtc_ids),
-        'actual': len(used_rtc_ids & avail_rtc_ids),
-        'missing_count': len(missing_rtc_products),
-        'used_rtc_count': len(used_rtc_ids),
-        'filtered_rtc_count': len(avail_rtc_ids),
-        'missing': missing_rtc_products,
-        'rtc_to_dswx_map': rtc_to_dswx_map_serializable,
+        "expected": len(avail_rtc_ids),
+        "actual": len(used_rtc_ids & avail_rtc_ids),
+        "missing_count": len(missing_rtc_products),
+        "used_rtc_count": len(used_rtc_ids),
+        "filtered_rtc_count": len(avail_rtc_ids),
+        "missing": missing_rtc_products,
+        "rtc_to_dswx_map": rtc_to_dswx_map_serializable,
     }
