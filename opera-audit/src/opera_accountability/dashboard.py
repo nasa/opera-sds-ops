@@ -1053,9 +1053,9 @@ def _render_overview(reports: dict) -> None:
                 expected_label = f"{expected:,}"
             else:
                 r = _unwrap_accountability_results(report)
-                expected = r.get("expected", 0)
-                actual = r.get("actual", 0)
-                missing = r.get("missing_count", 0)
+                expected = r.get("expected") or 0
+                actual = r.get("actual") or 0
+                missing = r.get("missing_count") or 0
                 rate = (actual / expected * 100) if expected else 0.0
                 expected_label = f"{expected:,}"
             acc_rows.append([
