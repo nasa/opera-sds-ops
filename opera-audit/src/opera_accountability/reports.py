@@ -123,11 +123,14 @@ def save_reports(
         elif report_type == "accountability":
             f.write("SUMMARY\n")
             f.write("-" * 50 + "\n")
-            f.write(f"Expected Granules:  {results['expected']:,}\n")
-            f.write(f"Actual Granules:    {results['actual']:,}\n")
-            f.write(f"Missing Granules:   {results['missing_count']:,}\n")
-            if results["expected"] > 0:
-                acc_rate = (results["actual"] / results["expected"]) * 100
+            expected = results.get("expected")
+            actual = results.get("actual")
+            missing_count = results.get("missing_count")
+            f.write(f"Expected Granules:  {expected:,}\n" if expected is not None else "Expected Granules:  N/A\n")
+            f.write(f"Actual Granules:    {actual:,}\n" if actual is not None else "Actual Granules:    N/A\n")
+            f.write(f"Missing Granules:   {missing_count:,}\n" if missing_count is not None else "Missing Granules:   N/A\n")
+            if expected and expected > 0 and actual is not None:
+                acc_rate = (actual / expected) * 100
                 f.write(f"Accountability:     {acc_rate:.2f}%\n")
 
         f.write("\n")

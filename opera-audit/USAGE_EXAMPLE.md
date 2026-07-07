@@ -123,7 +123,7 @@ opera-audit burst-coverage \
 # CSLC-S1 only, save to custom directory
 opera-audit burst-coverage \
     --start 2026-02-01T00:00:00Z --end 2026-02-07T23:59:59Z \
-    --geojson north_america.geojson --no-rtc \
+    --geojson north_america.geojson --no-do-rtc \
     --save --output-dir /path/to/output
 
 # Low-memory mode for long date ranges (streams to JSONL)
@@ -467,7 +467,7 @@ strategy = ForwardMapStrategy("DSWX_HLS")
 results = strategy.analyze(start_date, end_date, "PROD")
 
 # --- Save reports ---
-files = save_reports(results, "./output", "DSWX_HLS", "duplicates", "PROD",
+files = save_reports(results, "./output", "DSWX_HLS", "accountability", "PROD",
                      start_date=start_date, end_date=end_date)
 ```
 
