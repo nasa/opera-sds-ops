@@ -111,10 +111,28 @@ def test_pattern_matching_rtc_s1():
     assert fields["sensor"] == "S1A"
 
 
-# TODO: Add more test cases with fixtures once we create sample CMR responses
-# - test_date_aggregation()
-# - test_multiple_duplicates()
-# - test_creation_timestamp_selection()
+def test_detect_duplicates_unparseable_id():
+    """Unparseable granule IDs are skipped, not raised, and parse_failures is tracked."""
+    cmr_granules = [
+        {
+            "umm": {
+                "GranuleUR": "NOT_A_VALID_GRANULE_ID"
+            }
+        },
+        {
+            "umm": {
+                "GranuleUR": "OPERA_L3_DSWx-HLS_T10TEM_20260115T180931Z_20260115T235959Z_L8_30_v1.0"
+            }
+        },
+    ]
+
+    result = detect_duplicates(cmr_granules, "DSWX_HLS")
+
+    assert result["parse_failures"] > 0
+    assert result["total"] == 2
+    # Only the valid granule should be counted as unique
+    assert result["unique"] == 1
+    assert result["duplicates"] == 0
 
 
 # ---------------------------------------------------------------------------

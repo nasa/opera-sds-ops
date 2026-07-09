@@ -24,6 +24,10 @@ DEFAULT_BASE_DELAY = 1.0  # seconds
 DEFAULT_MAX_DELAY = 30.0  # seconds
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
+
+class IsoXmlFetchError(Exception):
+    """Raised when ISO XML fetch fails after all retries."""
+
 # Thread-local storage for session reuse (ported from PCM cmr_iso_xml_utils.py)
 _thread_local = threading.local()
 
@@ -303,8 +307,9 @@ def fetch_iso_xml(iso_xml_url, timeout=30, max_retries=DEFAULT_MAX_RETRIES,
                 )
                 time.sleep(delay)
                 continue
-            logger.warning(f"Failed to fetch ISO XML from {iso_xml_url}: {exc}")
-            return None
+            raise IsoXmlFetchError(
+                f"Failed to fetch ISO XML from {iso_xml_url}: {exc}"
+            ) from exc
         except requests.exceptions.RequestException as exc:
             last_exception = exc
             if attempt < max_retries:
@@ -315,13 +320,13 @@ def fetch_iso_xml(iso_xml_url, timeout=30, max_retries=DEFAULT_MAX_RETRIES,
                 )
                 time.sleep(delay)
                 continue
-            logger.warning(
+            raise IsoXmlFetchError(
                 f"Failed to fetch ISO XML from {iso_xml_url} after {max_retries + 1} attempts: {exc}"
-            )
-            return None
+            ) from exc
 
-    logger.warning(f"Failed to fetch ISO XML from {iso_xml_url} after {max_retries + 1} attempts: {last_exception}")
-    return None
+    raise IsoXmlFetchError(
+        f"Failed to fetch ISO XML from {iso_xml_url} after {max_retries + 1} attempts: {last_exception}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +341,7 @@ def parse_iso_xml_input_granules(xml_content, filename_filter=None):
     :returns: List of input granule filenames.
     """
     if xml_content is None:
+        logger.warning("ISO XML content is None (fetch may have failed); returning empty input list")
         return []
     try:
         root = ET.fromstring(xml_content)

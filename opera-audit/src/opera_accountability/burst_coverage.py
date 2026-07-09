@@ -312,7 +312,15 @@ def polygon_intersects_geojson(cmr_points: list[dict], geojson_geom) -> bool:
 
     coords = [(p.get("Longitude", p.get("lon")), p.get("Latitude", p.get("lat")))
               for p in cmr_points]
-    if not coords:
+    valid_coords = [(lon, lat) for lon, lat in coords if lon is not None and lat is not None]
+    if len(valid_coords) < len(coords):
+        logger.warning(
+            "Dropped %d malformed point(s) from CMR polygon (%d total, %d valid)",
+            len(coords) - len(valid_coords), len(coords), len(valid_coords),
+        )
+    coords = valid_coords
+    if len(coords) < 3:
+        logger.warning("Insufficient coordinates for polygon (%d points), skipping intersection", len(coords))
         return False
 
     if coords[0] != coords[-1]:
@@ -323,7 +331,8 @@ def polygon_intersects_geojson(cmr_points: list[dict], geojson_geom) -> bool:
         if not poly.is_valid:
             poly = poly.buffer(0)
         return geojson_geom.intersects(poly)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Polygon intersection check failed: %s", exc)
         return False
 
 
@@ -557,7 +566,11 @@ async def _cmr_post_all_pages(
 
         if current_page == 1:
             import math
-            max_pages = math.ceil(response_json["hits"] / page_size)
+            hits = response_json.get("hits", 0)
+            if hits == 0:
+                logger.warning("CMR response missing 'hits' or returned 0 results")
+                break
+            max_pages = math.ceil(hits / page_size)
 
         cmr_search_after = resp.headers.get("CMR-Search-After")
         if cmr_search_after:
@@ -765,8 +778,20 @@ async def process_slcs_to_expected_bursts(
     # Deduplicate: same burst can appear in overlapping SLCs
     unique: dict[tuple, ExpectedBurst] = {}
     for slc in slcs:
+        # Filter requested polarizations to those the SLC actually supports.
+        # Dual-pol SLCs (SDV/SDH) carry co- and cross-pol; single-pol SLCs
+        # (SSV/SSH) carry co-pol only.  Without this filter, requesting
+        # VV,VH on single-pol data doubles ``expected`` and halves reported
+        # coverage — see PR review N2.
+        if "SDV" in slc.native_id or "SDH" in slc.native_id:
+            slc_pols = polarizations
+        else:
+            slc_pols = [p for p in polarizations if p.upper() in ("VV", "HH")]
+            if not slc_pols:
+                slc_pols = polarizations[:1]
+
         for burst in slc.bursts:
-            for pol in polarizations:
+            for pol in slc_pols:
                 key = (burst.asf_id, slc.start_time.date(), pol)
                 if key not in unique:
                     unique[key] = ExpectedBurst(
@@ -811,7 +836,7 @@ async def check_coverage_for_bursts(
         found, missing = [], []
         for exp in group:
             if product_type == "RTC-S1":
-                match = next(iter(found_products), None)
+                match = min(found_products) if found_products else None
             else:
                 match = next((p for p in found_products if exp.polarization in p), None)
             if match:

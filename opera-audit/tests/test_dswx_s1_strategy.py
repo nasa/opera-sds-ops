@@ -237,23 +237,34 @@ def test_expand_with_cycle_indices_groups_by_tile_cycle_sensor():
 # ---------------------------------------------------------------------------
 
 
-def test_dedupe_raises_on_unparseable_ids():
-    """Phase 1: Riley's original raises RuntimeError on un-matchable granule IDs."""
+def test_dedupe_skips_unparseable_ids(caplog):
+    """Unparseable granule IDs are skipped with ERROR-level log, not raised."""
     import re
+    import logging
     from opera_accountability import CONFIG
-    import pytest
 
     pattern = re.compile(CONFIG["products"]["RTC_S1"]["pattern"])
     unique_fields = tuple(CONFIG["products"]["RTC_S1"]["unique_fields"])
 
     records = [
         {"id": RTC_A_S1A},
-        {"id": "totally-bogus-granule-id"},  # should raise RuntimeError
+        {"id": "totally-bogus-granule-id"},  # should be skipped
         {"id": RTC_B_S1A},
     ]
 
-    with pytest.raises(RuntimeError, match="Failed to parse granule ID totally-bogus-granule-id"):
-        survey._dedupe_by_creation_ts(records, pattern, unique_fields)
+    with caplog.at_level(logging.ERROR):
+        result = survey._dedupe_by_creation_ts(records, pattern, unique_fields)
+
+    # Valid records are retained
+    assert len(result) == 2
+    result_ids = {r["id"] for r in result}
+    assert RTC_A_S1A in result_ids
+    assert RTC_B_S1A in result_ids
+    assert "totally-bogus-granule-id" not in result_ids
+
+    # Error was logged for the bogus ID
+    assert any("totally-bogus-granule-id" in msg for msg in caplog.messages)
+    assert any("1 of 3" in msg for msg in caplog.messages)
 
 
 def test_dedupe_keeps_latest_creation_ts():

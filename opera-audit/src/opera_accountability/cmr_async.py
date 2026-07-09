@@ -76,6 +76,8 @@ async def async_cmr_post(url, data: str, session: aiohttp.ClientSession, sem: Op
         logger.info("Issuing request. This may take a while depending on search page size and number of pages/results.")
 
         response_jsons = []
+        total_hits = 0
+        total_fetched = 0
         while current_page <= max_pages:
             async with await fetch_post_url(session, url, data, headers) as response:
                 response_json = await response.json()
@@ -87,12 +89,15 @@ async def async_cmr_post(url, data: str, session: aiohttp.ClientSession, sem: Op
             else:
                 response_jsons.append(response_json)
 
+            total_fetched += len(response_json["items"])
+
             if current_page == 1:
-                logger.debug(f'CMR number of granules (cmr-query): {response_json["hits"]=:,}')
-                max_pages = math.ceil(response_json["hits"]/page_size)
+                total_hits = response_json["hits"]
+                logger.debug(f'CMR number of granules (cmr-query): {total_hits=:,}')
+                max_pages = math.ceil(total_hits/page_size)
                 logger.debug("Updating max pages to %d", max_pages)
 
-            logger.debug(f'CMR query (cmr-query-page {current_page} of {ceil(response_json["hits"]/page_size)}): '
+            logger.debug(f'CMR query (cmr-query-page {current_page} of {ceil(total_hits/page_size)}): '
                          f'{len(response_json["items"])=:,}')
 
             cmr_search_after = response.headers.get("CMR-Search-After")
@@ -107,14 +112,22 @@ async def async_cmr_post(url, data: str, session: aiohttp.ClientSession, sem: Op
 
             current_page += 1
             if current_page > max_pages:
-                if cmr_search_after:
+                # CMR may return CMR-Search-After on the last full page too, so
+                # keying on the header alone produces spurious warnings for
+                # exact-multiple hit counts.  The authoritative signal is
+                # whether we've fetched every known hit (see PR review P8).
+                if total_fetched < total_hits:
                     logger.warning(
-                        "Reached max pages limit (%d). Not all search results exhausted. "
-                        "Adjust limit or time ranges to process all hits, then re-run this script.",
-                        max_pages
+                        "Reached max pages limit (%d). Fetched %d of %d hits — "
+                        "not all results exhausted. Adjust limit or time ranges "
+                        "and re-run.",
+                        max_pages, total_fetched, total_hits,
                     )
                 else:
-                    logger.info("All search results retrieved (hit count was exact multiple of page size).")
+                    logger.info(
+                        "All %d search results retrieved (hit count was exact "
+                        "multiple of page size).", total_hits,
+                    )
 
         return response_jsons
 

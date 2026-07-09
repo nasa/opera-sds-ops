@@ -28,19 +28,26 @@ def _dedupe_by_creation_ts(
 ) -> list[dict]:
     """Keep the record with the newest ``creation_ts`` for each unique-field tuple.
 
-    Exact port of Riley's survey() deduplication logic:
-    - Raises RuntimeError if granule ID does not match pattern
+    Based on Riley's survey() deduplication logic:
+    - Skips + logs ERROR for granule IDs that do not match pattern
     - Groups by unique-field tuple
     - Sorts by creation_ts (reverse=True) and keeps first
     """
     grouping_products_map = {}
+    parse_failures = 0
 
     for item in items:
         granule_id = item["id"]
         match = pattern.match(granule_id)
 
         if match is None:
-            raise RuntimeError(f"Failed to parse granule ID {granule_id} with pattern {pattern.pattern}")
+            parse_failures += 1
+            logger.error(
+                "Granule ID does not match expected naming spec: %s "
+                "(pattern: %s) — this indicates a non-conformant record in CMR",
+                granule_id, pattern.pattern,
+            )
+            continue
 
         group_dict = match.groupdict()
 
@@ -50,6 +57,13 @@ def _dedupe_by_creation_ts(
         if id_tuple not in grouping_products_map:
             grouping_products_map[id_tuple] = []
         grouping_products_map[id_tuple].append(item)
+
+    if parse_failures > 0:
+        logger.error(
+            "%d of %d granule ID(s) did not match the expected naming pattern — "
+            "skipped; these may indicate a collection-level issue in CMR",
+            parse_failures, len(items),
+        )
 
     for id_tuple in grouping_products_map:
         grouping_products_map[id_tuple].sort(key=lambda x: x["_timestamp"], reverse=True)

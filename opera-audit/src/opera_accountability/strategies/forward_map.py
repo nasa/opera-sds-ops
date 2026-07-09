@@ -8,7 +8,6 @@ from collections import defaultdict
 
 from .base import AccountabilityStrategy
 from .. import CONFIG
-from ..cmr_async import async_cmr_posts, params_to_request_body
 
 logger = logging.getLogger(__name__)
 

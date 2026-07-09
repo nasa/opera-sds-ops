@@ -38,7 +38,7 @@ def get_slc_download_url(slc_native_id: str) -> str:
     body = f"provider=ASF&native_id={slc_native_id}&page_size=1"
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
-    resp = requests.post(CMR_GRANULE_URL, data=body, headers=headers)
+    resp = requests.post(CMR_GRANULE_URL, data=body, headers=headers, timeout=60)
     resp.raise_for_status()
     data = resp.json()
 
@@ -101,14 +101,14 @@ def get_edl_token(edl_endpoint: str = "urs.earthdata.nasa.gov") -> str:
     auth = HTTPBasicAuth(username, password)
 
     # Check for existing tokens
-    resp = requests.get(f"https://{edl_endpoint}/api/users/tokens", auth=auth)
+    resp = requests.get(f"https://{edl_endpoint}/api/users/tokens", auth=auth, timeout=30)
     resp.raise_for_status()
     tokens = resp.json()
     if tokens:
         return tokens[0]["access_token"]
 
     # Create a new token
-    resp = requests.post(f"https://{edl_endpoint}/api/users/token", auth=auth)
+    resp = requests.post(f"https://{edl_endpoint}/api/users/token", auth=auth, timeout=30)
     resp.raise_for_status()
     return resp.json()["access_token"]
 
@@ -138,7 +138,7 @@ class HTTPRangeFile:
 
         # Discover file size via a small Range GET (CloudFront may reject HEAD).
         probe = self._range_session.get(
-            self._resolved_url, headers={"Range": "bytes=-1"}
+            self._resolved_url, headers={"Range": "bytes=-1"}, timeout=30
         )
         if probe.status_code == 206:
             cr = probe.headers.get("Content-Range", "")
@@ -147,9 +147,9 @@ class HTTPRangeFile:
             else:
                 raise IOError(f"Unexpected Content-Range header: {cr}")
         elif probe.status_code == 200:
-            self._size = int(probe.headers["Content-Length"])
-            logger.warning(
-                "Server ignored Range header; reads will download full content"
+            raise IOError(
+                "Server does not support HTTP Range requests (returned 200 "
+                "instead of 206). Cannot read remote ZIP without Range support."
             )
         else:
             raise IOError(f"Probe request failed with HTTP {probe.status_code}")
@@ -162,7 +162,7 @@ class HTTPRangeFile:
     def _resolve_redirect(url: str, token: str) -> str:
         """Follow ASF → EDL → CloudFront redirect chain."""
         # Step 1: get first redirect
-        r1 = requests.get(url, allow_redirects=False)
+        r1 = requests.get(url, allow_redirects=False, timeout=30)
         if r1.status_code not in (301, 302, 303, 307, 308):
             raise IOError(f"Expected redirect from {url}, got HTTP {r1.status_code}")
         location = r1.headers["Location"]
@@ -170,7 +170,7 @@ class HTTPRangeFile:
 
         # Step 2: follow with Bearer token (handles EDL OAuth + CloudFront)
         headers = {"Authorization": f"Bearer {token}"}
-        r2 = requests.get(location, headers=headers, allow_redirects=True, stream=True)
+        r2 = requests.get(location, headers=headers, allow_redirects=True, stream=True, timeout=60)
         r2.close()
         r2.raise_for_status()
         logger.debug("Resolved URL: %s", r2.url)
@@ -214,13 +214,8 @@ class HTTPRangeFile:
             return b""
 
         headers = {"Range": f"bytes={start}-{end}"}
-        resp = self._range_session.get(self._resolved_url, headers=headers)
+        resp = self._range_session.get(self._resolved_url, headers=headers, timeout=60)
 
-        if resp.status_code == 200:
-            raise IOError(
-                "Server returned 200 instead of 206 Partial Content. "
-                "Range requests may not be supported for this URL."
-            )
         if resp.status_code != 206:
             raise IOError(
                 f"HTTP {resp.status_code} for Range bytes={start}-{end}"

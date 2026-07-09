@@ -317,6 +317,7 @@ def accountability(
             quiet=quiet,
             mgrs_db=mgrs_db,
             db_path=db_path,
+            recovery_format=recovery_format,
         )
         return
 
@@ -966,6 +967,7 @@ def _run_accountability_all(
     quiet: bool,
     mgrs_db: Optional[str] = None,
     db_path: Optional[str] = None,
+    recovery_format: Optional[str] = None,
 ) -> None:
     """Internal helper to run accountability for all products with accountability enabled."""
     
@@ -1008,34 +1010,34 @@ def _run_accountability_all(
             # Dispatch table — same helpers used by the single-product path
             if strategy_name == "dswx_hls":
                 results = _run_dswx_hls_accountability(
-                    product, start_date, end_date, venue, save, output_dir, quiet
+                    product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
                 )
             elif strategy_name == "dswx_s1":
                 results = _run_dswx_s1_accountability(
-                    start_date, end_date, venue, save, output_dir, mgrs_db, quiet
+                    start_date, end_date, venue, save, output_dir, mgrs_db, quiet, recovery_format
                 )
             elif strategy_name == "dist_s1":
                 prefer_s3 = CONFIG["products"][product]["accountability"].get("prefer_s3_iso_xml", False)
                 results = _run_dist_s1_accountability(
-                    start_date, end_date, venue, save, output_dir, None, None, None, prefer_s3, quiet
+                    start_date, end_date, venue, save, output_dir, None, None, None, prefer_s3, quiet, recovery_format
                 )
             elif strategy_name == "forward_map":
                 _run_forward_map_accountability(
-                    product, start_date, end_date, venue, save, output_dir, quiet
+                    product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
                 )
                 results = None  # already displayed by helper
             elif strategy_name == "date_count":
                 results = _run_date_count_accountability(
-                    product, start_date, end_date, venue, save, output_dir, quiet
+                    product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
                 )
             elif strategy_name == "delegated_validator":
                 _run_delegated_validator_accountability(
-                    product, start_date, end_date, venue, save, output_dir, quiet
+                    product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
                 )
                 results = None  # already displayed by helper
             elif strategy_name == "db_based":
                 _run_db_based_accountability(
-                    product, start_date, end_date, venue, save, output_dir, quiet, db_path
+                    product, start_date, end_date, venue, save, output_dir, quiet, db_path, recovery_format
                 )
                 results = None  # already displayed by helper
             else:

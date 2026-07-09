@@ -144,7 +144,11 @@ def detect_duplicates(cmr_granules: list[dict], product: str) -> dict[str, Any]:
 
         if match is None:
             parse_failures += 1
-            logger.warning(f"Failed to parse granule ID {granule_id} with pattern {pattern.pattern}")
+            logger.error(
+                "Granule ID does not match expected naming spec: %s "
+                "(pattern: %s) — this indicates a non-conformant record in CMR",
+                granule_id, pattern.pattern,
+            )
             continue
 
         group_dict = match.groupdict()
@@ -262,7 +266,11 @@ def detect_duplicates(cmr_granules: list[dict], product: str) -> dict[str, Any]:
         logger.info("No granules found in date range")
 
     if parse_failures > 0:
-        logger.warning(f"Skipped {parse_failures} granule(s) that did not match the expected pattern")
+        logger.error(
+            "%d granule(s) did not match the expected naming pattern — skipped; "
+            "these may indicate a collection-level issue in CMR",
+            parse_failures,
+        )
 
     # Calculate duplicate counts per granule (for min/max/avg stats)
     if creation_field:
@@ -357,9 +365,10 @@ def detect_disp_s1_end_conflicts(cmr_granules: list[dict]) -> dict[str, Any]:
         end_grouped[end_key].append((begin_dt, production_dt, version, granule_id))
 
     if parse_failures > 0:
-        logger.warning(
-            f"Failed to parse {parse_failures} of {len(granule_ids)} DISP-S1 granule IDs "
-            f"(pattern may not match all naming variants)"
+        logger.error(
+            "Failed to parse %d of %d DISP-S1 granule IDs — non-conformant records "
+            "(pattern may not match all naming variants)",
+            parse_failures, len(granule_ids),
         )
 
     # Find end conflicts (Gerald's original: lines 441-463)
@@ -552,7 +561,10 @@ def detect_duplicates_memory_efficient(
     gc.collect()
 
     if parse_failures > 0:
-        logger.warning(f"Failed to parse {parse_failures} granule IDs")
+        logger.error(
+            "Failed to parse %d granule ID(s) — non-conformant records in CMR",
+            parse_failures,
+        )
 
     # Post-process: Sort duplicates by creation timestamp
     if creation_field:

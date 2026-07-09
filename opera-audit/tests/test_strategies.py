@@ -121,6 +121,27 @@ class TestDateCountStrategy:
         assert "2025-01-02" in results["missing"]
 
     @patch("opera_accountability.strategies.date_count.query_cmr")
+    def test_analyze_excess_count_no_negative_missing(self, mock_cmr):
+        """When actual > expected_per_day for a date, missing_count for that date should be 0."""
+        mock_cmr.return_value = [
+            {"umm": {
+                "GranuleUR": f"granule_{i}",
+                "TemporalExtent": {"RangeDateTime": {"BeginningDateTime": "2025-01-01T00:00:00Z"}},
+            }}
+            for i in range(8)  # 8 granules on a single day, expected_per_day=4
+        ]
+        strategy = DateCountStrategy("TROPO")
+        results = strategy.analyze(
+            datetime(2025, 1, 1), datetime(2025, 1, 1), "PROD"
+        )
+
+        assert results["actual_total"] == 8
+        assert results["expected_per_day"] == 4
+        # missing_count should be 0 (clamped), not negative
+        assert results["missing_count"] == 0
+        assert results["missing_dates"] == 0
+
+    @patch("opera_accountability.strategies.date_count.query_cmr")
     def test_analyze_no_granules(self, mock_cmr):
         mock_cmr.return_value = []
         strategy = DateCountStrategy("TROPO")
