@@ -11,7 +11,7 @@
 # Defaults:
 #   START        = 2024-08-28
 #   END          = 2026-07-01
-#   CHUNK_MONTHS = 3
+#   CHUNK_MONTHS = 1
 #
 # Output layout (auto-created inside this scripts/ folder):
 #   scripts/output/opera_dswx_s1_chunked_<timestamp>/
@@ -29,7 +29,7 @@ set -euo pipefail
 
 START_DATE="${1:-2024-08-28}"
 END_DATE="${2:-2026-07-01}"
-CHUNK_MONTHS="${3:-3}"
+CHUNK_MONTHS="${3:-1}"
 
 # Locate repo root (parent of opera-audit/)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
