@@ -34,10 +34,13 @@ from opera_accountability.duplicates import (
 from opera_accountability.reports import save_reports
 from .strategies.dswx_hls import analyze_accountability
 
-# Set up logging (default to WARNING, not INFO)
+# Set up logging.  Default is INFO so operators can see per-chunk progress
+# (Resuming X, Checkpointed Y) without having to pass --verbose.  --verbose
+# still promotes to DEBUG below, and --quiet raises it back to WARNING.
 logging.basicConfig(
-    level=logging.WARNING,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
 
@@ -75,6 +78,8 @@ def duplicates(
 
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+    elif quiet:
+        logging.getLogger().setLevel(logging.WARNING)
 
     # Validate venue
     if venue == "GRQ" and not grq_url:
@@ -461,6 +466,8 @@ def accountability(
 
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+    elif quiet:
+        logging.getLogger().setLevel(logging.WARNING)
 
     effective_chunk_days = chunk_days if chunking else None
 

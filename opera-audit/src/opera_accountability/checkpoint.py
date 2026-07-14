@@ -128,9 +128,25 @@ class CheckpointStore:
         self.db_path = self.path / "state.sqlite"
         self.manifest_path = self.path / "manifest.json"
 
-        if self.path.exists() and not resume:
+        path_existed_before = self.path.exists()
+        if path_existed_before and not resume:
+            logger.info(
+                "Discarding prior checkpoint at %s (--no-resume)", self.path
+            )
             shutil.rmtree(self.path)
+            path_existed_before = False
         self.path.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "Checkpoint %s: %s (%s, chunk_days=%s, resume=%s, keep=%s) [%s]",
+            command,
+            product,
+            venue,
+            chunk_days,
+            resume,
+            keep,
+            "resuming existing state" if path_existed_before else "fresh run",
+        )
+        logger.info("  path: %s", self.path)
 
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -493,17 +509,46 @@ def collect_chunked_records(
     aggregated response. ``project`` receives one raw record and returns either
     ``(stable_key, compact_payload)`` or ``None``.
     """
-    for chunk in chunks:
+    # Materialize the chunk plan so operators can see N/M progress and a
+    # resume-vs-new summary before any CMR traffic starts.
+    chunk_list = list(chunks)
+    total = len(chunk_list)
+    already_complete = sum(
+        1 for c in chunk_list if store.is_chunk_complete(namespace, c)
+    )
+    pending = total - already_complete
+    if total > 0:
+        logger.info(
+            "[%s] plan: %d chunk(s) total, %d already complete (resume), %d pending "
+            "(%s .. %s)",
+            namespace,
+            total,
+            already_complete,
+            pending,
+            chunk_list[0].start.date(),
+            chunk_list[-1].end.date(),
+        )
+
+    for chunk in chunk_list:
         if store.is_chunk_complete(namespace, chunk):
             logger.info(
-                "Resuming %s: chunk %d already complete (%s to %s)",
+                "[%s] chunk %d/%d SKIP (already complete): %s -> %s",
                 namespace,
                 chunk.index + 1,
-                chunk.start,
-                chunk.end,
+                total,
+                chunk.start.date(),
+                chunk.end.date(),
             )
             continue
 
+        logger.info(
+            "[%s] chunk %d/%d RUN: %s -> %s (querying CMR...)",
+            namespace,
+            chunk.index + 1,
+            total,
+            chunk.start.date(),
+            chunk.end.date(),
+        )
         raw_records = query(chunk.start, chunk.end)
         projected: list[tuple[str, Any]] = []
         for record in raw_records:
@@ -517,11 +562,14 @@ def collect_chunked_records(
             fetched_count=len(raw_records),
         )
         logger.info(
-            "Checkpointed %s chunk %d: %d fetched, %d projected",
+            "[%s] chunk %d/%d DONE: %d fetched, %d projected "
+            "(cumulative stored: %d)",
             namespace,
             chunk.index + 1,
+            total,
             len(raw_records),
             len(projected),
+            store.count_records(namespace),
         )
         del raw_records
         del projected
