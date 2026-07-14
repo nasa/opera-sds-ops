@@ -94,10 +94,38 @@ This is Gerald's "end-conflict" detection algorithm from `detect_cmr_duplicates_
 #### Memory-Efficient Mode
 
 ```bash
-opera-audit duplicates RTC_S1 --days-back 30 --memory-efficient
+opera-audit duplicates RTC_S1 --days-back 30 --chunk-days 7
 ```
 
-Processes granules in time-chunked batches to avoid large memory usage for high-volume products.
+Processes granules in resumable time chunks and checkpoints stable granule IDs
+to SQLite. CMR records repeated at adjacent inclusive boundaries are upserted,
+not counted twice.
+
+#### Shared checkpoints
+
+Duplicate detection, every accountability strategy, and burst coverage use the
+same checkpoint layout under `<output-dir>/checkpoints/`. The default chunk is
+30 days; DSWx-S1 operators with limited RAM can select a smaller window:
+
+```bash
+opera-audit accountability DSWX_S1 \
+    --start 2024-08-21 --end 2026-02-01 \
+    --chunk-days 7 --mgrs-db /path/to/MGRS_tile_collection.sqlite
+```
+
+Useful controls:
+
+```text
+--chunk-days N          Days in each temporal query
+--no-chunking           Use one query range (accountability/burst coverage)
+--checkpoint-dir PATH   Override OUTPUT_DIR/checkpoints
+--resume / --no-resume  Reuse or discard completed chunks
+--keep-checkpoints      Preserve checkpoint state after success
+```
+
+Failed and interrupted runs retain their checkpoints. Successful runs clean
+them up unless `--keep-checkpoints` is supplied. Static products use one
+non-temporal chunk because they have no meaningful date partition.
 
 #### GRQ (OpenSearch) Source
 

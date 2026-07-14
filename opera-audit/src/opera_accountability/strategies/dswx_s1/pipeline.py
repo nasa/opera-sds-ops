@@ -9,12 +9,14 @@ CLI ``opera-audit accountability DSWX_S1``.
 from __future__ import annotations
 
 import json
+import inspect
 import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 from ... import CONFIG
+from ...checkpoint import CheckpointStore
 from . import coverage, cycles, mapping, survey, tile_sets
 from .rtc_utils import has_known_epoch
 
@@ -48,6 +50,53 @@ def _write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
+    logger.info("Wrote %s (%s)", path, _human_size(path.stat().st_size))
+
+
+def _write_json_array(path: Path, values) -> None:
+    """Stream an iterable as a JSON array without materializing it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        f.write("[\n")
+        first = True
+        for value in values:
+            if not first:
+                f.write(",\n")
+            f.write(json.dumps(value, separators=(",", ":")))
+            first = False
+        f.write("\n]\n")
+    logger.info("Wrote %s (%s)", path, _human_size(path.stat().st_size))
+
+
+def _write_rtc_map(path: Path, checkpoint: CheckpointStore) -> None:
+    """Stream the RTC→DSWx mapping grouped by stable RTC tuple."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        f.write("{\n")
+        current_key = None
+        current_values: list[str] = []
+        first_group = True
+
+        def flush() -> None:
+            nonlocal first_group
+            if current_key is None:
+                return
+            if not first_group:
+                f.write(",\n")
+            f.write(json.dumps(current_key))
+            f.write(":")
+            f.write(json.dumps(current_values, separators=(",", ":")))
+            first_group = False
+
+        for _, payload in checkpoint.iter_records("rtc_to_dswx_pairs"):
+            rtc_key = payload["rtc_key"]
+            if current_key is not None and rtc_key != current_key:
+                flush()
+                current_values = []
+            current_key = rtc_key
+            current_values.append(payload["dswx_id"])
+        flush()
+        f.write("\n}\n")
     logger.info("Wrote %s (%s)", path, _human_size(path.stat().st_size))
 
 
@@ -116,6 +165,10 @@ def run(
     save: bool = True,
     mgrs_db_override: Optional[str] = None,
     validate_coverage: Optional[bool] = None,
+    chunk_days: Optional[int] = 30,
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
+    keep_checkpoints: bool = False,
 ) -> dict[str, Any]:
     """Execute the full DSWx-S1 accountability pipeline.
 
@@ -133,31 +186,98 @@ def run(
     report_dir = Path(output_dir) / "reports" / "accountability" / "DSWX_S1" / date_str
     files: dict[str, Path] = {}
 
-    # --- Step 1: CMR survey -------------------------------------------------
-    rtc_products = survey.survey_rtc(start_date, end_date, venue)
-    dswx_products = survey.survey_dswx(start_date, end_date, venue)
+    checkpoint: Optional[CheckpointStore] = None
+    if start_date is not None and end_date is not None:
+        checkpoint = CheckpointStore(
+            command="accountability",
+            product="DSWX_S1",
+            venue=venue,
+            start=start_date,
+            end=end_date,
+            chunk_days=chunk_days,
+            output_dir=output_dir,
+            checkpoint_dir=checkpoint_dir,
+            resume=resume,
+            keep=keep_checkpoints,
+            extra_identity={"coverage_validation": validate_coverage},
+        )
 
-    if save:
-        _write_json(report_dir / "rtc_survey.json", rtc_products)
-        _write_json(report_dir / "dswx_survey.json", dswx_products)
-        files["rtc_survey"] = report_dir / "rtc_survey.json"
-        files["dswx_survey"] = report_dir / "dswx_survey.json"
+    # --- Step 1: CMR survey -------------------------------------------------
+    rtc_params = inspect.signature(survey.survey_rtc).parameters
+    dswx_params = inspect.signature(survey.survey_dswx).parameters
+    checkpoint_reducer = (
+        checkpoint is not None
+        and "materialize" in rtc_params
+        and "materialize" in dswx_params
+    )
+    survey_kwargs = {
+        "checkpoint": checkpoint,
+        "chunk_days": chunk_days,
+        "materialize": not checkpoint_reducer,
+    }
+    rtc_products = survey.survey_rtc(
+        start_date,
+        end_date,
+        venue,
+        **{key: value for key, value in survey_kwargs.items() if key in rtc_params},
+    )
+    dswx_products = survey.survey_dswx(
+        start_date,
+        end_date,
+        venue,
+        **{key: value for key, value in survey_kwargs.items() if key in dswx_params},
+    )
 
     # --- Step 2: RTC → DSWx mapping + missing RTC set ----------------------
-    map_results = mapping.analyze(rtc_products, dswx_products)
+    if checkpoint_reducer:
+        map_results = mapping.analyze_checkpoint(checkpoint)
+        rtc_surveyed_count = map_results.pop("rtc_surveyed")
+        dswx_surveyed_count = map_results.pop("dswx_surveyed")
+    else:
+        map_results = mapping.analyze(rtc_products, dswx_products)
+        rtc_surveyed_count = len(rtc_products)
+        dswx_surveyed_count = len(dswx_products)
+
     missing_rtcs: list[str] = map_results["missing"]
 
     if save:
+        if checkpoint_reducer:
+            _write_json_array(
+                report_dir / "rtc_survey.json",
+                checkpoint.iter_reduced_payloads("rtc_unique"),
+            )
+            _write_json_array(
+                report_dir / "dswx_survey.json",
+                checkpoint.iter_reduced_payloads("dswx_unique"),
+            )
+        else:
+            _write_json(report_dir / "rtc_survey.json", rtc_products)
+            _write_json(report_dir / "dswx_survey.json", dswx_products)
+        files["rtc_survey"] = report_dir / "rtc_survey.json"
+        files["dswx_survey"] = report_dir / "dswx_survey.json"
+
         _write_json(
             report_dir / "missing_rtc_products.json",
             missing_rtcs,
         )
-        _write_json(
-            report_dir / "rtc_to_dswx_map.json",
-            map_results["rtc_to_dswx_map"],
-        )
+        if checkpoint_reducer:
+            _write_rtc_map(report_dir / "rtc_to_dswx_map.json", checkpoint)
+        else:
+            _write_json(
+                report_dir / "rtc_to_dswx_map.json",
+                map_results["rtc_to_dswx_map"],
+            )
         files["missing_rtc_products"] = report_dir / "missing_rtc_products.json"
         files["rtc_to_dswx_map"] = report_dir / "rtc_to_dswx_map.json"
+
+    # The raw compact surveys and full RTC→DSWx mapping are not needed by
+    # tile/cycle coverage validation. Release them before the next high-cardinality
+    # stage instead of retaining every intermediate until function return.
+    map_results.pop("rtc_to_dswx_map", None)
+    if rtc_products is not None:
+        del rtc_products
+    if dswx_products is not None:
+        del dswx_products
 
     # --- Steps 3 & 4: tile-set resolution + cycle/sensor expansion ---------
     tile_set_map: dict[str, list[str]] = {}
@@ -243,8 +363,8 @@ def run(
             "end_date": end_date.isoformat() if end_date else None,
             "generated_at": generated_at.isoformat(),
         },
-        "rtc_surveyed": len(rtc_products),
-        "dswx_surveyed": len(dswx_products),
+        "rtc_surveyed": rtc_surveyed_count,
+        "dswx_surveyed": dswx_surveyed_count,
         "filtered_rtc_count": map_results["filtered_rtc_count"],
         "used_rtc_count": map_results["used_rtc_count"],
         "missing_count": map_results["missing_count"],
@@ -261,10 +381,20 @@ def run(
         "recovery_candidate_count": len(recovery_candidates),
         "recovery_candidates": recovery_candidates,
         "files": {k: str(v) for k, v in files.items()},
+        "checkpoint": {
+            "chunk_days": chunk_days,
+            "resume": resume,
+            "kept": keep_checkpoints,
+            "path": str(checkpoint.path) if checkpoint and keep_checkpoints else None,
+        },
     }
 
     if save:
         _write_json(report_dir / "summary.json", results)
         _write_summary(report_dir / "summary.txt", results)
+
+    if checkpoint is not None:
+        checkpoint.mark_successful()
+        checkpoint.close()
 
     return results

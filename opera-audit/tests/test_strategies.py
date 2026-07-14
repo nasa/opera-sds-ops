@@ -115,10 +115,35 @@ class TestDateCountStrategy:
 
         assert results["strategy"] == "date_count"
         assert results["expected_per_day"] == 4
-        assert results["total_dates"] == 2
+        assert results["total_dates"] == 1
         assert results["actual_total"] == 2
-        assert results["missing_dates"] == 2
-        assert "2025-01-02" in results["missing"]
+        assert results["missing_dates"] == 1
+        assert "2025-01-02" not in results["missing"]
+
+    @patch("opera_accountability.strategies.date_count.query_cmr")
+    def test_analyze_excludes_intersections_outside_half_open_window(self, mock_cmr):
+        mock_cmr.return_value = [
+            {"umm": {
+                "GranuleUR": "before",
+                "TemporalExtent": {"RangeDateTime": {"BeginningDateTime": "2025-01-10T23:00:00Z"}},
+            }},
+            {"umm": {
+                "GranuleUR": "inside",
+                "TemporalExtent": {"RangeDateTime": {"BeginningDateTime": "2025-01-11T12:00:00Z"}},
+            }},
+            {"umm": {
+                "GranuleUR": "end-boundary",
+                "TemporalExtent": {"RangeDateTime": {"BeginningDateTime": "2025-01-13T00:00:00Z"}},
+            }},
+        ]
+        strategy = DateCountStrategy("TROPO")
+        results = strategy.analyze(
+            datetime(2025, 1, 11), datetime(2025, 1, 13), "PROD"
+        )
+
+        assert results["total_dates"] == 2
+        assert results["actual_total"] == 1
+        assert set(results["date_counts"]) == {"2025-01-11", "2025-01-12"}
 
     @patch("opera_accountability.strategies.date_count.query_cmr")
     def test_analyze_excess_count_no_negative_missing(self, mock_cmr):

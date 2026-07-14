@@ -125,24 +125,34 @@ def map_missing_rtcs_to_tile_sets(
             initializer=_worker_init,
             initargs=(local, mgrs_db_path, conns, conns_lock),
         ) as pool:
-            futures = [pool.submit(_lookup_one, rtc_id, local) for rtc_id in missing_rtcs]
             completed = 0
-            for fut in as_completed(futures):
-                rtc_id, mgrs_sets, flags = fut.result()
-                if not mgrs_sets:
-                    unmatched_bursts += 1
-                    logger.debug(
-                        "No MGRS tile set found for burst in %s (DB lookup empty)",
-                        rtc_id,
-                    )
-                for mgrs_set_id, lof in zip(mgrs_sets, flags):
-                    if lof == "water":
-                        dropped_water += 1
-                        continue
-                    mgrs_set_to_rtc.setdefault(mgrs_set_id, []).append(rtc_id)
-                completed += 1
-                if completed % 10000 == 0:
-                    logger.info("  ... processed %d / %d missing RTCs", completed, len(missing_rtcs))
+            # Bound pending Future objects. One Future per missing RTC caused
+            # large recovery runs to consume substantial RAM before SQLite
+            # work even began.
+            submit_batch_size = max(1000, workers * 8)
+            for offset in range(0, len(missing_rtcs), submit_batch_size):
+                batch = missing_rtcs[offset:offset + submit_batch_size]
+                futures = [pool.submit(_lookup_one, rtc_id, local) for rtc_id in batch]
+                for fut in as_completed(futures):
+                    rtc_id, mgrs_sets, flags = fut.result()
+                    if not mgrs_sets:
+                        unmatched_bursts += 1
+                        logger.debug(
+                            "No MGRS tile set found for burst in %s (DB lookup empty)",
+                            rtc_id,
+                        )
+                    for mgrs_set_id, lof in zip(mgrs_sets, flags):
+                        if lof == "water":
+                            dropped_water += 1
+                            continue
+                        mgrs_set_to_rtc.setdefault(mgrs_set_id, []).append(rtc_id)
+                    completed += 1
+                    if completed % 10000 == 0:
+                        logger.info(
+                            "  ... processed %d / %d missing RTCs",
+                            completed,
+                            len(missing_rtcs),
+                        )
     finally:
         # Close every per-worker sqlite connection; the executor has joined
         # its threads by the time we reach here so this is race-free.

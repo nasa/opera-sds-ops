@@ -109,8 +109,42 @@ opera-audit duplicates DISP_S1 --check-end-conflicts --start 2026-02-01 --end 20
 
 **Memory-efficient mode for very large windows:**
 ```bash
-opera-audit duplicates RTC_S1 --start 2026-01-01 --end 2026-03-01 --memory-efficient --save
+opera-audit duplicates RTC_S1 --start 2026-01-01 --end 2026-03-01 \
+    --chunk-days 30 --save
 ```
+
+### Resumable chunking and checkpoints
+
+Temporal duplicate, accountability, and burst-coverage commands use 30-day
+chunks by default. Each completed chunk is committed to a SQLite checkpoint
+under:
+
+```text
+<output-dir>/checkpoints/<command>/<product>/<venue>/<date-range>-<fingerprint>/
+├── manifest.json
+└── state.sqlite
+```
+
+Only the fields needed by the product reducer are checkpointed; full CMR
+responses are released after each chunk. Stable product keys deduplicate the
+records CMR may return in both adjacent inclusive temporal windows. Final
+accountability is calculated globally after all chunks finish, rather than by
+concatenating independent per-chunk missing lists.
+
+```bash
+opera-audit accountability DSWX_S1 \
+    --start 2024-08-21 --end 2026-02-01 --chunk-days 7 \
+    --mgrs-db /path/to/MGRS_tile_collection.sqlite
+```
+
+- `--resume` is enabled by default and skips transactionally completed chunks.
+- `--no-resume` discards a compatible prior run and starts over.
+- `--checkpoint-dir PATH` changes the checkpoint root.
+- `--keep-checkpoints` retains state after success for audit/debugging.
+- `--no-chunking` runs accountability or burst coverage as one range.
+- Successful runs remove checkpoints unless `--keep-checkpoints` is set;
+  interrupted and failed runs retain them for resume.
+- Static products run as a single non-temporal chunk.
 
 **Check for duplicates from GRQ (OpenSearch) instead of CMR:**
 ```bash

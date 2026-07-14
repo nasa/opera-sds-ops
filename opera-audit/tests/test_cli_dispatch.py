@@ -15,9 +15,11 @@ none of the unit tests for the underlying pipelines could catch.
 from __future__ import annotations
 
 from datetime import datetime
+from io import StringIO
 from typing import Any
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from opera_accountability import cli
@@ -238,3 +240,51 @@ def test_burst_coverage_reads_recheck_dates_file(monkeypatch, runner, tmp_path):
         "2026-02-01", "2026-02-02", "2026-02-03"
     }
     assert captured["cleared"] == "cmr_opera"
+
+
+def test_all_accountability_summary_includes_non_pipeline_strategies(monkeypatch):
+    products = {
+        "FORWARD": {"accountability": {"enabled": True, "strategy": "forward_map"}},
+        "DELEGATED": {
+            "accountability": {"enabled": True, "strategy": "delegated_validator"}
+        },
+        "DB": {"accountability": {"enabled": True, "strategy": "db_based"}},
+    }
+    monkeypatch.setitem(cli.CONFIG, "products", products)
+    monkeypatch.setattr(
+        cli,
+        "_run_forward_map_accountability",
+        lambda *args, **kwargs: {"expected": 2, "actual": 1, "missing_count": 1},
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_delegated_validator_accountability",
+        lambda *args, **kwargs: {"expected": None, "actual": 3, "missing_count": None},
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_db_based_accountability",
+        lambda *args, **kwargs: {"expected": 4, "actual": 2, "missing_count": 2},
+    )
+
+    output = StringIO()
+    monkeypatch.setattr(
+        cli,
+        "console",
+        Console(file=output, force_terminal=False, width=120),
+    )
+
+    cli._run_accountability_all(
+        days_back=2,
+        start="2026-07-11",
+        end="2026-07-13",
+        venue="PROD",
+        save=False,
+        output_dir="./output",
+        quiet=False,
+    )
+
+    summary = output.getvalue().split("Summary:", 1)[1]
+    assert "FORWARD" in summary
+    assert "DELEGATED" in summary
+    assert "DB" in summary

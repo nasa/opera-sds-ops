@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from .base import AccountabilityStrategy
 from .. import CONFIG
+from ..checkpoint import CheckpointStore, collect_chunked_records, generate_time_chunks
 from ..cmr import query_cmr
 
 logger = logging.getLogger(__name__)
@@ -78,8 +79,43 @@ class DBBasedStrategy(AccountabilityStrategy):
         if not ccid:
             raise ValueError(f"No CCID configured for {self.product} in {venue}")
         
+        is_static = bool(self.product_config.get("static", False))
+        chunk_days = None if is_static else kwargs.get("chunk_days", 30)
+        checkpoint = CheckpointStore(
+            command="accountability",
+            product=self.product,
+            venue=venue,
+            start=start_date,
+            end=end_date,
+            chunk_days=chunk_days,
+            output_dir=kwargs.get("output_dir", "./output"),
+            checkpoint_dir=kwargs.get("checkpoint_dir"),
+            resume=kwargs.get("resume", True),
+            keep=kwargs.get("keep_checkpoints", False),
+            extra_identity={"db_path": str(db_path), "static": is_static},
+        )
         logger.info(f"Querying CMR for {self.product} from {start_date} to {end_date}")
-        granules = query_cmr(ccid, start_date, end_date, venue)
+
+        def project(granule: dict):
+            native_id = granule.get("meta", {}).get("native-id")
+            if not native_id:
+                native_id = granule["umm"]["GranuleUR"]
+            return native_id, {"meta": {"native-id": native_id}}
+
+        collect_chunked_records(
+            store=checkpoint,
+            namespace="products",
+            chunks=generate_time_chunks(start_date, end_date, chunk_days),
+            query=lambda chunk_start, chunk_end: query_cmr(
+                ccid,
+                chunk_start,
+                chunk_end,
+                venue,
+                skip_temporal=is_static,
+            ),
+            project=project,
+        )
+        granules = list(checkpoint.iter_payloads("products"))
         
         # Extract actual items from CMR results
         actual_items_raw = self._extract_actual_items(granules, config)
@@ -96,7 +132,7 @@ class DBBasedStrategy(AccountabilityStrategy):
         actual_count = len(actual_items)
         missing_count = len(missing_items)
         
-        return {
+        results = {
             "strategy": self.get_strategy_name(),
             "expected": expected_count,
             "actual": actual_count,
@@ -104,7 +140,16 @@ class DBBasedStrategy(AccountabilityStrategy):
             "missing": sorted(list(missing_items)),
             "db_path": str(db_path),
             "coverage_pct": (actual_count / expected_count * 100) if expected_count > 0 else 0,
+            "checkpoint": {
+                "chunk_days": chunk_days,
+                "path": str(checkpoint.path)
+                if kwargs.get("keep_checkpoints", False)
+                else None,
+            },
         }
+        checkpoint.mark_successful()
+        checkpoint.close()
+        return results
     
     def _extract_expected_items(self, db_data: dict, config: dict) -> set:
         """

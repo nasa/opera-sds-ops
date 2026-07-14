@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .base import AccountabilityStrategy
 from .. import CONFIG
+from ..checkpoint import CheckpointStore, collect_chunked_records, generate_time_chunks
 from ..cmr import query_cmr
 
 logger = logging.getLogger(__name__)
@@ -50,8 +51,33 @@ class DelegatedValidatorStrategy(AccountabilityStrategy):
         if not ccid:
             raise ValueError(f"No CCID configured for {self.product} in {venue}")
         
+        chunk_days = kwargs.get("chunk_days", 30)
+        checkpoint = CheckpointStore(
+            command="accountability",
+            product=self.product,
+            venue=venue,
+            start=start_date,
+            end=end_date,
+            chunk_days=chunk_days,
+            output_dir=kwargs.get("output_dir", "./output"),
+            checkpoint_dir=kwargs.get("checkpoint_dir"),
+            resume=kwargs.get("resume", True),
+            keep=kwargs.get("keep_checkpoints", False),
+        )
         logger.info(f"Querying CMR for {self.product} from {start_date} to {end_date}")
-        granules = query_cmr(ccid, start_date, end_date, venue)
+        collect_chunked_records(
+            store=checkpoint,
+            namespace="products",
+            chunks=generate_time_chunks(start_date, end_date, chunk_days),
+            query=lambda chunk_start, chunk_end: query_cmr(
+                ccid, chunk_start, chunk_end, venue
+            ),
+            project=lambda granule: (
+                granule["umm"]["GranuleUR"],
+                {"umm": {"GranuleUR": granule["umm"]["GranuleUR"]}},
+            ),
+        )
+        granules = list(checkpoint.iter_payloads("products"))
         
         # If validator is configured, delegate to it
         if validator_module and validator_function:
@@ -81,11 +107,13 @@ class DelegatedValidatorStrategy(AccountabilityStrategy):
                 )
                 
                 # Extract accountability metrics from validation results
-                return self._extract_accountability_metrics(validation_results, granules)
+                results = self._extract_accountability_metrics(validation_results, granules)
+                return self._finish_checkpoint(results, checkpoint, chunk_days, kwargs)
             except ImportError as e:
                 logger.warning(f"Could not import validator {validator_module}: {e}")
                 logger.info("Falling back to basic accountability analysis")
-                return self._basic_analysis(granules)
+                results = self._basic_analysis(granules)
+                return self._finish_checkpoint(results, checkpoint, chunk_days, kwargs)
             except Exception as e:
                 logger.error(f"Validator failed: {e}", exc_info=True)
                 raise RuntimeError(
@@ -96,7 +124,25 @@ class DelegatedValidatorStrategy(AccountabilityStrategy):
                 ) from e
         else:
             logger.info("No validator configured, performing basic analysis")
-            return self._basic_analysis(granules)
+            results = self._basic_analysis(granules)
+            return self._finish_checkpoint(results, checkpoint, chunk_days, kwargs)
+
+    @staticmethod
+    def _finish_checkpoint(
+        results: dict[str, Any],
+        checkpoint: CheckpointStore,
+        chunk_days: int,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        results["checkpoint"] = {
+            "chunk_days": chunk_days,
+            "path": str(checkpoint.path)
+            if kwargs.get("keep_checkpoints", False)
+            else None,
+        }
+        checkpoint.mark_successful()
+        checkpoint.close()
+        return results
     
     def _extract_accountability_metrics(self, validation_results: Any, granules: list[dict]) -> dict[str, Any]:
         """Extract accountability metrics from validator results."""

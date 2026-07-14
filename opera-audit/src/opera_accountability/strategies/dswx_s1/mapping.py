@@ -11,10 +11,12 @@ times are sourced from ``config.yaml`` rather than hardcoded.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
 from ... import CONFIG
+from ...checkpoint import CheckpointStore
 from .rtc_utils import rtc_to_id_tuple
 
 logger = logging.getLogger(__name__)
@@ -158,4 +160,129 @@ def analyze(
         "filtered_rtc_count": len(avail_rtc_ids),
         "missing": missing_rtc_products,
         "rtc_to_dswx_map": rtc_to_dswx_map_serializable,
+    }
+
+
+def _batches(values, size: int = 10000):
+    batch = []
+    for value in values:
+        batch.append(value)
+        if len(batch) >= size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def analyze_checkpoint(
+    checkpoint: CheckpointStore,
+    sensor_start_dates: dict[str, datetime] | None = None,
+) -> dict[str, Any]:
+    """Run the DSWx-S1 global reducer directly against checkpointed records.
+
+    The full RTC and DSWx surveys never coexist as Python lists. Latest-revision
+    deduplication, expected/used membership, and set difference remain in
+    SQLite; only the final missing RTC list is materialized for recovery work.
+    """
+    if sensor_start_dates is None:
+        sensor_start_dates = _load_sensor_start_dates()
+    _warned_sensors.clear()
+
+    rtc_pattern = re.compile(CONFIG["products"]["RTC_S1"]["pattern"])
+    rtc_unique_fields = tuple(CONFIG["products"]["RTC_S1"]["unique_fields"])
+    dswx_pattern = re.compile(CONFIG["products"]["DSWX_S1"]["pattern"])
+    dswx_unique_fields = tuple(CONFIG["products"]["DSWX_S1"]["unique_fields"])
+
+    for namespace in (
+        "rtc_unique",
+        "dswx_unique",
+        "available_rtcs",
+        "used_rtcs",
+        "rtc_to_dswx_pairs",
+    ):
+        checkpoint.clear_namespace(namespace)
+
+    rtc_failures = 0
+    for batch in _batches(checkpoint.iter_payloads("rtc_survey")):
+        reduced = []
+        for product in batch:
+            match = rtc_pattern.match(product["id"])
+            if match is None:
+                rtc_failures += 1
+                continue
+            groups = match.groupdict()
+            stable_key = "$".join(groups[field] for field in rtc_unique_fields)
+            reduced.append(
+                (stable_key, groups["creation_ts"], product)
+            )
+        checkpoint.upsert_reduced_records("rtc_unique", reduced)
+
+    dswx_failures = 0
+    for batch in _batches(checkpoint.iter_payloads("dswx_survey")):
+        reduced = []
+        for product in batch:
+            match = dswx_pattern.match(product["id"])
+            if match is None:
+                dswx_failures += 1
+                continue
+            groups = match.groupdict()
+            stable_key = "$".join(groups[field] for field in dswx_unique_fields)
+            reduced.append(
+                (stable_key, groups["creation_ts"], product)
+            )
+        checkpoint.upsert_reduced_records("dswx_unique", reduced)
+
+    if rtc_failures:
+        logger.error("Skipped %d non-conformant RTC-S1 records", rtc_failures)
+    if dswx_failures:
+        logger.error("Skipped %d non-conformant DSWx-S1 records", dswx_failures)
+
+    for batch in _batches(checkpoint.iter_reduced_payloads("rtc_unique")):
+        available = []
+        for product in batch:
+            if should_include_rtc(product["id"], sensor_start_dates):
+                key = "$".join(rtc_to_id_tuple(product["id"]))
+                available.append((key, product["id"], product))
+        checkpoint.upsert_reduced_records("available_rtcs", available)
+
+    for batch in _batches(checkpoint.iter_reduced_payloads("dswx_unique")):
+        used = []
+        pairs = []
+        for product in batch:
+            dswx_id = product["id"]
+            for rtc_id in product.get("input_rtcs", []):
+                try:
+                    stable_key = "$".join(rtc_to_id_tuple(rtc_id))
+                except ValueError:
+                    continue
+                used.append((stable_key, rtc_id, {"id": rtc_id}))
+                pair_key = f"{stable_key}\u0000{dswx_id}"
+                pairs.append(
+                    (
+                        pair_key,
+                        {"rtc_key": stable_key, "dswx_id": dswx_id},
+                    )
+                )
+        checkpoint.upsert_reduced_records("used_rtcs", used)
+        checkpoint.upsert_records("rtc_to_dswx_pairs", pairs)
+
+    expected = checkpoint.count_reduced_records("available_rtcs")
+    used_count = checkpoint.count_reduced_records("used_rtcs")
+    actual = checkpoint.count_reduced_intersection("available_rtcs", "used_rtcs")
+    missing = sorted(
+        payload["id"]
+        for payload in checkpoint.iter_reduced_difference_payloads(
+            "available_rtcs", "used_rtcs"
+        )
+    )
+
+    return {
+        "expected": expected,
+        "actual": actual,
+        "missing_count": len(missing),
+        "used_rtc_count": used_count,
+        "filtered_rtc_count": expected,
+        "missing": missing,
+        "rtc_surveyed": checkpoint.count_reduced_records("rtc_unique"),
+        "dswx_surveyed": checkpoint.count_reduced_records("dswx_unique"),
     }

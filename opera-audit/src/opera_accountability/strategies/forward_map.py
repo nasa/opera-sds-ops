@@ -8,6 +8,7 @@ from collections import defaultdict
 
 from .base import AccountabilityStrategy
 from .. import CONFIG
+from ..checkpoint import CheckpointStore, collect_chunked_records, generate_time_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +62,35 @@ class ForwardMapStrategy(AccountabilityStrategy):
         if not output_ccid:
             raise ValueError(f"No output CCID configured for {self.product} in {venue}")
         
+        chunk_days = kwargs.get("chunk_days", 30)
+        checkpoint = CheckpointStore(
+            command="accountability",
+            product=self.product,
+            venue=venue,
+            start=start_date,
+            end=end_date,
+            chunk_days=chunk_days,
+            output_dir=kwargs.get("output_dir", "./output"),
+            checkpoint_dir=kwargs.get("checkpoint_dir"),
+            resume=kwargs.get("resume", True),
+            keep=kwargs.get("keep_checkpoints", False),
+        )
+
         # Step 1: Query CMR for INPUT products (Chris's line 217-218, 220-222)
         logger.info(f"Querying CMR for input products from {start_date} to {end_date}")
-        input_granules = self._query_cmr(input_ccid, start_date, end_date, venue)
-        input_ids = set(g["umm"]["GranuleUR"] for g in input_granules)
+        chunks = list(generate_time_chunks(start_date, end_date, chunk_days))
+        collect_chunked_records(
+            store=checkpoint,
+            namespace="inputs",
+            chunks=chunks,
+            query=lambda chunk_start, chunk_end: self._query_cmr(
+                input_ccid, chunk_start, chunk_end, venue
+            ),
+            project=lambda granule: (
+                granule["umm"]["GranuleUR"], granule["umm"]["GranuleUR"]
+            ),
+        )
+        input_ids = set(checkpoint.iter_payloads("inputs"))
         logger.info(f"Expected input (granules): {len(input_ids):,}")
         
         # Step 2: Generate expected output patterns from inputs (Chris's line 224-228)
@@ -76,8 +102,18 @@ class ForwardMapStrategy(AccountabilityStrategy):
         
         # Step 3: Query CMR for actual OUTPUT products (Chris's line 231)
         logger.info(f"Querying CMR for {self.product} outputs")
-        output_granules = self._query_cmr(output_ccid, start_date, end_date, venue)
-        actual_output_ids = set(g["umm"]["GranuleUR"] for g in output_granules)
+        collect_chunked_records(
+            store=checkpoint,
+            namespace="outputs",
+            chunks=chunks,
+            query=lambda chunk_start, chunk_end: self._query_cmr(
+                output_ccid, chunk_start, chunk_end, venue
+            ),
+            project=lambda granule: (
+                granule["umm"]["GranuleUR"], granule["umm"]["GranuleUR"]
+            ),
+        )
+        actual_output_ids = set(checkpoint.iter_payloads("outputs"))
         
         # Step 4: Extract output prefixes (Chris's line 233-235)
         expected_output_prefixes = {pattern.rstrip("*") for pattern in expected_output_patterns}
@@ -104,16 +140,25 @@ class ForwardMapStrategy(AccountabilityStrategy):
         logger.info(f"Actual output prefixes: {actual_output_count:,}")
         logger.info(f"Missing output prefixes: {missing_output_count:,}")
         
-        return {
+        results = {
             "strategy": self.get_strategy_name(),
             "expected": expected_output_count,
             "actual": actual_output_count,
             "missing_count": missing_output_count,
             "missing": sorted(list(missing_output_prefixes)),
-            "input_surveyed": len(input_granules),
-            "output_surveyed": len(output_granules),
+            "input_surveyed": checkpoint.count_records("inputs"),
+            "output_surveyed": checkpoint.count_records("outputs"),
             "missing_input_granules": sorted(list(missing_inputs)),
+            "checkpoint": {
+                "chunk_days": chunk_days,
+                "path": str(checkpoint.path)
+                if kwargs.get("keep_checkpoints", False)
+                else None,
+            },
         }
+        checkpoint.mark_successful()
+        checkpoint.close()
+        return results
     
     def _query_cmr(self, ccid: str, start_date: datetime, end_date: datetime, venue: str) -> list[dict]:
         """Query CMR for granules (synchronous for now, could be async)."""

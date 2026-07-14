@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 from ... import CONFIG
+from ...checkpoint import CheckpointStore, collect_chunked_records, generate_time_chunks
 from ...cmr import query_cmr
 from .rtc_utils import reduce_input_rtc_list
 
@@ -77,7 +78,10 @@ def survey_rtc(
     start: Optional[datetime],
     end: Optional[datetime],
     venue: str = "PROD",
-) -> list[dict]:
+    checkpoint: Optional[CheckpointStore] = None,
+    chunk_days: Optional[int] = None,
+    materialize: bool = True,
+) -> Optional[list[dict]]:
     """Query CMR for RTC-S1 granules and dedupe by ``(burst_id, acq_ts, sensor)``.
 
     Returns a list of ``{"id": <granule_id>, "revision_timestamp": <iso>}``.
@@ -90,16 +94,36 @@ def survey_rtc(
     unique_fields = tuple(CONFIG["products"]["RTC_S1"]["unique_fields"])
 
     logger.info("Surveying RTC-S1 granules (ccid=%s, venue=%s)", ccid, venue)
-    cmr_records = query_cmr(ccid, start, end, venue)
+    if checkpoint is not None and start is not None and end is not None:
+        def project(record: dict):
+            granule_id = record["umm"]["GranuleUR"]
+            return granule_id, {
+                "id": granule_id,
+                "revision_timestamp": record["meta"]["revision-date"],
+            }
 
-    # Shape to the intermediate form used by Riley's survey: id + revision_timestamp.
-    shaped = [
-        {
-            "id": r["umm"]["GranuleUR"],
-            "revision_timestamp": r["meta"]["revision-date"],
-        }
-        for r in cmr_records
-    ]
+        collect_chunked_records(
+            store=checkpoint,
+            namespace="rtc_survey",
+            chunks=generate_time_chunks(start, end, chunk_days),
+            query=lambda chunk_start, chunk_end: query_cmr(
+                ccid, chunk_start, chunk_end, venue
+            ),
+            project=project,
+        )
+        if not materialize:
+            return None
+        shaped = list(checkpoint.iter_payloads("rtc_survey"))
+    else:
+        cmr_records = query_cmr(ccid, start, end, venue)
+        # Shape to the intermediate form used by Riley's survey: id + revision_timestamp.
+        shaped = [
+            {
+                "id": r["umm"]["GranuleUR"],
+                "revision_timestamp": r["meta"]["revision-date"],
+            }
+            for r in cmr_records
+        ]
     logger.info("Fetched %d raw RTC-S1 records; deduping by %s", len(shaped), unique_fields)
 
     deduped = _dedupe_by_creation_ts(shaped, pattern, unique_fields)
@@ -111,7 +135,10 @@ def survey_dswx(
     start: Optional[datetime],
     end: Optional[datetime],
     venue: str = "PROD",
-) -> list[dict]:
+    checkpoint: Optional[CheckpointStore] = None,
+    chunk_days: Optional[int] = None,
+    materialize: bool = True,
+) -> Optional[list[dict]]:
     """Query CMR for DSWx-S1 granules and dedupe by ``(tile_id, acq_ts, sensor)``.
 
     Returns a list of ``{"id": <granule_id>, "input_rtcs": [<rtc_id>, ...]}``.
@@ -121,15 +148,39 @@ def survey_dswx(
     unique_fields = tuple(CONFIG["products"]["DSWX_S1"]["unique_fields"])
 
     logger.info("Surveying DSWx-S1 granules (ccid=%s, venue=%s)", ccid, venue)
-    cmr_records = query_cmr(ccid, start, end, venue)
+    if checkpoint is not None and start is not None and end is not None:
+        def project(record: dict):
+            granule_id = record["umm"]["GranuleUR"]
+            return granule_id, {
+                "id": granule_id,
+                "input_rtcs": reduce_input_rtc_list(
+                    record["umm"].get("InputGranules", [])
+                ),
+            }
 
-    shaped = [
-        {
-            "id": r["umm"]["GranuleUR"],
-            "input_rtcs": reduce_input_rtc_list(r["umm"].get("InputGranules", [])),
-        }
-        for r in cmr_records
-    ]
+        collect_chunked_records(
+            store=checkpoint,
+            namespace="dswx_survey",
+            chunks=generate_time_chunks(start, end, chunk_days),
+            query=lambda chunk_start, chunk_end: query_cmr(
+                ccid, chunk_start, chunk_end, venue
+            ),
+            project=project,
+        )
+        if not materialize:
+            return None
+        shaped = list(checkpoint.iter_payloads("dswx_survey"))
+    else:
+        cmr_records = query_cmr(ccid, start, end, venue)
+        shaped = [
+            {
+                "id": r["umm"]["GranuleUR"],
+                "input_rtcs": reduce_input_rtc_list(
+                    r["umm"].get("InputGranules", [])
+                ),
+            }
+            for r in cmr_records
+        ]
     logger.info("Fetched %d raw DSWx-S1 records; deduping by %s", len(shaped), unique_fields)
 
     deduped = _dedupe_by_creation_ts(shaped, pattern, unique_fields)

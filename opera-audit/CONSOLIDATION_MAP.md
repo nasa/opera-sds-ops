@@ -443,6 +443,19 @@ pick them up automatically.
 
 ## Shared Infrastructure
 
+### Resumable temporal chunking
+
+- `src/opera_accountability/checkpoint.py`
+  - Shared contiguous time-range generation
+  - SQLite record upserts keyed by stable product identity
+  - Atomic per-chunk completion markers and resume support
+  - Automatic successful-run cleanup with optional checkpoint retention
+- Used by temporal duplicate detection, all accountability strategies, and
+  burst coverage. Static products are represented by one non-temporal chunk.
+- Common CLI controls: `--chunk-days`, `--checkpoint-dir`, `--resume`, and
+  `--keep-checkpoints`; accountability and burst coverage also expose
+  `--no-chunking`.
+
 ### CMR Client
 - `src/opera_accountability/cmr.py`
   - `query_cmr()` - Synchronous CMR query with pagination

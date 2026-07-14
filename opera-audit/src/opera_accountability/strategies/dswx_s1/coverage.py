@@ -243,26 +243,31 @@ def validate_cycle_coverage(
         workers,
     )
     with ThreadPoolExecutor(max_workers=min(workers, len(cycle_map))) as pool:
-        futures = []
-        for bucket_key, candidate_rtc_ids in cycle_map.items():
-            tile_set_id = bucket_key.split("$", 1)[0]
-            futures.append(
-                pool.submit(
-                    _validate_one,
-                    bucket_key,
-                    candidate_rtc_ids,
-                    tile_bursts[tile_set_id],
-                    rtc_collection_id=rtc_collection_id,
-                    venue=venue,
-                    threshold=threshold,
-                    temporal_window_hours=temporal_window_hours,
-                    query_func=query_func,
+        items = list(cycle_map.items())
+        submit_batch_size = max(100, workers * 8)
+        for offset in range(0, len(items), submit_batch_size):
+            futures = []
+            for bucket_key, candidate_rtc_ids in items[
+                offset:offset + submit_batch_size
+            ]:
+                tile_set_id = bucket_key.split("$", 1)[0]
+                futures.append(
+                    pool.submit(
+                        _validate_one,
+                        bucket_key,
+                        candidate_rtc_ids,
+                        tile_bursts[tile_set_id],
+                        rtc_collection_id=rtc_collection_id,
+                        venue=venue,
+                        threshold=threshold,
+                        temporal_window_hours=temporal_window_hours,
+                        query_func=query_func,
+                    )
                 )
-            )
 
-        for future in as_completed(futures):
-            bucket_key, is_valid, detail = future.result()
-            (valid if is_valid else dropped)[bucket_key] = detail
+            for future in as_completed(futures):
+                bucket_key, is_valid, detail = future.result()
+                (valid if is_valid else dropped)[bucket_key] = detail
 
     valid = {key: valid[key] for key in sorted(valid)}
     dropped = {key: dropped[key] for key in sorted(dropped)}

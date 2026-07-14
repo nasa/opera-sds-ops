@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from ... import CONFIG
 from ...burst_db import load_dist_s1_bursts_to_products
+from ...checkpoint import CheckpointStore
 from . import accountability, survey
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,10 @@ def run(
     max_concurrent: Optional[int] = None,
     max_retries: Optional[int] = None,
     prefer_s3: Optional[bool] = None,
+    chunk_days: Optional[int] = 30,
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
+    keep_checkpoints: bool = False,
 ) -> dict[str, Any]:
     cfg = CONFIG["products"]["DIST_S1"]["accountability"]
     if max_concurrent is None:
@@ -81,7 +86,32 @@ def run(
     report_dir = Path(output_dir) / "reports" / "accountability" / "DIST_S1" / date_str
     files: dict[str, Path] = {}
 
-    rtc_products = survey.survey_rtc(start_date, end_date, venue)
+    checkpoint: Optional[CheckpointStore] = None
+    if start_date is not None and end_date is not None:
+        checkpoint = CheckpointStore(
+            command="accountability",
+            product="DIST_S1",
+            venue=venue,
+            start=start_date,
+            end=end_date,
+            chunk_days=chunk_days,
+            output_dir=output_dir,
+            checkpoint_dir=checkpoint_dir,
+            resume=resume,
+            keep=keep_checkpoints,
+            extra_identity={
+                "prefer_s3": prefer_s3,
+                "burst_db": str(burst_db) if burst_db else None,
+            },
+        )
+
+    rtc_products = survey.survey_rtc(
+        start_date,
+        end_date,
+        venue,
+        checkpoint=checkpoint,
+        chunk_days=chunk_days,
+    )
     dist_products, existing_tile_times = survey.survey_dist(
         start_date,
         end_date,
@@ -89,6 +119,8 @@ def run(
         max_concurrent=max_concurrent,
         max_retries=max_retries,
         prefer_s3=prefer_s3,
+        checkpoint=checkpoint,
+        chunk_days=chunk_days,
     )
 
     bursts_to_products = load_dist_s1_bursts_to_products(burst_db)
@@ -141,10 +173,20 @@ def run(
         },
         **results,
         "files": {key: str(value) for key, value in files.items()},
+        "checkpoint": {
+            "chunk_days": chunk_days,
+            "resume": resume,
+            "kept": keep_checkpoints,
+            "path": str(checkpoint.path) if checkpoint and keep_checkpoints else None,
+        },
     }
 
     if save:
         _write_json(report_dir / "summary.json", results)
         _write_summary(report_dir / "summary.txt", results)
+
+    if checkpoint is not None:
+        checkpoint.mark_successful()
+        checkpoint.close()
 
     return results

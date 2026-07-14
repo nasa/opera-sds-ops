@@ -6,14 +6,16 @@ import itertools
 import json
 import logging
 import os
+import ssl
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Iterator, Optional
 
 import aiohttp
 import backoff
+import certifi
 import requests
 from requests.exceptions import HTTPError
 
@@ -25,6 +27,18 @@ CMR_URLS = {
     "PROD": CONFIG["cmr"]["url"],
     "UAT": CONFIG["cmr"]["url_uat"]
 }
+
+
+def aiohttp_session(**kwargs) -> aiohttp.ClientSession:
+    """Create an async HTTP session using Requests' portable CA bundle.
+
+    Framework Python installations on macOS may not have a populated system
+    trust store even though ``requests`` works through certifi. Using the same
+    CA bundle keeps synchronous and asynchronous NASA/ASF calls consistent.
+    """
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+    return aiohttp.ClientSession(connector=connector, **kwargs)
 
 
 def _fatal_code(err: requests.exceptions.RequestException) -> bool:
@@ -132,15 +146,17 @@ def query_cmr_post(data: str, url: Optional[str] = None) -> list[dict]:
         headers = {"CMR-Search-After": search_after}
 
 
-def query_cmr(
+def iter_cmr_pages(
     collection_id: str,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     venue: str = "PROD",
     skip_temporal: bool = False,
-) -> list[dict]:
-    """
-    Query CMR for granules with pagination and retry logic.
+) -> Iterator[list[dict]]:
+    """Yield one CMR granule page at a time with retry and progress output.
+
+    Consumers that persist/project each page can keep collection-wide static
+    scans bounded to one CMR page instead of retaining every UMM record.
 
     Args:
         collection_id: CMR collection concept ID
@@ -149,11 +165,10 @@ def query_cmr(
         venue: 'PROD' or 'UAT'
         skip_temporal: If True, omit temporal filter (for static products with no time extent)
 
-    Returns:
-        List of granule dicts (CMR UMM JSON format)
+    Yields:
+        Lists of granule dicts (one CMR response page at a time).
     """
     cmr_url = CMR_URLS[venue]
-    granules = []
 
     params = {
         "collection_concept_id": collection_id,
@@ -173,32 +188,59 @@ def query_cmr(
     print(f"\rQuerying CMR ({venue}): 0 granules retrieved | 00:00", end="", file=sys.stderr)
     sys.stderr.flush()
 
-    # First request with text progress
-    page_granules, search_after = _do_cmr_request(cmr_url, params)
-    granules.extend(page_granules)
+    total = 0
+    headers: dict[str, str] = {}
+    completed = False
+    try:
+        while True:
+            page_granules, search_after = _do_cmr_request(
+                cmr_url, params, headers
+            )
+            total += len(page_granules)
 
-    # Print progress to stderr so it doesn't interfere with stdout
-    elapsed = int(time.time() - start_time)
-    elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
-    print(f"\rQuerying CMR ({venue}): {len(granules)} granules retrieved | {elapsed_str}", end="", file=sys.stderr)
-    sys.stderr.flush()
+            elapsed = int(time.time() - start_time)
+            elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+            print(
+                f"\rQuerying CMR ({venue}): {total} granules retrieved | {elapsed_str}",
+                end="",
+                file=sys.stderr,
+            )
+            sys.stderr.flush()
 
-    # Paginate through remaining results
-    while search_after:
-        headers = {"CMR-Search-After": search_after}
-        page_granules, search_after = _do_cmr_request(cmr_url, params, headers)
-        granules.extend(page_granules)
+            if page_granules:
+                yield page_granules
+            if not search_after:
+                completed = True
+                break
+            headers = {"CMR-Search-After": search_after}
+    finally:
+        print(file=sys.stderr)
 
-        # Update progress with elapsed time
-        elapsed = int(time.time() - start_time)
-        elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
-        print(f"\rQuerying CMR ({venue}): {len(granules)} granules retrieved | {elapsed_str}", end="", file=sys.stderr)
-        sys.stderr.flush()
+    if completed:
+        logger.info("Retrieved %d granules from CMR", total)
 
-    # Final newline
-    print(file=sys.stderr)
 
-    logger.info(f"Retrieved {len(granules)} granules from CMR")
+def query_cmr(
+    collection_id: str,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    venue: str = "PROD",
+    skip_temporal: bool = False,
+) -> list[dict]:
+    """Return all matching CMR granules.
+
+    For collection-wide or otherwise very large scans, prefer
+    :func:`iter_cmr_pages` and persist/project each yielded page.
+    """
+    granules: list[dict] = []
+    for page in iter_cmr_pages(
+        collection_id,
+        start_date,
+        end_date,
+        venue,
+        skip_temporal,
+    ):
+        granules.extend(page)
     return granules
 
 
@@ -424,7 +466,7 @@ async def async_cmr_posts(
     """Run multiple asynchronous CMR POST queries concurrently."""
     concurrency = 1 if len(request_bodies) == 1 else min(len(request_bodies), 15)
     sem = sem or asyncio.Semaphore(concurrency)
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp_session() as session:
         if output_dir:
             output = Path(output_dir)
             output.mkdir(parents=True, exist_ok=True)

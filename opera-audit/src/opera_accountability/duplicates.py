@@ -9,6 +9,11 @@ from itertools import chain
 from typing import Any, Optional
 
 from . import CONFIG
+from .checkpoint import (
+    CheckpointStore,
+    collect_chunked_records,
+    generate_time_chunks,
+)
 from .cmr import query_cmr
 
 logger = logging.getLogger(__name__)
@@ -416,13 +421,71 @@ def detect_disp_s1_end_conflicts(cmr_granules: list[dict]) -> dict[str, Any]:
     }
 
 
+def detect_disp_s1_end_conflicts_memory_efficient(
+    start_date: datetime,
+    end_date: datetime,
+    venue: str = "PROD",
+    chunk_days: int = 30,
+    output_dir: str = "./output",
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
+    keep_checkpoints: bool = False,
+) -> dict[str, Any]:
+    """Run DISP-S1 end-conflict detection from checkpointed GranuleURs."""
+    ccid = CONFIG["products"]["DISP_S1"]["ccid"].get(venue)
+    if not ccid:
+        raise ValueError(f"No CCID configured for DISP_S1 in {venue}")
+
+    checkpoint = CheckpointStore(
+        command="duplicates_end_conflicts",
+        product="DISP_S1",
+        venue=venue,
+        start=start_date,
+        end=end_date,
+        chunk_days=chunk_days,
+        output_dir=output_dir,
+        checkpoint_dir=checkpoint_dir,
+        resume=resume,
+        keep=keep_checkpoints,
+    )
+    collect_chunked_records(
+        store=checkpoint,
+        namespace="granule_ids",
+        chunks=generate_time_chunks(start_date, end_date, chunk_days),
+        query=lambda chunk_start, chunk_end: query_cmr(
+            ccid, chunk_start, chunk_end, venue
+        ),
+        project=lambda granule: (
+            granule["umm"]["GranuleUR"], granule["umm"]["GranuleUR"]
+        ),
+    )
+    granules = [
+        {"umm": {"GranuleUR": granule_id}}
+        for granule_id in checkpoint.iter_payloads("granule_ids")
+    ]
+    results = detect_disp_s1_end_conflicts(granules)
+    results["checkpoint"] = {
+        "chunk_days": chunk_days,
+        "resume": resume,
+        "kept": keep_checkpoints,
+        "path": str(checkpoint.path) if keep_checkpoints else None,
+    }
+    checkpoint.mark_successful()
+    checkpoint.close()
+    return results
+
+
 def detect_duplicates_memory_efficient(
     product: str,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
     venue: str = "PROD",
     chunk_days: int = 30,
-    batch_size: int = 100000
+    batch_size: int = 100000,
+    output_dir: str = "./output",
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
+    keep_checkpoints: bool = False,
 ) -> dict[str, Any]:
     """
     Detect duplicates using memory-efficient batched processing with time chunking.
@@ -455,34 +518,44 @@ def detect_duplicates_memory_efficient(
     agg_format = product_config["aggregation_format"]
     creation_field = product_config.get("creation_field")
 
-    # Generate time chunks
-    time_chunks = list(_generate_time_chunks(start_date, end_date, chunk_days))
+    if start_date is None:
+        start_date = datetime.now() - timedelta(days=365)
+    if end_date is None:
+        end_date = datetime.now()
+
+    # Generate time chunks and persist only the GranuleUR projection. Stable
+    # keys remove CMR's inclusive-boundary overlap across adjacent chunks.
+    time_chunks = list(generate_time_chunks(start_date, end_date, chunk_days))
     logger.info(f"Split query into {len(time_chunks)} time chunks of ~{chunk_days} days each")
 
-    # Use a set to deduplicate granule IDs across chunks
-    all_granule_ids_set = set()
-    total_products_fetched = 0
-
-    for chunk_start, chunk_end in time_chunks:
-        cmr_granules = query_cmr(ccid, chunk_start, chunk_end, venue)
-        chunk_count = len(cmr_granules)
-        total_products_fetched += chunk_count
-
-        # Extract only GranuleUR strings
-        granule_ids = [g["umm"]["GranuleUR"] for g in cmr_granules]
-        all_granule_ids_set.update(granule_ids)
-
-        # Clear from memory
-        del cmr_granules
-        del granule_ids
-        gc.collect()
-
-        logger.info(f"Chunk {chunk_start.strftime('%Y-%m-%d')}: {chunk_count} fetched, {len(all_granule_ids_set)} unique")
-
-    # Convert to list for processing
-    granule_ids = list(all_granule_ids_set)
-    del all_granule_ids_set
-    gc.collect()
+    checkpoint = CheckpointStore(
+        command="duplicates",
+        product=product,
+        venue=venue,
+        start=start_date,
+        end=end_date,
+        chunk_days=chunk_days,
+        output_dir=output_dir,
+        checkpoint_dir=checkpoint_dir,
+        resume=resume,
+        keep=keep_checkpoints,
+    )
+    collect_chunked_records(
+        store=checkpoint,
+        namespace="granule_ids",
+        chunks=time_chunks,
+        query=lambda chunk_start, chunk_end: query_cmr(
+            ccid, chunk_start, chunk_end, venue
+        ),
+        project=lambda granule: (
+            granule["umm"]["GranuleUR"],
+            granule["umm"]["GranuleUR"],
+        ),
+    )
+    total_products_fetched = sum(
+        row["fetched"] for row in checkpoint.chunk_status("granule_ids")
+    )
+    granule_ids = list(checkpoint.iter_payloads("granule_ids"))
 
     total_products = len(granule_ids)
     logger.info(f"Retrieved {total_products_fetched} products from CMR ({total_products} unique)")
@@ -642,7 +715,7 @@ def detect_duplicates_memory_efficient(
             for dup_group in month_data["duplicates"].values():
                 duplicate_list.extend(dup_group[1:])
 
-    return {
+    results = {
         # Riley's original format
         "granule_month_map": granule_month_map,
         "aqc_date_map": aqc_date_map,
@@ -656,8 +729,16 @@ def detect_duplicates_memory_efficient(
         "min_duplicates_per_granule": min(duplicate_counts) if len(duplicate_counts) > 0 else None,
         "max_duplicates_per_granule": max(duplicate_counts) if len(duplicate_counts) > 0 else None,
         "avg_duplicates_per_granule": sum(duplicate_counts) / len(duplicate_counts) if len(duplicate_counts) > 0 else None,
-        "parse_failures": parse_failures
+        "parse_failures": parse_failures,
+        "checkpoint": {
+            "chunk_days": chunk_days,
+            "resumed": resume,
+            "path": str(checkpoint.path) if keep_checkpoints else None,
+        },
     }
+    checkpoint.mark_successful()
+    checkpoint.close()
+    return results
 
 
 def _generate_time_chunks(start_date: Optional[datetime], end_date: Optional[datetime], chunk_days: int = 30):
@@ -667,8 +748,5 @@ def _generate_time_chunks(start_date: Optional[datetime], end_date: Optional[dat
     if not end_date:
         end_date = datetime.now()
 
-    current = start_date
-    while current < end_date:
-        chunk_end = min(current + timedelta(days=chunk_days), end_date)
-        yield (current, chunk_end)
-        current = chunk_end
+    for chunk in generate_time_chunks(start_date, end_date, chunk_days):
+        yield (chunk.start, chunk.end)

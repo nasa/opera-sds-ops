@@ -7,6 +7,7 @@ from collections import defaultdict
 
 from .base import AccountabilityStrategy
 from .. import CONFIG
+from ..checkpoint import CheckpointStore, collect_chunked_records, generate_time_chunks
 from ..cmr import query_cmr
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ class DateCountStrategy(AccountabilityStrategy):
         start_date: datetime,
         end_date: datetime,
         venue: str = "PROD",
-        **kwargs
+        **kwargs,
     ) -> dict[str, Any]:
         """Run date-count accountability analysis."""
         config = self.product_config.get("accountability", {}).get("date_count", {})
@@ -47,21 +48,62 @@ class DateCountStrategy(AccountabilityStrategy):
         if not ccid:
             raise ValueError(f"No CCID configured for {self.product} in {venue}")
         
+        chunk_days = kwargs.get("chunk_days", 30)
+        checkpoint = CheckpointStore(
+            command="accountability",
+            product=self.product,
+            venue=venue,
+            start=start_date,
+            end=end_date,
+            chunk_days=chunk_days,
+            output_dir=kwargs.get("output_dir", "./output"),
+            checkpoint_dir=kwargs.get("checkpoint_dir"),
+            resume=kwargs.get("resume", True),
+            keep=kwargs.get("keep_checkpoints", False),
+        )
+
         logger.info(f"Querying CMR for {self.product} from {start_date} to {end_date}")
-        granules = query_cmr(ccid, start_date, end_date, venue)
-        
-        # Count granules by beginning date
-        date_counts = defaultdict(int)
-        for granule in granules:
+
+        def project(granule: dict):
+            granule_id = granule["umm"]["GranuleUR"]
             temporal = granule["umm"].get("TemporalExtent", {}).get("RangeDateTime", {})
-            begin_dt = temporal.get("BeginningDateTime")
+            return granule_id, {
+                "id": granule_id,
+                "begin": temporal.get("BeginningDateTime"),
+            }
+
+        collect_chunked_records(
+            store=checkpoint,
+            namespace="products",
+            chunks=generate_time_chunks(start_date, end_date, chunk_days),
+            query=lambda chunk_start, chunk_end: query_cmr(
+                ccid, chunk_start, chunk_end, venue
+            ),
+            project=project,
+        )
+        
+        # Count only beginning dates owned by this half-open run window. CMR
+        # temporal search uses interval intersection, so it may return a
+        # granule that begins before ``start_date`` or exactly at ``end_date``.
+        # A same-day programmatic range still represents that one calendar day.
+        start_day = start_date.date()
+        end_day_exclusive = end_date.date()
+        if end_day_exclusive <= start_day:
+            end_day_exclusive = start_day + timedelta(days=1)
+
+        date_counts = defaultdict(int)
+        for granule in checkpoint.iter_payloads("products"):
+            begin_dt = granule.get("begin")
             if begin_dt:
-                date_str = begin_dt.split("T")[0]
-                date_counts[date_str] += 1
+                begin_day = datetime.fromisoformat(
+                    begin_dt.replace("Z", "+00:00")
+                ).date()
+                if start_day <= begin_day < end_day_exclusive:
+                    date_counts[begin_day.strftime("%Y-%m-%d")] += 1
         
         # Ensure all dates in range are represented
-        current = start_date.date()
-        while current <= end_date.date():
+        current = start_day
+        while current < end_day_exclusive:
             date_str = current.strftime("%Y-%m-%d")
             if date_str not in date_counts:
                 date_counts[date_str] = 0
@@ -79,7 +121,7 @@ class DateCountStrategy(AccountabilityStrategy):
         expected_total = total_dates * expected_per_day
         actual_total = sum(date_counts.values())
         
-        return {
+        results = {
             "strategy": self.get_strategy_name(),
             "expected_per_day": expected_per_day,
             "total_dates": total_dates,
@@ -91,4 +133,13 @@ class DateCountStrategy(AccountabilityStrategy):
             "missing_count": sum(max(0, expected_per_day - count) for count in date_counts.values()),
             "missing": sorted(list(missing_dates.keys())),
             "date_counts": dict(date_counts),
+            "checkpoint": {
+                "chunk_days": chunk_days,
+                "path": str(checkpoint.path)
+                if kwargs.get("keep_checkpoints", False)
+                else None,
+            },
         }
+        checkpoint.mark_successful()
+        checkpoint.close()
+        return results

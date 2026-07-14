@@ -33,7 +33,8 @@ from typing import Optional, Iterator
 
 import aiohttp
 
-from .cmr import async_cmr_post_items
+from .checkpoint import CheckpointStore, TimeChunk
+from .cmr import aiohttp_session, async_cmr_post_items
 from .slc_annotations import (
     get_slc_download_url,
     get_edl_token,
@@ -444,7 +445,7 @@ async def fetch_slc_granules(
 
     sem = asyncio.Semaphore(15)
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp_session() as session:
         for platform_short, platform_long in [
             ("SENTINEL-1A_SLC", "SENTINEL-1A"),
             ("SENTINEL-1B_SLC", "SENTINEL-1B"),
@@ -593,7 +594,7 @@ async def process_slcs_to_expected_bursts(
     logger.info(f"  Fetching burst IDs from ASF (polarization: {primary_pol})...")
 
     sem = asyncio.Semaphore(max_concurrent)
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp_session() as session:
         tasks = [fetch_bursts_for_slc(slc, session, sem, primary_pol) for slc in slcs]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -677,7 +678,7 @@ async def check_coverage_for_bursts(
     group_list = list(groups.values())
 
     batch_size = 100
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp_session() as session:
         for i in range(0, len(group_list), batch_size):
             tasks = [check_group(g, session) for g in group_list[i:i + batch_size]]
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -703,8 +704,12 @@ async def audit_burst_coverage(
     polarizations: list[str],
     low_memory: bool = False,
     output_path: str = None,
-    chunk_days: int = 30,
+    chunk_days: Optional[int] = 30,
     buffer_deg: float = 0.5,
+    checkpoint_dir: Optional[str] = None,
+    checkpoint_output_dir: str = "./output",
+    resume: bool = True,
+    keep_checkpoints: bool = False,
 ) -> dict:
     """Main audit function: check OPERA product coverage for bursts in a region.
 
@@ -736,32 +741,59 @@ async def audit_burst_coverage(
         geojson_geom = geojson_geom.buffer(buffer_deg)
         logger.info(f"Applied {buffer_deg}° buffer to geometry")
 
-    if low_memory:
+    if chunk_days is not None:
         chunks = list(generate_time_chunks(start_datetime, end_datetime, chunk_days))
-        logger.info(f"Low-memory mode: {len(chunks)} chunks of ~{chunk_days} days")
+        logger.info(f"Chunked mode: {len(chunks)} chunks of ~{chunk_days} days")
     else:
         chunks = [(start_datetime, end_datetime)]
+
+    checkpoint = CheckpointStore(
+        command="burst_coverage",
+        product="+".join(sorted(product_types)),
+        venue="PROD",
+        start=start_datetime,
+        end=end_datetime,
+        chunk_days=chunk_days,
+        output_dir=checkpoint_output_dir,
+        checkpoint_dir=checkpoint_dir,
+        resume=resume,
+        keep=keep_checkpoints,
+        extra_identity={
+            "geojson": geojson_path,
+            "polarizations": sorted(polarizations),
+            "buffer_deg": buffer_deg,
+        },
+    )
 
     totals = {"slcs": 0, "bursts_raw": 0, "bursts_unique": 0}
     product_stats = {pt: {"found": 0, "missing": 0, "expected": 0} for pt in product_types}
     all_results = {"found": defaultdict(list), "missing": defaultdict(list)}
 
     writer = None
-    if low_memory and output_path:
-        writer = JSONLWriter(output_path, {
-            "start_datetime": start_datetime.isoformat(),
-            "end_datetime": end_datetime.isoformat(),
-            "geojson": geojson_path,
-            "polarizations": polarizations,
-            "product_types": product_types,
-            "chunk_days": chunk_days,
-        })
 
     try:
         for chunk_idx, (chunk_start, chunk_end) in enumerate(chunks, 1):
-            if low_memory:
+            checkpoint_chunk = TimeChunk(chunk_idx - 1, chunk_start, chunk_end)
+            if checkpoint.is_chunk_complete("chunk_results", checkpoint_chunk):
+                logger.info(
+                    "Resuming burst coverage: chunk %d/%d already complete",
+                    chunk_idx,
+                    len(chunks),
+                )
+                continue
+
+            if chunk_days is not None:
                 logger.info(f"Processing chunk {chunk_idx}/{len(chunks)}: "
                            f"{chunk_start.strftime('%Y-%m-%d')} to {chunk_end.strftime('%Y-%m-%d')}")
+
+            chunk_payload = {
+                "start": chunk_start.isoformat(),
+                "end": chunk_end.isoformat(),
+                "slc_ids": [],
+                "bursts_raw": 0,
+                "bursts_unique": 0,
+                "products": {},
+            }
 
             # Step 1: Fetch SLC granules from CMR
             logger.info("  Querying CMR for SLC granules...")
@@ -814,34 +846,41 @@ async def audit_burst_coverage(
 
             if not slcs:
                 logger.info("  No valid SLCs in this chunk, skipping")
+                checkpoint.commit_chunk(
+                    "chunk_results",
+                    checkpoint_chunk,
+                    [(checkpoint_chunk.key, chunk_payload)],
+                    fetched_count=0,
+                )
                 continue
 
-            totals["slcs"] += len(slcs)
+            chunk_payload["slc_ids"] = [slc.native_id for slc in slcs]
 
             # Step 4: Fetch bursts and build expected products list
             raw_count, expected_bursts = await process_slcs_to_expected_bursts(slcs, polarizations)
-            totals["bursts_raw"] += raw_count
-            totals["bursts_unique"] += len(expected_bursts)
+            chunk_payload["bursts_raw"] = raw_count
+            chunk_payload["bursts_unique"] = len(expected_bursts)
 
             del slcs
             gc.collect()
 
             if not expected_bursts:
+                checkpoint.commit_chunk(
+                    "chunk_results",
+                    checkpoint_chunk,
+                    [(checkpoint_chunk.key, chunk_payload)],
+                    fetched_count=len(chunk_payload["slc_ids"]),
+                )
                 continue
 
             # Step 5: Check coverage for each product type
             for product_type in product_types:
                 found, missing = await check_coverage_for_bursts(expected_bursts, product_type)
 
-                product_stats[product_type]["found"] += len(found)
-                product_stats[product_type]["missing"] += len(missing)
-                product_stats[product_type]["expected"] += len(expected_bursts)
-
-                if low_memory and writer:
-                    writer.write_chunk(chunk_start, chunk_end, product_type, found, missing)
-                else:
-                    all_results["found"][product_type].extend(found)
-                    all_results["missing"][product_type].extend(missing)
+                chunk_payload["products"][product_type] = {
+                    "found": found,
+                    "missing": missing,
+                }
 
                 logger.info(f"    {product_type}: {len(found)} found, {len(missing)} missing")
 
@@ -851,28 +890,59 @@ async def audit_burst_coverage(
             del expected_bursts
             gc.collect()
 
+            checkpoint.commit_chunk(
+                "chunk_results",
+                checkpoint_chunk,
+                [(checkpoint_chunk.key, chunk_payload)],
+                fetched_count=len(chunk_payload["slc_ids"]),
+            )
+
             if low_memory:
                 logger.info(f"  Chunk {chunk_idx} complete")
 
     finally:
         if writer:
-            summary = {
-                "total_slcs": totals["slcs"],
-                "total_bursts_raw": totals["bursts_raw"],
-                "total_unique_bursts": totals["bursts_unique"],
-                "products": {},
-            }
-            for pt in product_types:
-                stats = product_stats[pt]
-                coverage = (stats["found"] / stats["expected"] * 100) if stats["expected"] > 0 else 100.0
-                summary["products"][pt] = {
-                    "expected_count": stats["expected"],
-                    "found_count": stats["found"],
-                    "missing_count": stats["missing"],
-                    "coverage_percent": round(coverage, 2),
-                }
-            writer.write_summary(summary)
             writer.close()
+
+    # Rebuild the global result from checkpointed chunks. Stable burst keys
+    # remove acquisitions returned by both adjacent inclusive CMR windows.
+    slc_ids: set[str] = set()
+    coverage_records = {pt: {} for pt in product_types}
+    totals = {"slcs": 0, "bursts_raw": 0, "bursts_unique": 0}
+    for chunk_payload in checkpoint.iter_payloads("chunk_results"):
+        slc_ids.update(chunk_payload.get("slc_ids", []))
+        totals["bursts_raw"] += int(chunk_payload.get("bursts_raw", 0))
+        for pt in product_types:
+            product_payload = chunk_payload.get("products", {}).get(pt, {})
+            for status in ("found", "missing"):
+                for item in product_payload.get(status, []):
+                    key = (
+                        item.get("burst_id"),
+                        item.get("acquisition_time"),
+                        item.get("polarization"),
+                    )
+                    existing = coverage_records[pt].get(key)
+                    # If an overlapping boundary query disagrees, a concrete
+                    # found product is stronger evidence than a missing result.
+                    if existing and existing[0] == "found" and status == "missing":
+                        continue
+                    coverage_records[pt][key] = (status, item)
+
+    totals["slcs"] = len(slc_ids)
+    for pt in product_types:
+        records = coverage_records[pt]
+        found = [item for status, item in records.values() if status == "found"]
+        missing = [item for status, item in records.values() if status == "missing"]
+        product_stats[pt] = {
+            "found": len(found),
+            "missing": len(missing),
+            "expected": len(records),
+        }
+        all_results["found"][pt] = found
+        all_results["missing"][pt] = missing
+    totals["bursts_unique"] = max(
+        (stats["expected"] for stats in product_stats.values()), default=0
+    )
 
     # Build results dict
     results = {
@@ -900,6 +970,41 @@ async def audit_burst_coverage(
         if not low_memory:
             results["products"][pt]["found"] = all_results["found"][pt]
             results["products"][pt]["missing"] = all_results["missing"][pt]
+
+    results["checkpoint"] = {
+        "chunk_days": chunk_days,
+        "resume": resume,
+        "kept": keep_checkpoints,
+        "path": str(checkpoint.path) if keep_checkpoints else None,
+    }
+
+    if low_memory and output_path:
+        writer = JSONLWriter(output_path, {
+            "start_datetime": start_datetime.isoformat(),
+            "end_datetime": end_datetime.isoformat(),
+            "geojson": geojson_path,
+            "polarizations": polarizations,
+            "product_types": product_types,
+            "chunk_days": chunk_days,
+        })
+        for pt in product_types:
+            writer.write_chunk(
+                start_datetime,
+                end_datetime,
+                pt,
+                all_results["found"][pt],
+                all_results["missing"][pt],
+            )
+        writer.write_summary({
+            "total_slcs": totals["slcs"],
+            "total_bursts_raw": totals["bursts_raw"],
+            "total_unique_bursts": totals["bursts_unique"],
+            "products": results["products"],
+        })
+        writer.close()
+
+    checkpoint.mark_successful()
+    checkpoint.close()
 
     return results
 

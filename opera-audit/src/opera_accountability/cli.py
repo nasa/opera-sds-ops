@@ -13,10 +13,21 @@ from rich.table import Table
 from rich.panel import Panel
 
 from opera_accountability import CONFIG, __version__
-from opera_accountability.cmr import query_cmr, query_cmr_by_short_name
+from opera_accountability.checkpoint import (
+    CheckpointStore,
+    collect_chunked_records,
+    collect_paged_records,
+    generate_time_chunks,
+)
+from opera_accountability.cmr import (
+    iter_cmr_pages,
+    query_cmr,
+    query_cmr_by_short_name,
+)
 from opera_accountability.duplicates import (
     detect_duplicates,
     detect_disp_s1_end_conflicts,
+    detect_disp_s1_end_conflicts_memory_efficient,
     detect_duplicates_memory_efficient,
     get_granules_from_grq,
 )
@@ -53,6 +64,10 @@ def duplicates(
     output_dir: str = typer.Option("./output", "--output-dir", "-o", help="Output directory (used with --save)"),
     check_end_conflicts: bool = typer.Option(False, "--check-end-conflicts", help="Check for DISP-S1 end conflicts (same frame+end date, different begin date)"),
     memory_efficient: bool = typer.Option(True, "--memory-efficient/--no-memory-efficient", help="Use memory-efficient batched processing (default: enabled)"),
+    chunk_days: int = typer.Option(30, "--chunk-days", min=1, help="Days per resumable query chunk"),
+    checkpoint_dir: Optional[str] = typer.Option(None, "--checkpoint-dir", help="Checkpoint root (default: OUTPUT_DIR/checkpoints)"),
+    resume: bool = typer.Option(True, "--resume/--no-resume", help="Resume completed chunks from a compatible checkpoint"),
+    keep_checkpoints: bool = typer.Option(False, "--keep-checkpoints", help="Keep checkpoint state after a successful run"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
     verbose: bool = typer.Option(False, "--verbose", help="Verbose output")
 ):
@@ -81,6 +96,10 @@ def duplicates(
             output_dir=output_dir,
             check_end_conflicts=check_end_conflicts,
             memory_efficient=memory_efficient,
+            chunk_days=chunk_days,
+            checkpoint_dir=checkpoint_dir,
+            resume=resume,
+            keep_checkpoints=keep_checkpoints,
             quiet=quiet,
         )
         return
@@ -129,20 +148,55 @@ def duplicates(
     if venue == "GRQ":
         import re
         pattern = re.compile(CONFIG["products"][product]["pattern"])
-        cmr_granules = get_granules_from_grq(
-            grq_url=grq_url,
-            index=grq_index,
+        checkpoint = CheckpointStore(
+            command="duplicates",
             product=product,
+            venue="GRQ",
             start=start_date,
             end=end_date,
-            test_pattern=pattern,
+            chunk_days=chunk_days,
+            output_dir=output_dir,
+            checkpoint_dir=checkpoint_dir,
+            resume=resume,
+            keep=keep_checkpoints,
+            extra_identity={"grq_url": grq_url, "grq_index": grq_index},
         )
+        collect_chunked_records(
+            store=checkpoint,
+            namespace="granule_ids",
+            chunks=generate_time_chunks(start_date, end_date, chunk_days),
+            query=lambda chunk_start, chunk_end: get_granules_from_grq(
+                grq_url=grq_url,
+                index=grq_index,
+                product=product,
+                start=chunk_start,
+                end=chunk_end,
+                test_pattern=pattern,
+            ),
+            project=lambda granule: (
+                granule["umm"]["GranuleUR"], granule["umm"]["GranuleUR"]
+            ),
+        )
+        cmr_granules = [
+            {"umm": {"GranuleUR": granule_id}}
+            for granule_id in checkpoint.iter_payloads("granule_ids")
+        ]
         if len(cmr_granules) == 0:
             console.print("[yellow]No granules found in GRQ[/yellow]")
+            checkpoint.mark_successful()
+            checkpoint.close()
             return
         if not quiet:
             console.print("\n[cyan]Analyzing for duplicates (GRQ source)...[/cyan]")
         results = detect_duplicates(cmr_granules, product)
+        results["checkpoint"] = {
+            "chunk_days": chunk_days,
+            "resume": resume,
+            "kept": keep_checkpoints,
+            "path": str(checkpoint.path) if keep_checkpoints else None,
+        }
+        checkpoint.mark_successful()
+        checkpoint.close()
     else:
         # --- CMR path ---
         # Get collection ID (fall back to short_name query if ccid is empty)
@@ -153,27 +207,109 @@ def duplicates(
             raise typer.Exit(1)
 
         # Query CMR (progress bar shown by query_cmr)
-        # End-conflict detection requires the full granule list, so disable
-        # memory-efficient mode when both flags are set.
-        # Also disable if no CCID (memory-efficient path lacks short-name fallback).
+        # Checkpointed paths require a CCID; short-name fallback remains a
+        # one-shot query for collections without one.
         is_static = CONFIG["products"][product].get("static", False)
-        use_memory_efficient = memory_efficient and not (check_end_conflicts and product == "DISP_S1") and not is_static and bool(ccid)
+        use_memory_efficient = memory_efficient and not is_static and bool(ccid)
 
         if use_memory_efficient:
             if not quiet:
                 console.print("\n[cyan]Using memory-efficient batched processing...[/cyan]")
-            results = detect_duplicates_memory_efficient(product, start_date, end_date, venue)
-        else:
-            if ccid:
-                cmr_granules = query_cmr(ccid, start_date, end_date, venue, skip_temporal=is_static)
-            else:
-                coll = CONFIG["products"][product]["collection"][venue]
-                cmr_granules = query_cmr_by_short_name(
-                    coll["short_name"], coll["provider"], start_date, end_date, venue
+            if check_end_conflicts and product == "DISP_S1":
+                results = detect_disp_s1_end_conflicts_memory_efficient(
+                    start_date,
+                    end_date,
+                    venue,
+                    chunk_days=chunk_days,
+                    output_dir=output_dir,
+                    checkpoint_dir=checkpoint_dir,
+                    resume=resume,
+                    keep_checkpoints=keep_checkpoints,
                 )
+            else:
+                results = detect_duplicates_memory_efficient(
+                    product,
+                    start_date,
+                    end_date,
+                    venue,
+                    chunk_days=chunk_days,
+                    output_dir=output_dir,
+                    checkpoint_dir=checkpoint_dir,
+                    resume=resume,
+                    keep_checkpoints=keep_checkpoints,
+                )
+        else:
+            query_chunk_days = None if is_static else chunk_days
+            checkpoint = CheckpointStore(
+                command="duplicates",
+                product=product,
+                venue=venue,
+                start=start_date,
+                end=end_date,
+                chunk_days=query_chunk_days,
+                output_dir=output_dir,
+                checkpoint_dir=checkpoint_dir,
+                resume=resume,
+                keep=keep_checkpoints,
+                extra_identity={"static": is_static, "short_name_fallback": not bool(ccid)},
+            )
+
+            def query_range(chunk_start, chunk_end):
+                if ccid:
+                    return query_cmr(
+                        ccid,
+                        chunk_start,
+                        chunk_end,
+                        venue,
+                        skip_temporal=is_static,
+                    )
+                coll = CONFIG["products"][product]["collection"][venue]
+                return query_cmr_by_short_name(
+                    coll["short_name"],
+                    coll["provider"],
+                    chunk_start,
+                    chunk_end,
+                    venue,
+                )
+
+            chunks = list(
+                generate_time_chunks(start_date, end_date, query_chunk_days)
+            )
+            project_granule_id = lambda granule: (
+                granule["umm"]["GranuleUR"],
+                granule["umm"]["GranuleUR"],
+            )
+            if is_static and ccid:
+                collect_paged_records(
+                    store=checkpoint,
+                    namespace="granule_ids",
+                    chunk=chunks[0],
+                    pages=iter_cmr_pages(
+                        ccid,
+                        start_date,
+                        end_date,
+                        venue,
+                        skip_temporal=True,
+                    ),
+                    project=project_granule_id,
+                )
+            else:
+                collect_chunked_records(
+                    store=checkpoint,
+                    namespace="granule_ids",
+                    chunks=chunks,
+                    query=query_range,
+                    project=project_granule_id,
+                )
+            cmr_granules = [
+                {"umm": {"GranuleUR": granule_id}}
+                for granule_id in checkpoint.iter_payloads("granule_ids")
+            ]
 
             if len(cmr_granules) == 0:
                 console.print("[yellow]No granules found in date range[/yellow]")
+                checkpoint.mark_successful()
+                checkpoint.close()
                 return
 
             # Detect duplicates or end conflicts
@@ -184,6 +320,14 @@ def duplicates(
                 results = detect_disp_s1_end_conflicts(cmr_granules)
             else:
                 results = detect_duplicates(cmr_granules, product)
+            results["checkpoint"] = {
+                "chunk_days": query_chunk_days,
+                "resume": resume,
+                "kept": keep_checkpoints,
+                "path": str(checkpoint.path) if keep_checkpoints else None,
+            }
+            checkpoint.mark_successful()
+            checkpoint.close()
 
     # Attach source info to results for downstream reporting
     results["source"] = source_info
@@ -291,6 +435,11 @@ def accountability(
         False, "--prefer-s3",
         help="Prefer S3 iso.xml URLs over HTTPS URLs (DIST_S1 only; requires boto3)."
     ),
+    chunking: bool = typer.Option(True, "--chunking/--no-chunking", help="Use resumable temporal chunks"),
+    chunk_days: int = typer.Option(30, "--chunk-days", min=1, help="Days per temporal chunk"),
+    checkpoint_dir: Optional[str] = typer.Option(None, "--checkpoint-dir", help="Checkpoint root (default: OUTPUT_DIR/checkpoints)"),
+    resume: bool = typer.Option(True, "--resume/--no-resume", help="Resume completed chunks from a compatible checkpoint"),
+    keep_checkpoints: bool = typer.Option(False, "--keep-checkpoints", help="Keep checkpoint state after a successful run"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
     verbose: bool = typer.Option(False, "--verbose", help="Verbose output")
 ):
@@ -313,6 +462,8 @@ def accountability(
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    effective_chunk_days = chunk_days if chunking else None
+
     # If no product specified, run for all enabled products
     if product is None:
         _run_accountability_all(
@@ -327,6 +478,10 @@ def accountability(
             db_path=db_path,
             recovery_format=recovery_format,
             coverage_validation=coverage_validation,
+            chunk_days=effective_chunk_days,
+            checkpoint_dir=checkpoint_dir,
+            resume=resume,
+            keep_checkpoints=keep_checkpoints,
         )
         return
 
@@ -373,33 +528,46 @@ def accountability(
     # Dispatch by strategy
     if strategy_name == "dswx_hls":
         _run_dswx_hls_accountability(
-            product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
+            product, start_date, end_date, venue, save, output_dir, quiet,
+            recovery_format, effective_chunk_days, checkpoint_dir, resume,
+            keep_checkpoints
         )
     elif strategy_name == "dswx_s1":
         _run_dswx_s1_accountability(
             start_date, end_date, venue, save, output_dir, mgrs_db, quiet,
-            recovery_format, coverage_validation
+            recovery_format, coverage_validation, effective_chunk_days,
+            checkpoint_dir, resume, keep_checkpoints
         )
     elif strategy_name == "dist_s1":
         _run_dist_s1_accountability(
             start_date, end_date, venue, save, output_dir,
-            burst_db, max_concurrent, max_retries, prefer_s3, quiet, recovery_format
+            burst_db, max_concurrent, max_retries, prefer_s3, quiet,
+            recovery_format, effective_chunk_days, checkpoint_dir, resume,
+            keep_checkpoints
         )
     elif strategy_name == "forward_map":
         _run_forward_map_accountability(
-            product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
+            product, start_date, end_date, venue, save, output_dir, quiet,
+            recovery_format, effective_chunk_days, checkpoint_dir, resume,
+            keep_checkpoints
         )
     elif strategy_name == "date_count":
         _run_date_count_accountability(
-            product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
+            product, start_date, end_date, venue, save, output_dir, quiet,
+            recovery_format, effective_chunk_days, checkpoint_dir, resume,
+            keep_checkpoints
         )
     elif strategy_name == "delegated_validator":
         _run_delegated_validator_accountability(
-            product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
+            product, start_date, end_date, venue, save, output_dir, quiet,
+            recovery_format, effective_chunk_days, checkpoint_dir, resume,
+            keep_checkpoints
         )
     elif strategy_name == "db_based":
         _run_db_based_accountability(
-            product, start_date, end_date, venue, save, output_dir, quiet, db_path, recovery_format
+            product, start_date, end_date, venue, save, output_dir, quiet,
+            db_path, recovery_format, effective_chunk_days, checkpoint_dir,
+            resume, keep_checkpoints
         )
     else:
         console.print(f"[red]Error: Unknown strategy '{strategy_name}' for {product}[/red]")
@@ -415,12 +583,25 @@ def _run_forward_map_accountability(
     output_dir: str,
     quiet: bool,
     recovery_format: Optional[str] = None,
-) -> None:
+    chunk_days: Optional[int] = 30,
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
+    keep_checkpoints: bool = False,
+) -> dict:
     """Run forward-map accountability strategy."""
     from opera_accountability.strategies.forward_map import ForwardMapStrategy
     
     strategy = ForwardMapStrategy(product)
-    results = strategy.analyze(start_date, end_date, venue)
+    results = strategy.analyze(
+        start_date,
+        end_date,
+        venue,
+        chunk_days=chunk_days,
+        output_dir=output_dir,
+        checkpoint_dir=checkpoint_dir,
+        resume=resume,
+        keep_checkpoints=keep_checkpoints,
+    )
     
     if not quiet:
         table = Table(title=f"Forward-Map Accountability - {product}")
@@ -443,6 +624,8 @@ def _run_forward_map_accountability(
         if not quiet:
             console.print(f"[cyan]Recovery file written to {output_path}.{recovery_format}[/cyan]")
 
+    return results
+
 
 def _run_date_count_accountability(
     product: str,
@@ -453,12 +636,25 @@ def _run_date_count_accountability(
     output_dir: str,
     quiet: bool,
     recovery_format: Optional[str] = None,
+    chunk_days: Optional[int] = 30,
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
+    keep_checkpoints: bool = False,
 ) -> dict:
     """Run date-count accountability strategy."""
     from opera_accountability.strategies.date_count import DateCountStrategy
     
     strategy = DateCountStrategy(product)
-    results = strategy.analyze(start_date, end_date, venue)
+    results = strategy.analyze(
+        start_date,
+        end_date,
+        venue,
+        chunk_days=chunk_days,
+        output_dir=output_dir,
+        checkpoint_dir=checkpoint_dir,
+        resume=resume,
+        keep_checkpoints=keep_checkpoints,
+    )
     
     if not quiet:
         table = Table(title=f"Date-Count Accountability - {product}")
@@ -494,8 +690,12 @@ def _run_delegated_validator_accountability(
     output_dir: str,
     quiet: bool,
     recovery_format: Optional[str] = None,
+    chunk_days: Optional[int] = 30,
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
+    keep_checkpoints: bool = False,
     **kwargs
-) -> None:
+) -> dict:
     """Run delegated-validator accountability strategy."""
     from opera_accountability.strategies.delegated_validator import DelegatedValidatorStrategy
     
@@ -511,7 +711,17 @@ def _run_delegated_validator_accountability(
     }
     
     strategy = DelegatedValidatorStrategy(product)
-    results = strategy.analyze(start_date, end_date, venue, **validator_kwargs)
+    results = strategy.analyze(
+        start_date,
+        end_date,
+        venue,
+        **validator_kwargs,
+        chunk_days=chunk_days,
+        output_dir=output_dir,
+        checkpoint_dir=checkpoint_dir,
+        resume=resume,
+        keep_checkpoints=keep_checkpoints,
+    )
     
     if not quiet:
         table = Table(title=f"Delegated-Validator Accountability - {product}")
@@ -543,6 +753,8 @@ def _run_delegated_validator_accountability(
         if not quiet:
             console.print(f"[cyan]Recovery file written to {output_path}.{recovery_format}[/cyan]")
 
+    return results
+
 
 def _run_db_based_accountability(
     product: str,
@@ -554,12 +766,26 @@ def _run_db_based_accountability(
     quiet: bool,
     db_path: Optional[str] = None,
     recovery_format: Optional[str] = None,
-) -> None:
+    chunk_days: Optional[int] = 30,
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
+    keep_checkpoints: bool = False,
+) -> dict:
     """Run DB-based accountability strategy."""
     from opera_accountability.strategies.db_based import DBBasedStrategy
     
     strategy = DBBasedStrategy(product)
-    results = strategy.analyze(start_date, end_date, venue, db_path=db_path)
+    results = strategy.analyze(
+        start_date,
+        end_date,
+        venue,
+        db_path=db_path,
+        chunk_days=chunk_days,
+        output_dir=output_dir,
+        checkpoint_dir=checkpoint_dir,
+        resume=resume,
+        keep_checkpoints=keep_checkpoints,
+    )
     
     if not quiet:
         table = Table(title=f"DB-Based Accountability - {product}")
@@ -583,6 +809,8 @@ def _run_db_based_accountability(
         if not quiet:
             console.print(f"[cyan]Recovery file written to {output_path}.{recovery_format}[/cyan]")
 
+    return results
+
 
 def _run_dswx_hls_accountability(
     product: str,
@@ -593,25 +821,106 @@ def _run_dswx_hls_accountability(
     output_dir: str,
     quiet: bool,
     recovery_format: Optional[str] = None,
+    chunk_days: Optional[int] = 30,
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
+    keep_checkpoints: bool = False,
 ) -> dict:
     """Existing DSWX_HLS pipeline, extracted so the CLI can dispatch by strategy."""
     dswx_ccid = CONFIG["products"][product]["ccid"][venue]
     hls_s30_ccid = CONFIG["products"][product]["accountability"]["hls_s30_ccid"][venue]
     hls_l30_ccid = CONFIG["products"][product]["accountability"]["hls_l30_ccid"][venue]
 
-    dswx_granules = query_cmr(dswx_ccid, start_date, end_date, venue)
-    hls_s30_granules = query_cmr(hls_s30_ccid, start_date, end_date, venue)
-    hls_l30_granules = query_cmr(hls_l30_ccid, start_date, end_date, venue)
+    checkpoint = CheckpointStore(
+        command="accountability",
+        product=product,
+        venue=venue,
+        start=start_date,
+        end=end_date,
+        chunk_days=chunk_days,
+        output_dir=output_dir,
+        checkpoint_dir=checkpoint_dir,
+        resume=resume,
+        keep=keep_checkpoints,
+    )
+    chunks = list(generate_time_chunks(start_date, end_date, chunk_days))
+
+    def project_dswx(granule: dict):
+        umm = granule["umm"]
+        granule_id = umm["GranuleUR"]
+        return granule_id, {
+            "umm": {
+                "GranuleUR": granule_id,
+                "InputGranules": umm.get("InputGranules", []),
+                "TemporalExtent": umm.get("TemporalExtent", {}),
+            }
+        }
+
+    def project_hls(granule: dict):
+        umm = granule["umm"]
+        granule_id = umm["GranuleUR"]
+        return granule_id, {
+            "umm": {
+                "GranuleUR": granule_id,
+                "TemporalExtent": umm.get("TemporalExtent", {}),
+                "Platforms": umm.get("Platforms", []),
+            }
+        }
+
+    collect_chunked_records(
+        store=checkpoint,
+        namespace="dswx",
+        chunks=chunks,
+        query=lambda chunk_start, chunk_end: query_cmr(
+            dswx_ccid, chunk_start, chunk_end, venue
+        ),
+        project=project_dswx,
+    )
+    collect_chunked_records(
+        store=checkpoint,
+        namespace="hls_s30",
+        chunks=chunks,
+        query=lambda chunk_start, chunk_end: query_cmr(
+            hls_s30_ccid, chunk_start, chunk_end, venue
+        ),
+        project=project_hls,
+    )
+    collect_chunked_records(
+        store=checkpoint,
+        namespace="hls_l30",
+        chunks=chunks,
+        query=lambda chunk_start, chunk_end: query_cmr(
+            hls_l30_ccid, chunk_start, chunk_end, venue
+        ),
+        project=project_hls,
+    )
+
+    dswx_granules = list(checkpoint.iter_payloads("dswx"))
+    hls_s30_granules = list(checkpoint.iter_payloads("hls_s30"))
+    hls_l30_granules = list(checkpoint.iter_payloads("hls_l30"))
 
     hls_granules = hls_s30_granules + hls_l30_granules
 
     if len(dswx_granules) == 0 and len(hls_granules) == 0:
         console.print("[yellow]No granules found in date range[/yellow]")
-        return
+        checkpoint.mark_successful()
+        checkpoint.close()
+        return {
+            "expected": 0,
+            "actual": 0,
+            "missing_count": 0,
+            "missing": [],
+        }
 
     if not quiet:
         console.print("\n[cyan]Analyzing accountability...[/cyan]")
     results = analyze_accountability(dswx_granules, hls_granules)
+    results["checkpoint"] = {
+        "chunk_days": chunk_days,
+        "resume": resume,
+        "kept": keep_checkpoints,
+        "path": str(checkpoint.path) if keep_checkpoints else None,
+    }
 
     files = {}
     if save:
@@ -654,6 +963,9 @@ def _run_dswx_hls_accountability(
     else:
         console.print("[green]Done![/green]")
 
+    checkpoint.mark_successful()
+    checkpoint.close()
+
     return results
 
 
@@ -669,6 +981,10 @@ def _run_dist_s1_accountability(
     prefer_s3: bool,
     quiet: bool,
     recovery_format: Optional[str] = None,
+    chunk_days: Optional[int] = 30,
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
+    keep_checkpoints: bool = False,
 ) -> dict:
     from .strategies.dist_s1 import run as run_dist_s1
 
@@ -685,6 +1001,10 @@ def _run_dist_s1_accountability(
         max_concurrent=max_concurrent,
         max_retries=max_retries,
         prefer_s3=prefer_s3,
+        chunk_days=chunk_days,
+        checkpoint_dir=checkpoint_dir,
+        resume=resume,
+        keep_checkpoints=keep_checkpoints,
     )
 
     if recovery_format and results.get("missing"):
@@ -738,6 +1058,10 @@ def _run_dswx_s1_accountability(
     quiet: bool,
     recovery_format: Optional[str] = None,
     validate_coverage: Optional[bool] = None,
+    chunk_days: Optional[int] = 30,
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
+    keep_checkpoints: bool = False,
 ) -> dict:
     """DSWx-S1 pipeline dispatcher: runs the 5-step strategy and renders results."""
     # Imported lazily so the dswx_s1 package is only loaded when used.
@@ -754,6 +1078,10 @@ def _run_dswx_s1_accountability(
         save=save,
         mgrs_db_override=mgrs_db,
         validate_coverage=validate_coverage,
+        chunk_days=chunk_days,
+        checkpoint_dir=checkpoint_dir,
+        resume=resume,
+        keep_checkpoints=keep_checkpoints,
     )
 
     recovery_ids = (
@@ -849,6 +1177,10 @@ def _run_duplicates_all(
     memory_efficient: bool,
     quiet: bool,
     grq_url: Optional[str] = None,
+    chunk_days: int = 30,
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
+    keep_checkpoints: bool = False,
 ) -> None:
     """Internal helper to run duplicate detection for all products."""
     
@@ -886,14 +1218,40 @@ def _run_duplicates_all(
                         console.print(f"  [yellow]Skipping {product}: No grq_index configured[/yellow]")
                     continue
                 pattern = re.compile(CONFIG["products"][product]["pattern"])
-                cmr_granules = get_granules_from_grq(
-                    grq_url=grq_url,
-                    index=grq_index,
+                checkpoint = CheckpointStore(
+                    command="duplicates",
                     product=product,
+                    venue="GRQ",
                     start=start_date,
                     end=end_date,
-                    test_pattern=pattern,
+                    chunk_days=chunk_days,
+                    output_dir=output_dir,
+                    checkpoint_dir=checkpoint_dir,
+                    resume=resume,
+                    keep=keep_checkpoints,
+                    extra_identity={"grq_url": grq_url, "grq_index": grq_index},
                 )
+                collect_chunked_records(
+                    store=checkpoint,
+                    namespace="granule_ids",
+                    chunks=generate_time_chunks(start_date, end_date, chunk_days),
+                    query=lambda chunk_start, chunk_end: get_granules_from_grq(
+                        grq_url=grq_url,
+                        index=grq_index,
+                        product=product,
+                        start=chunk_start,
+                        end=chunk_end,
+                        test_pattern=pattern,
+                    ),
+                    project=lambda granule: (
+                        granule["umm"]["GranuleUR"],
+                        granule["umm"]["GranuleUR"],
+                    ),
+                )
+                cmr_granules = [
+                    {"umm": {"GranuleUR": granule_id}}
+                    for granule_id in checkpoint.iter_payloads("granule_ids")
+                ]
                 if len(cmr_granules) == 0:
                     if not quiet:
                         console.print(f"  [yellow]No granules found[/yellow]")
@@ -901,8 +1259,18 @@ def _run_duplicates_all(
                     all_results[product] = zero_results
                     if save:
                         save_reports(zero_results, output_dir, product, "duplicates", venue, start_date=start_date, end_date=end_date)
+                    checkpoint.mark_successful()
+                    checkpoint.close()
                     continue
                 results = detect_duplicates(cmr_granules, product)
+                results["checkpoint"] = {
+                    "chunk_days": chunk_days,
+                    "resume": resume,
+                    "kept": keep_checkpoints,
+                    "path": str(checkpoint.path) if keep_checkpoints else None,
+                }
+                checkpoint.mark_successful()
+                checkpoint.close()
             else:
                 # --- CMR path ---
                 ccid = CONFIG["products"][product]["ccid"].get(venue, "")
@@ -912,20 +1280,106 @@ def _run_duplicates_all(
                         console.print(f"  [yellow]Skipping {product}: No collection ID or short_name configured[/yellow]")
                     continue
 
-                # End-conflict detection requires the full granule list.
-                # Also disable memory-efficient if no CCID (lacks short-name fallback).
+                # Checkpointed paths require a CCID; static products and
+                # short-name-only collections use a single query.
                 is_static = CONFIG["products"][product].get("static", False)
-                use_mem_eff = memory_efficient and not (check_end_conflicts and product == "DISP_S1") and not is_static and bool(ccid)
+                use_mem_eff = memory_efficient and not is_static and bool(ccid)
                 if use_mem_eff:
-                    results = detect_duplicates_memory_efficient(product, start_date, end_date, venue)
-                else:
-                    if ccid:
-                        cmr_granules = query_cmr(ccid, start_date, end_date, venue, skip_temporal=is_static)
-                    else:
-                        coll = CONFIG["products"][product]["collection"][venue]
-                        cmr_granules = query_cmr_by_short_name(
-                            coll["short_name"], coll["provider"], start_date, end_date, venue
+                    if check_end_conflicts and product == "DISP_S1":
+                        results = detect_disp_s1_end_conflicts_memory_efficient(
+                            start_date,
+                            end_date,
+                            venue,
+                            chunk_days=chunk_days,
+                            output_dir=output_dir,
+                            checkpoint_dir=checkpoint_dir,
+                            resume=resume,
+                            keep_checkpoints=keep_checkpoints,
                         )
+                    else:
+                        results = detect_duplicates_memory_efficient(
+                            product,
+                            start_date,
+                            end_date,
+                            venue,
+                            chunk_days=chunk_days,
+                            output_dir=output_dir,
+                            checkpoint_dir=checkpoint_dir,
+                            resume=resume,
+                            keep_checkpoints=keep_checkpoints,
+                        )
+                else:
+                    query_chunk_days = None if is_static else chunk_days
+                    checkpoint = CheckpointStore(
+                        command="duplicates",
+                        product=product,
+                        venue=venue,
+                        start=start_date,
+                        end=end_date,
+                        chunk_days=query_chunk_days,
+                        output_dir=output_dir,
+                        checkpoint_dir=checkpoint_dir,
+                        resume=resume,
+                        keep=keep_checkpoints,
+                        extra_identity={
+                            "static": is_static,
+                            "short_name_fallback": not bool(ccid),
+                        },
+                    )
+
+                    def query_range(chunk_start, chunk_end):
+                        if ccid:
+                            return query_cmr(
+                                ccid,
+                                chunk_start,
+                                chunk_end,
+                                venue,
+                                skip_temporal=is_static,
+                            )
+                        coll = CONFIG["products"][product]["collection"][venue]
+                        return query_cmr_by_short_name(
+                            coll["short_name"],
+                            coll["provider"],
+                            chunk_start,
+                            chunk_end,
+                            venue,
+                        )
+
+                    chunks = list(
+                        generate_time_chunks(
+                            start_date, end_date, query_chunk_days
+                        )
+                    )
+                    project_granule_id = lambda granule: (
+                        granule["umm"]["GranuleUR"],
+                        granule["umm"]["GranuleUR"],
+                    )
+                    if is_static and ccid:
+                        collect_paged_records(
+                            store=checkpoint,
+                            namespace="granule_ids",
+                            chunk=chunks[0],
+                            pages=iter_cmr_pages(
+                                ccid,
+                                start_date,
+                                end_date,
+                                venue,
+                                skip_temporal=True,
+                            ),
+                            project=project_granule_id,
+                        )
+                    else:
+                        collect_chunked_records(
+                            store=checkpoint,
+                            namespace="granule_ids",
+                            chunks=chunks,
+                            query=query_range,
+                            project=project_granule_id,
+                        )
+                    cmr_granules = [
+                        {"umm": {"GranuleUR": granule_id}}
+                        for granule_id in checkpoint.iter_payloads("granule_ids")
+                    ]
                     if len(cmr_granules) == 0:
                         if not quiet:
                             console.print(f"  [yellow]No granules found[/yellow]")
@@ -933,6 +1387,8 @@ def _run_duplicates_all(
                         all_results[product] = zero_results
                         if save:
                             save_reports(zero_results, output_dir, product, "duplicates", venue, start_date=start_date, end_date=end_date)
+                        checkpoint.mark_successful()
+                        checkpoint.close()
                         continue
                     
                     # Detect duplicates
@@ -940,6 +1396,14 @@ def _run_duplicates_all(
                         results = detect_disp_s1_end_conflicts(cmr_granules)
                     else:
                         results = detect_duplicates(cmr_granules, product)
+                    results["checkpoint"] = {
+                        "chunk_days": query_chunk_days,
+                        "resume": resume,
+                        "kept": keep_checkpoints,
+                        "path": str(checkpoint.path) if keep_checkpoints else None,
+                    }
+                    checkpoint.mark_successful()
+                    checkpoint.close()
             
             all_results[product] = results
             
@@ -992,6 +1456,10 @@ def _run_accountability_all(
     db_path: Optional[str] = None,
     recovery_format: Optional[str] = None,
     coverage_validation: Optional[bool] = None,
+    chunk_days: Optional[int] = 30,
+    checkpoint_dir: Optional[str] = None,
+    resume: bool = True,
+    keep_checkpoints: bool = False,
 ) -> None:
     """Internal helper to run accountability for all products with accountability enabled."""
     
@@ -1034,37 +1502,47 @@ def _run_accountability_all(
             # Dispatch table — same helpers used by the single-product path
             if strategy_name == "dswx_hls":
                 results = _run_dswx_hls_accountability(
-                    product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
+                    product, start_date, end_date, venue, save, output_dir, quiet,
+                    recovery_format, chunk_days, checkpoint_dir, resume,
+                    keep_checkpoints
                 )
             elif strategy_name == "dswx_s1":
                 results = _run_dswx_s1_accountability(
                     start_date, end_date, venue, save, output_dir, mgrs_db, quiet,
-                    recovery_format, coverage_validation
+                    recovery_format, coverage_validation, chunk_days,
+                    checkpoint_dir, resume, keep_checkpoints
                 )
             elif strategy_name == "dist_s1":
                 prefer_s3 = CONFIG["products"][product]["accountability"].get("prefer_s3_iso_xml", False)
                 results = _run_dist_s1_accountability(
-                    start_date, end_date, venue, save, output_dir, None, None, None, prefer_s3, quiet, recovery_format
+                    start_date, end_date, venue, save, output_dir, None, None,
+                    None, prefer_s3, quiet, recovery_format, chunk_days,
+                    checkpoint_dir, resume, keep_checkpoints
                 )
             elif strategy_name == "forward_map":
-                _run_forward_map_accountability(
-                    product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
+                results = _run_forward_map_accountability(
+                    product, start_date, end_date, venue, save, output_dir, quiet,
+                    recovery_format, chunk_days, checkpoint_dir, resume,
+                    keep_checkpoints
                 )
-                results = None  # already displayed by helper
             elif strategy_name == "date_count":
                 results = _run_date_count_accountability(
-                    product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
+                    product, start_date, end_date, venue, save, output_dir, quiet,
+                    recovery_format, chunk_days, checkpoint_dir, resume,
+                    keep_checkpoints
                 )
             elif strategy_name == "delegated_validator":
-                _run_delegated_validator_accountability(
-                    product, start_date, end_date, venue, save, output_dir, quiet, recovery_format
+                results = _run_delegated_validator_accountability(
+                    product, start_date, end_date, venue, save, output_dir, quiet,
+                    recovery_format, chunk_days, checkpoint_dir, resume,
+                    keep_checkpoints
                 )
-                results = None  # already displayed by helper
             elif strategy_name == "db_based":
-                _run_db_based_accountability(
-                    product, start_date, end_date, venue, save, output_dir, quiet, db_path, recovery_format
+                results = _run_db_based_accountability(
+                    product, start_date, end_date, venue, save, output_dir, quiet,
+                    db_path, recovery_format, chunk_days, checkpoint_dir,
+                    resume, keep_checkpoints
                 )
-                results = None  # already displayed by helper
             else:
                 console.print(f"  [red]Unknown strategy: {strategy_name}[/red]")
                 continue
@@ -1118,7 +1596,11 @@ def burst_coverage(
     save: bool = typer.Option(False, "--save", help="Save report to reports/burst_coverage/ for dashboard"),
     output_dir: str = typer.Option("./output", "--output-dir", help="Output directory (used with --save)"),
     low_memory: bool = typer.Option(False, "--low-memory", help="Stream results to JSONL (for long date ranges)"),
-    chunk_days: int = typer.Option(30, help="Days per chunk in low-memory mode"),
+    chunking: bool = typer.Option(True, "--chunking/--no-chunking", help="Use resumable temporal chunks"),
+    chunk_days: int = typer.Option(30, "--chunk-days", min=1, help="Days per temporal chunk"),
+    checkpoint_dir: Optional[str] = typer.Option(None, "--checkpoint-dir", help="Checkpoint root (default: OUTPUT_DIR/checkpoints)"),
+    resume: bool = typer.Option(True, "--resume/--no-resume", help="Resume completed chunks from a compatible checkpoint"),
+    keep_checkpoints: bool = typer.Option(False, "--keep-checkpoints", help="Keep checkpoint state after a successful run"),
     buffer_deg: float = typer.Option(0.5, help="Buffer in degrees to expand GeoJSON boundary"),
     cache_dir: Optional[str] = typer.Option(None, help="Cache directory path"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Disable caching"),
@@ -1220,8 +1702,12 @@ def burst_coverage(
         polarizations=pol_list,
         low_memory=low_memory,
         output_path=output_path,
-        chunk_days=chunk_days,
+        chunk_days=chunk_days if chunking else None,
         buffer_deg=buffer_deg,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_output_dir=output_dir,
+        resume=resume,
+        keep_checkpoints=keep_checkpoints,
     ))
 
     bc_print_report(results, show_missing=show_missing if not low_memory else 0)

@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Optional
 
 from ... import CONFIG
+from ...checkpoint import CheckpointStore, generate_time_chunks
 from ...cmr import query_cmr, query_cmr_by_short_name
 from ..dswx_s1.rtc_utils import reduce_input_rtc_list
 from .iso_xml import extract_dist_input_granules, extract_iso_xml_url, obtain_iso_xml
@@ -40,20 +41,47 @@ def _dedupe_by_creation_ts(records: list[dict], pattern: re.Pattern, unique_fiel
     return list(latest.values())
 
 
-def survey_rtc(start: Optional[datetime], end: Optional[datetime], venue: str = "PROD") -> list[dict]:
+def survey_rtc(
+    start: Optional[datetime],
+    end: Optional[datetime],
+    venue: str = "PROD",
+    checkpoint: Optional[CheckpointStore] = None,
+    chunk_days: Optional[int] = None,
+) -> list[dict]:
     ccid = CONFIG["products"]["RTC_S1"]["ccid"][venue]
     pattern = re.compile(CONFIG["products"]["RTC_S1"]["pattern"])
     unique_fields = tuple(CONFIG["products"]["RTC_S1"]["unique_fields"])
 
-    cmr_records = query_cmr(ccid, start, end, venue)
-    shaped = [
-        {
-            "id": granule_id,
-            "revision_timestamp": record.get("meta", {}).get("revision-date"),
-        }
-        for record in cmr_records
-        if (granule_id := _native_id(record))
-    ]
+    if checkpoint is not None and start is not None and end is not None:
+        for chunk in generate_time_chunks(start, end, chunk_days):
+            if checkpoint.is_chunk_complete("rtc_survey", chunk):
+                continue
+            cmr_records = query_cmr(ccid, chunk.start, chunk.end, venue)
+            shaped_chunk = [
+                (
+                    granule_id,
+                    {
+                        "id": granule_id,
+                        "revision_timestamp": record.get("meta", {}).get("revision-date"),
+                    },
+                )
+                for record in cmr_records
+                if (granule_id := _native_id(record))
+            ]
+            checkpoint.commit_chunk(
+                "rtc_survey", chunk, shaped_chunk, fetched_count=len(cmr_records)
+            )
+        shaped = list(checkpoint.iter_payloads("rtc_survey"))
+    else:
+        cmr_records = query_cmr(ccid, start, end, venue)
+        shaped = [
+            {
+                "id": granule_id,
+                "revision_timestamp": record.get("meta", {}).get("revision-date"),
+            }
+            for record in cmr_records
+            if (granule_id := _native_id(record))
+        ]
     return _dedupe_by_creation_ts(shaped, pattern, unique_fields)
 
 
@@ -89,20 +117,88 @@ async def survey_dist_async(
     max_concurrent: int = 10,
     max_retries: int = 3,
     prefer_s3: bool = False,
+    checkpoint: Optional[CheckpointStore] = None,
+    chunk_days: Optional[int] = None,
 ) -> tuple[list[dict], set[str]]:
     cfg = CONFIG["products"]["DIST_S1"]
     ccid = cfg["ccid"].get(venue)
-    if ccid:
-        cmr_records = query_cmr(ccid, start, end, venue)
-    else:
+    def query_range(range_start, range_end):
+        if ccid:
+            return query_cmr(ccid, range_start, range_end, venue)
         collection = cfg["collection"][venue]
-        cmr_records = query_cmr_by_short_name(
+        return query_cmr_by_short_name(
             collection["short_name"],
             provider=collection.get("provider"),
-            start_date=start,
-            end_date=end,
+            start_date=range_start,
+            end_date=range_end,
             venue=venue,
         )
+
+    if checkpoint is not None and start is not None and end is not None:
+        for chunk in generate_time_chunks(start, end, chunk_days):
+            if checkpoint.is_chunk_complete("dist_survey", chunk):
+                continue
+            cmr_records = query_range(chunk.start, chunk.end)
+            semaphore = asyncio.Semaphore(max_concurrent)
+            tasks = [
+                _fetch_dist_product_inputs(
+                    product, semaphore, max_retries, prefer_s3
+                )
+                for product in cmr_records
+            ]
+            loaded = await asyncio.gather(*tasks)
+            loaded_by_id = {
+                result["id"]: result for result in loaded if result is not None
+            }
+            projected = []
+            for product in cmr_records:
+                native_id = _native_id(product)
+                if not native_id:
+                    continue
+                tile_id, acq_time = parse_dist_s1_native_id(native_id)
+                existing_key = (
+                    normalize_tile_time_key(tile_id, acq_time)
+                    if tile_id and acq_time
+                    else None
+                )
+                projected.append(
+                    (
+                        native_id,
+                        {
+                            "id": native_id,
+                            "loaded": native_id in loaded_by_id,
+                            "input_rtcs": loaded_by_id.get(native_id, {}).get(
+                                "input_rtcs", []
+                            ),
+                            "iso_xml_url": loaded_by_id.get(native_id, {}).get(
+                                "iso_xml_url"
+                            ),
+                            "existing_tile_time": existing_key,
+                        },
+                    )
+                )
+            checkpoint.commit_chunk(
+                "dist_survey", chunk, projected, fetched_count=len(cmr_records)
+            )
+
+        payloads = list(checkpoint.iter_payloads("dist_survey"))
+        existing_tile_times = {
+            payload["existing_tile_time"]
+            for payload in payloads
+            if payload.get("existing_tile_time")
+        }
+        results = [
+            {
+                "id": payload["id"],
+                "input_rtcs": payload.get("input_rtcs", []),
+                "iso_xml_url": payload.get("iso_xml_url"),
+            }
+            for payload in payloads
+            if payload.get("loaded")
+        ]
+        return results, existing_tile_times
+
+    cmr_records = query_range(start, end)
 
     existing_tile_times = set()
     for product in cmr_records:
@@ -129,7 +225,18 @@ def survey_dist(
     max_concurrent: int = 10,
     max_retries: int = 3,
     prefer_s3: bool = False,
+    checkpoint: Optional[CheckpointStore] = None,
+    chunk_days: Optional[int] = None,
 ) -> tuple[list[dict], set[str]]:
     return asyncio.run(
-        survey_dist_async(start, end, venue, max_concurrent, max_retries, prefer_s3)
+        survey_dist_async(
+            start,
+            end,
+            venue,
+            max_concurrent,
+            max_retries,
+            prefer_s3,
+            checkpoint,
+            chunk_days,
+        )
     )
