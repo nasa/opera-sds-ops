@@ -16,8 +16,9 @@ for detailed documentation of the consolidation process.
     begin-dates. *[Gerald]*
 - **Accountability strategies** — pick the right one per product:
   - `dswx_hls` — HLS S30/L30 inputs → DSWx-HLS outputs (with L9 cutoff filter). *[Chris]*
-  - `dswx_s1` — 4-step RTC-S1 → DSWx-S1 pipeline (CMR survey → input mapping →
-    MGRS tile-set resolution → cycle/sensor bucket expansion). *[Riley]*
+  - `dswx_s1` — 5-step RTC-S1 → DSWx-S1 pipeline (CMR survey → input mapping →
+    MGRS tile-set resolution → cycle/sensor bucket expansion → real RTC
+    coverage validation and recovery-candidate reduction). *[Riley]*
   - `dist_s1` — RTC-S1 → DIST-S1 mapping driven by DIST-S1 ISO-XML metadata
     (optionally augmented by the opera-sds-pcm burst DB). *[Kevin]*
   - Generic strategies for new products:
@@ -27,8 +28,8 @@ for detailed documentation of the consolidation process.
     - `db_based` — Map using external frame/burst database. *[Chris]*
 - **Output formats**: structured JSON (full report), plain-text granule lists,
   and human-readable summaries.
-- **Burst-level coverage audit** for CSLC-S1 and RTC-S1: query expected
-  bursts from the ASF catalog, check CMR for matching products, report
+- **Burst-level coverage audit** for CSLC-S1 and RTC-S1: derive expected
+  bursts from each SLC's ESA annotation XML and `manifest.safe`, check CMR for matching products, report
   coverage gaps with streaming JSONL support for long date ranges. *[Gerald]*
 - **CLI** built on Typer + Rich (`opera-audit duplicates`, `accountability`,
   `burst-coverage`, `dashboard`).
@@ -127,10 +128,16 @@ opera-audit burst-coverage --start 2026-02-01 --end 2026-02-07 --save
 # DSWX-HLS (strategy: dswx_hls)
 opera-audit accountability DSWX_HLS --start 2026-02-01 --end 2026-02-07 --save
 
-# DSWX-S1 (4-step pipeline; requires an MGRS tile-collection SQLite DB)
+# DSWX-S1 (5-step pipeline; requires an MGRS tile-collection SQLite DB)
 opera-audit accountability DSWX_S1 \
     --start 2026-02-01 --end 2026-02-07 --save \
     --mgrs-db /path/to/MGRS_tile_collection_v0.3.sqlite
+
+# Inspect raw missing RTCs without validating real tile-set coverage
+opera-audit accountability DSWX_S1 \
+    --start 2026-02-01 --end 2026-02-07 \
+    --mgrs-db /path/to/MGRS_tile_collection_v0.3.sqlite \
+    --no-coverage-validation
 
 # DIST-S1 (ISO-XML pipeline; tune downloads if needed)
 opera-audit accountability DIST_S1 \
@@ -379,7 +386,7 @@ results match independent CMR queries:
 - **Duplicate detection** — compares all duplicates found by opera-audit with
   a CMR cross-check for a fixed date window.
 - **Accountability** — compares missing products across strategies.
-- **End-to-end DSWx-S1** — runs the full 4-step pipeline against live CMR
+- **End-to-end DSWx-S1** — runs the full 5-step pipeline against live CMR
   (requires `OPERA_MGRS_DB`; skipped automatically when unset).
 
 **Note:** These tests are slow (5-10 minutes each) and require CMR access.
@@ -397,7 +404,8 @@ This package follows a simple `src/` layout:
 
 Key files:
 
-- `cmr.py` / `cmr_async.py` — CMR clients with retry and pagination.
+- `cmr.py` — unified sync/async CMR client with configurable retry and
+  Search-After pagination; `cmr_async.py` is a compatibility import facade.
 - `duplicates.py` — duplicate detection (regular + DISP-S1 end-conflict mode).
 - `reports.py` — JSON / text / summary report generation.
 - `recovery_file.py` — recovery-file writers for missing products.
@@ -405,7 +413,7 @@ Key files:
 - `dashboard.py` — Streamlit dashboard.
 - `burst_coverage.py` / `slc_annotations.py` — Gerald’s SLC burst coverage.
 - `strategies/dswx_hls/` — DSWX-HLS accountability (HLS input mapping).
-- `strategies/dswx_s1/` — DSWX-S1 accountability (4-step RTC → DSWx pipeline).
+- `strategies/dswx_s1/` — DSWX-S1 accountability (5-step RTC → DSWx pipeline).
 - `strategies/dist_s1/` — DIST-S1 accountability (ISO-XML pipeline).
 - `strategies/{forward_map,date_count,delegated_validator,db_based}.py` —
   Generic strategies (Chris) for new products.
@@ -481,19 +489,21 @@ This package consolidates tools from 4 contributors:
 
 ### Riley
 - **Duplicate detection** (`duplicates/duplicate_check.py`) — monthly/daily aggregation
-- **DSWx-S1 accountability pipeline** (`accountability_tools/dswx_s1/`) — 4-step RTC→DSWx survey
+- **DSWx-S1 accountability pipeline** (`accountability_tools/dswx_s1/`) — 5-step RTC→DSWx survey and real-coverage validation
 - Source: `opera-sds-ops/duplicates/`, `opera-sds-ops/accountability_tools/dswx_s1/`
 
 ### Gerald
 - **DISP-S1 end-conflict detection** — same frame+end-date, different begin-dates
-- **SLC burst-level coverage audit** — CSLC-S1 / RTC-S1 burst coverage using ASF catalog + CMR
+- **SLC burst-level coverage audit** — CSLC-S1 / RTC-S1 coverage using
+  SLC-owned ESA metadata for burst derivation and CMR for product discovery
 - Source: `opera-sds-pcm/tools/ops/cmr_audit/detect_cmr_duplicates_for_disp_s1.py`
 - Source: `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_burst_coverage.py`
-- Branch: `frame-states-via-cmr-audit`, `OPERA-2518`
+- Source revisions: `frame-states-via-cmr-audit`; PCM `develop` after
+  OPERA-2518 was merged
 
 ### Chris
 - **Multi-strategy suite** — `forward_map`, `date_count`, `delegated_validator`, `db_based`
-- **Async CMR client** with exponential backoff
+- **Unified sync/async CMR client** with configurable exponential backoff
 - **HLS/TROPO accountability** — forward-map and date-count strategies
 - Source: `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_{hls,slc,tropo}.py`
 - Source: `opera-sds-pcm/tools/ops/cmr_audit/cmr_client.py`

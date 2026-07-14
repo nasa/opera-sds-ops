@@ -138,6 +138,38 @@ class TestDSWXHLSAccountability:
         assert result["expected"] == 1
         assert result["actual"] == 1
         assert result["missing_count"] == 0
+        assert result["duplicates"] == []
+        assert result["overall_counts"]["matched_dswx_hls_granules"] == 1
+        assert result["overall_counts"]["hls_to_many_dswx"] == 0
+
+    def test_distinct_dswx_revisions_remain_duplicates(self):
+        """Different DSWx products for one HLS input are genuine duplicates."""
+        hls_id = "HLS.S30.T10TEM.2026001T183821.v2.0"
+        hls_granules = [
+            create_hls_granule(hls_id, "2026-01-01T18:38:21+00:00")
+        ]
+        dswx_granules = [
+            create_dswx_granule(
+                "OPERA_L3_DSWx-HLS_T10TEM_20260101T183821Z_"
+                "20260103T120000Z_S2A_30_v1.0",
+                [f"{hls_id}.B02.tif", f"{hls_id}.Fmask.tif"],
+            ),
+            create_dswx_granule(
+                "OPERA_L3_DSWx-HLS_T10TEM_20260101T183821Z_"
+                "20260103T130000Z_S2A_30_v1.0",
+                [f"{hls_id}.B02.tif", f"{hls_id}.Fmask.tif"],
+            ),
+        ]
+
+        result = analyze_accountability(dswx_granules, hls_granules)
+
+        assert result["actual"] == 1
+        assert result["overall_counts"]["matched_dswx_hls_granules"] == 2
+        assert result["overall_counts"]["hls_to_many_dswx"] == 1
+        assert result["duplicates"] == [
+            "OPERA_L3_DSWx-HLS_T10TEM_20260101T183821Z_"
+            "20260103T120000Z_S2A_30_v1.0"
+        ]
 
     def test_non_hls_inputs_ignored(self):
         """Test that non-HLS inputs (worldcover, GSHHS) are ignored."""

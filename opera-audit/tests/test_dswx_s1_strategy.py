@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from opera_accountability.strategies.dswx_s1 import rtc_utils, mapping, tile_sets, cycles, survey
+from opera_accountability.strategies.dswx_s1 import coverage, cycles, mapping, rtc_utils, survey, tile_sets
 from opera_accountability.strategies.dswx_s1 import pipeline as ds1_pipeline
 
 
@@ -27,6 +27,8 @@ RTC_A_S1A = "OPERA_L2_RTC-S1_T001-000001-IW1_20250101T000831Z_20250101T050419Z_S
 RTC_B_S1A = "OPERA_L2_RTC-S1_T001-000002-IW1_20250101T000832Z_20250101T050419Z_S1A_30_v1.0"
 RTC_C_S1A = "OPERA_L2_RTC-S1_T001-000003-IW1_20240101T000833Z_20240101T050419Z_S1A_30_v1.0"  # pre-start
 RTC_D_S1C = "OPERA_L2_RTC-S1_T001-000004-IW1_20260101T000834Z_20260101T050419Z_S1C_30_v1.0"
+RTC_E_S1A = "OPERA_L2_RTC-S1_T001-000005-IW1_20250101T000833Z_20250101T050419Z_S1A_30_v1.0"
+RTC_F_S1A = "OPERA_L2_RTC-S1_T001-000006-IW1_20250101T000834Z_20250101T050419Z_S1A_30_v1.0"
 
 
 def test_rtc_to_id_tuple():
@@ -144,7 +146,16 @@ def _make_tile_db(path: Path) -> None:
         # RTC_A's burst → t001_000001_iw1 belongs to land tile set MS_1_1.
         conn.execute(
             "INSERT INTO mgrs_burst_db VALUES (?, ?, ?)",
-            ("MS_1_1", "land", json.dumps(["t001_000001_iw1", "t001_000002_iw1"])),
+            (
+                "MS_1_1",
+                "land",
+                json.dumps([
+                    "t001_000001_iw1",
+                    "t001_000002_iw1",
+                    "t001_000005_iw1",
+                    "t001_000006_iw1",
+                ]),
+            ),
         )
         # Water tile set containing same burst — should be dropped.
         conn.execute(
@@ -230,6 +241,123 @@ def test_expand_with_cycle_indices_groups_by_tile_cycle_sensor():
     # All input RTCs must appear somewhere in the expanded output.
     flattened = [rtc for lst in expanded.values() for rtc in lst]
     assert sorted(flattened) == sorted([RTC_A_S1A, RTC_B_S1A])
+
+
+# ---------------------------------------------------------------------------
+# coverage validation
+# ---------------------------------------------------------------------------
+
+
+def test_coverage_validation_queries_complete_tile_burst_set(tmp_path: Path):
+    db = tmp_path / "mgrs.sqlite"
+    _make_tile_db(db)
+    captured = {}
+
+    def fake_query(**kwargs):
+        captured.update(kwargs)
+        return [
+            {"umm": {"GranuleUR": rtc_id}}
+            for rtc_id in (
+                RTC_A_S1A,
+                RTC_B_S1A,
+                RTC_E_S1A,
+                RTC_F_S1A,
+                RTC_D_S1C,  # different sensor; must not inflate S1A coverage
+            )
+        ]
+
+    result = coverage.validate_cycle_coverage(
+        {"MS_1_1$100$S1A": [RTC_A_S1A]},
+        db,
+        threshold=4,
+        workers=1,
+        query_func=fake_query,
+    )
+
+    assert result["valid_count"] == 1
+    assert result["dropped_count"] == 0
+    detail = result["valid"]["MS_1_1$100$S1A"]
+    assert detail["coverage"] == 4
+    assert RTC_D_S1C not in detail["matching_rtc_ids"]
+    assert detail["expected_burst_count"] == 4
+    assert detail["source"] == "cmr"
+    assert len(captured["native_id_patterns"]) == 4
+    assert captured["venue"] == "PROD"
+    assert result["reduced"] == {RTC_A_S1A: ["MS_1_1$100$S1A"]}
+
+
+def test_coverage_validation_drops_insufficient_bucket(tmp_path: Path):
+    db = tmp_path / "mgrs.sqlite"
+    _make_tile_db(db)
+
+    result = coverage.validate_cycle_coverage(
+        {"MS_1_1$100$S1A": [RTC_A_S1A]},
+        db,
+        threshold=4,
+        workers=1,
+        query_func=lambda **kwargs: [{"meta": {"native-id": RTC_A_S1A}}],
+    )
+
+    assert result["valid_count"] == 0
+    assert result["dropped_count"] == 1
+    assert result["dropped"]["MS_1_1$100$S1A"]["coverage"] == 1
+    assert result["reduced"] == {}
+
+
+def test_coverage_validation_skips_cmr_when_candidates_meet_threshold(tmp_path: Path):
+    db = tmp_path / "mgrs.sqlite"
+    _make_tile_db(db)
+
+    def unexpected_query(**kwargs):
+        raise AssertionError("CMR should not be queried when identified RTCs meet the threshold")
+
+    result = coverage.validate_cycle_coverage(
+        {
+            "MS_1_1$100$S1A": [
+                RTC_A_S1A,
+                RTC_B_S1A,
+                RTC_E_S1A,
+                RTC_F_S1A,
+            ]
+        },
+        db,
+        threshold=4,
+        workers=1,
+        query_func=unexpected_query,
+    )
+
+    assert result["valid_count"] == 1
+    assert result["valid"]["MS_1_1$100$S1A"]["source"] == "identified_missing_rtcs"
+
+
+def test_coverage_validation_propagates_cmr_failure(tmp_path: Path):
+    db = tmp_path / "mgrs.sqlite"
+    _make_tile_db(db)
+
+    def failed_query(**kwargs):
+        raise RuntimeError("CMR unavailable")
+
+    with pytest.raises(RuntimeError, match="CMR unavailable"):
+        coverage.validate_cycle_coverage(
+            {"MS_1_1$100$S1A": [RTC_A_S1A]},
+            db,
+            threshold=4,
+            workers=1,
+            query_func=failed_query,
+        )
+
+
+def test_reduce_valid_candidates_removes_overlapping_triggers():
+    valid = {
+        "bucket-a": {"candidate_rtc_ids": [RTC_A_S1A, RTC_B_S1A]},
+        "bucket-b": {"candidate_rtc_ids": [RTC_A_S1A]},
+        "bucket-c": {"candidate_rtc_ids": [RTC_B_S1A]},
+    }
+
+    assert coverage.reduce_valid_candidates(valid) == {
+        RTC_A_S1A: ["bucket-a", "bucket-b"],
+        RTC_B_S1A: ["bucket-c"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +506,7 @@ def test_pipeline_run_with_missing_rtcs_uses_override_db(tmp_path: Path, monkeyp
         venue="PROD",
         save=True,
         mgrs_db_override=str(db),
+        validate_coverage=False,
     )
 
     assert results["missing_count"] == 1
@@ -393,3 +522,72 @@ def test_pipeline_run_with_missing_rtcs_uses_override_db(tmp_path: Path, monkeyp
     tile_sets_json = json.loads(Path(results["files"]["missing_rtcs_to_tile_sets"]).read_text())
     assert "MS_1_1" in tile_sets_json
     assert RTC_B_S1A in tile_sets_json["MS_1_1"]
+
+
+def test_pipeline_writes_coverage_validation_and_reduced_candidates(
+    tmp_path: Path,
+    monkeypatch,
+):
+    db = tmp_path / "mgrs.sqlite"
+    _make_tile_db(db)
+
+    monkeypatch.setattr(
+        ds1_pipeline.survey,
+        "survey_rtc",
+        lambda start, end, venue: [{"id": RTC_A_S1A}, {"id": RTC_B_S1A}],
+    )
+    monkeypatch.setattr(
+        ds1_pipeline.survey,
+        "survey_dswx",
+        lambda start, end, venue: [{
+            "id": "OPERA_L3_DSWx-S1_T45SYD_20250101T000838Z_20250101T111826Z_S1A_30_v1.0",
+            "input_rtcs": [RTC_A_S1A],
+        }],
+    )
+
+    def fake_validation(cycle_map, mgrs_db_path, venue):
+        bucket = next(iter(cycle_map))
+        return {
+            "threshold": 4,
+            "total_buckets": 1,
+            "valid_count": 1,
+            "dropped_count": 0,
+            "valid": {
+                bucket: {
+                    "coverage": 4,
+                    "expected_burst_count": 4,
+                    "candidate_rtc_ids": [RTC_B_S1A],
+                    "matching_rtc_ids": [RTC_A_S1A, RTC_B_S1A, RTC_E_S1A, RTC_F_S1A],
+                    "representative_rtc_id": RTC_B_S1A,
+                    "source": "cmr",
+                }
+            },
+            "dropped": {},
+            "reduced": {RTC_B_S1A: [bucket]},
+        }
+
+    monkeypatch.setattr(
+        ds1_pipeline.coverage,
+        "validate_cycle_coverage",
+        fake_validation,
+    )
+
+    results = ds1_pipeline.run(
+        start_date=datetime(2025, 1, 1),
+        end_date=datetime(2025, 1, 2),
+        output_dir=tmp_path,
+        venue="PROD",
+        save=True,
+        mgrs_db_override=str(db),
+        validate_coverage=True,
+    )
+
+    assert results["coverage_validation_enabled"] is True
+    assert results["coverage_valid_count"] == 1
+    assert results["coverage_dropped_count"] == 0
+    assert results["recovery_candidates"] == [RTC_B_S1A]
+    assert Path(results["files"]["coverage_validation"]).exists()
+    reduced_path = Path(results["files"]["reduced_recovery_candidates"])
+    reduced = json.loads(reduced_path.read_text())
+    assert list(reduced) == [RTC_B_S1A]
+    assert len(reduced[RTC_B_S1A]) == 1

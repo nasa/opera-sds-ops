@@ -1,7 +1,7 @@
 """DSWx-S1 accountability pipeline orchestrator.
 
-Runs the 4-step pipeline end-to-end (survey → mapping → tile sets → cycles)
-and persists intermediates + a final summary under
+Runs the 5-step pipeline end-to-end (survey → mapping → tile sets → cycles →
+real-coverage validation) and persists intermediates + a final summary under
 ``<output_dir>/reports/accountability/DSWX_S1/<YYYY-MM-DD>/``. Invoked by the
 CLI ``opera-audit accountability DSWX_S1``.
 """
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ... import CONFIG
-from . import survey, mapping, tile_sets, cycles
+from . import coverage, cycles, mapping, survey, tile_sets
 from .rtc_utils import has_known_epoch
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,16 @@ def _write_summary(path: Path, results: dict[str, Any]) -> None:
         f.write("-" * 50 + "\n")
         f.write(f"MGRS tile sets affected:       {results['tile_set_count']:,}\n")
         f.write(f"Tile-set / cycle / sensor buckets: {results['cycle_bucket_count']:,}\n")
+        f.write("\n")
+        f.write("COVERAGE VALIDATION\n")
+        f.write("-" * 50 + "\n")
+        if results["coverage_validation_enabled"]:
+            f.write(f"Required RTC coverage:          {results['coverage_threshold']:,}\n")
+            f.write(f"Validated cycle buckets:        {results['coverage_valid_count']:,}\n")
+            f.write(f"Dropped cycle buckets:          {results['coverage_dropped_count']:,}\n")
+            f.write(f"Recovery RTC candidates:        {results['recovery_candidate_count']:,}\n")
+        else:
+            f.write("Disabled; recovery candidates are the raw missing RTC set.\n")
     logger.info("Wrote %s", path)
 
 
@@ -105,6 +115,7 @@ def run(
     venue: str = "PROD",
     save: bool = True,
     mgrs_db_override: Optional[str] = None,
+    validate_coverage: Optional[bool] = None,
 ) -> dict[str, Any]:
     """Execute the full DSWx-S1 accountability pipeline.
 
@@ -151,6 +162,7 @@ def run(
     # --- Steps 3 & 4: tile-set resolution + cycle/sensor expansion ---------
     tile_set_map: dict[str, list[str]] = {}
     cycle_map: dict[str, list[str]] = {}
+    db_path: Optional[Path] = None
 
     if missing_rtcs:
         db_path = tile_sets.resolve_mgrs_tile_db(mgrs_db_override)
@@ -164,6 +176,56 @@ def run(
         _write_json(report_dir / "missing_mgrs_set_cycle_indices.json", cycle_map)
         files["missing_rtcs_to_tile_sets"] = report_dir / "missing_rtcs_to_tile_sets.json"
         files["missing_mgrs_set_cycle_indices"] = report_dir / "missing_mgrs_set_cycle_indices.json"
+
+    # --- Step 5: validate real RTC burst coverage --------------------------
+    coverage_cfg = (
+        CONFIG["products"]["DSWX_S1"]["accountability"].get("coverage_validation")
+        or {}
+    )
+    coverage_enabled = (
+        bool(coverage_cfg.get("enabled", True))
+        if validate_coverage is None
+        else validate_coverage
+    )
+    coverage_results = coverage.empty_result()
+
+    if coverage_enabled and cycle_map:
+        if db_path is None:
+            raise RuntimeError("MGRS tile DB was not resolved before coverage validation")
+        coverage_results = coverage.validate_cycle_coverage(
+            cycle_map,
+            db_path,
+            venue=venue,
+        )
+    elif coverage_enabled:
+        logger.info("No cycle buckets — coverage validation has nothing to check.")
+    else:
+        logger.info("DSWx-S1 real-coverage validation is disabled.")
+
+    recovery_candidates = (
+        sorted(coverage_results["reduced"])
+        if coverage_enabled
+        else sorted(set(missing_rtcs))
+    )
+
+    if save and coverage_enabled:
+        coverage_report = {
+            key: value
+            for key, value in coverage_results.items()
+            if key != "reduced"
+        }
+        _write_json(
+            report_dir / "missing_mgrs_sets_by_coverage.json",
+            coverage_report,
+        )
+        _write_json(
+            report_dir / "missing_rtc_mgrs_set_mappings_with_sufficient_coverage_reduced.json",
+            coverage_results["reduced"],
+        )
+        files["coverage_validation"] = report_dir / "missing_mgrs_sets_by_coverage.json"
+        files["reduced_recovery_candidates"] = (
+            report_dir / "missing_rtc_mgrs_set_mappings_with_sufficient_coverage_reduced.json"
+        )
 
     # --- Final results payload --------------------------------------------
     # Reserve summary artifact paths up-front so the on-disk summary.json and
@@ -192,6 +254,12 @@ def run(
         "missing": map_results["missing"],
         "tile_set_count": len(tile_set_map),
         "cycle_bucket_count": len(cycle_map),
+        "coverage_validation_enabled": coverage_enabled,
+        "coverage_threshold": coverage_results["threshold"],
+        "coverage_valid_count": coverage_results["valid_count"],
+        "coverage_dropped_count": coverage_results["dropped_count"],
+        "recovery_candidate_count": len(recovery_candidates),
+        "recovery_candidates": recovery_candidates,
         "files": {k: str(v) for k, v in files.items()},
     }
 

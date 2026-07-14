@@ -60,6 +60,7 @@ accountability_tools/dswx_s1/
 ├── tile_sets.py          # MGRS tile-set mapping
 ├── mapping.py            # RTC-to-DSWx input mapping
 ├── cycles.py             # Acquisition cycle indexing
+├── check_burst_coverage.py # Validate real RTC coverage + reduce triggers
 └── rtc_utils.py          # RTC burst utilities
 ```
 
@@ -94,10 +95,19 @@ accountability_tools/dswx_s1/
     - `collapse_to_cycles()` - Group products by cycle
     - Exact 12-day cycle calculation
 
+  - `coverage.py` - Real RTC burst-coverage validation
+    - Loads the expected burst set for each MGRS tile from SQLite
+    - Queries CMR when the initially identified RTCs do not meet the threshold
+    - Separates valid and dropped tile-set/cycle/sensor buckets
+    - Reduces overlapping valid buckets to representative RTC recovery candidates
+    - Propagates CMR/DB failures rather than treating them as zero coverage
+
 **Configuration:**
 - `src/opera_accountability/config.yaml`
   - `DSWX_S1.accountability.dswx_s1` - Pipeline configuration
   - `RTC_S1.unique_fields`, `DSWX_S1.unique_fields`
+  - `DSWX_S1.accountability.coverage_validation` - Threshold, temporal window,
+    worker count, and default enablement for the fifth stage
 
 **Tests:**
 - `tests/test_dswx_s1_accountability.py` - Full pipeline tests
@@ -106,7 +116,7 @@ accountability_tools/dswx_s1/
 
 **CLI:**
 ```bash
-opera-audit accountability DSWX_S1 --start-date <date> --end-date <date>
+opera-audit accountability DSWX_S1 --start <date> --end <date> --mgrs-db <path>
 ```
 
 ---
@@ -255,18 +265,18 @@ products:
         filter_north_america: true
 ```
 
-### 3.6 Async CMR Client
-- `src/opera_accountability/cmr_async.py`
+### 3.6 Unified CMR Client
+- `src/opera_accountability/cmr.py`
   - Ported from: `cmr_client.py`
   - Functions:
+    - `query_cmr()` / `query_cmr_post()` - Sync queries with Search-After pagination
     - `async_cmr_posts()` - Parallel CMR queries with semaphore
     - `async_cmr_post()` - Single async CMR query with pagination
-    - `fetch_post_url()` - HTTP POST with exponential backoff
-    - `try_request_get()` - Blocking GET with exponential backoff
-    - `giveup_cmr_requests()` - Backoff giveup logic (413, 400, 504 handling)
-  - Backoff decorators:
-    - `@backoff.on_exception(backoff.expo, aiohttp.ClientResponseError, max_tries=7)`
-    - `@backoff.on_exception(backoff.expo, aiohttp.ServerTimeoutError, max_tries=2)`
+    - `async_cmr_post_items()` - Flattened async query results
+  - Retry duration, interval, attempts, timeout, and page size are configured
+    under `cmr` in `config.yaml`.
+  - `src/opera_accountability/cmr_async.py` re-exports the legacy async API
+    for backward compatibility; it contains no separate transport logic.
 
 ### 3.7 Recovery File Output
 - `src/opera_accountability/reports.py`
@@ -386,8 +396,8 @@ opera-audit accountability DIST_S1 --start-date <date> --end-date <date>
 
 **Original Location:**
 ```
-tools/ops/cmr_audit/cmr_audit_burst_coverage.py (branch: OPERA-2518)
-tools/ops/cmr_audit/slc_annotation_extract.py   (branch: OPERA-2518)
+tools/ops/cmr_audit/cmr_audit_burst_coverage.py (develop, bf45e34bf598)
+tools/ops/cmr_audit/slc_annotation_extract.py   (develop, bf45e34bf598)
 ```
 
 **Consolidated To:**
@@ -395,24 +405,25 @@ tools/ops/cmr_audit/slc_annotation_extract.py   (branch: OPERA-2518)
 ### 5.1 SLC Annotations
 - `src/opera_accountability/slc_annotations.py`
   - `HTTPRangeFile` - HTTP range-request reader for remote ZIP annotations
-  - `extract_annotations()` - Extract burst timing from SLC annotation ZIPs
-  - `parse_burst_anx_times()` - Parse burst ANX times from XML annotation
-  - `derive_burst_ids()` - Derive OPERA burst IDs from swath/burst metadata
+  - `extract_slc_metadata()` - Extract annotations and `manifest.safe`
+  - `parse_burst_sensing_times()` - Parse per-burst sensing times
+  - `derive_burst_ids_from_metadata()` - Apply the ESA/s1-reader burst-ID formula
   - `get_edl_token()` - EDL authentication (EARTHDATA_TOKEN or ~/.netrc)
 
 ### 5.2 Burst Coverage Pipeline
 - `src/opera_accountability/burst_coverage.py`
   - `BurstInfo`, `SLCGranule` - Data classes for burst/SLC metadata
   - `RequestCache` - Thread-safe HTTP caching
-  - `query_asf_burst_catalog()` - ASF burst catalog API queries
+  - Annotation-only burst derivation; no ASF SLC-BURST API dependency
   - `query_cmr_slc_granules()` - CMR SLC product queries
   - `check_burst_coverage()` - Coverage audit logic
   - `write_geojson()` - GeoJSON output for coverage maps
   - JSONL streaming for memory-efficient processing
-  - Replaces deprecated `cmr_audit_slc.py`
+  - Does not cache failed metadata or transient CMR queries
 
 **Tests:**
-- `tests/test_burst_coverage.py` - 23 tests for both modules
+- `tests/test_burst_coverage.py` - Metadata parsing, ESA ID derivation,
+  cache-safety, and coverage-pipeline tests
 
 **CLI:**
 ```bash
@@ -513,8 +524,8 @@ opera-audit/
 ├── src/opera_accountability/
 │   ├── __init__.py
 │   ├── config.yaml                     # Unified configuration
-│   ├── cmr.py                          # Sync CMR client
-│   ├── cmr_async.py                    # Async CMR client (Chris)
+│   ├── cmr.py                          # Unified sync/async CMR client
+│   ├── cmr_async.py                    # Backward-compatible facade
 │   ├── duplicates.py                   # Riley + Gerald
 │   ├── reports.py                      # Shared reporting
 │   ├── dashboard.py                    # Streamlit dashboard
@@ -535,6 +546,7 @@ opera-audit/
 │       │   ├── mapping.py
 │       │   ├── tile_sets.py
 │       │   ├── cycles.py
+│       │   ├── coverage.py
 │       │   └── rtc_utils.py
 │       └── dist_s1/                    # Kevin's DIST-S1 pipeline
 │           ├── survey.py
@@ -606,16 +618,21 @@ Environment variables:
 
 ## Verification Status
 
-All phases have been verified for **exact code parity** with original implementations:
+The consolidated implementations are synchronized with the identified source
+revisions at the behavioral boundaries covered by unit tests:
 
-- ✅ **Phase 1A**: Duplicate detection logic matches `duplicate_check.py` exactly
-- ✅ **Phase 1B**: DSWx-S1 pipeline matches `accountability_tools/dswx_s1/` exactly
-- ✅ **Phase 2**: DISP-S1 end-conflict detection matches `detect_cmr_duplicates_for_disp_s1.py` exactly
-- ✅ **Phase 3**: Multi-strategy suite matches Chris's `cmr_audit_*.py` tools exactly
-- ✅ **Phase 4**: DIST-S1 ISO-XML tools match `cmr_audit_dist_s1.py` exactly
-- ✅ **Phase 5**: SLC burst coverage matches `cmr_audit_burst_coverage.py` + `slc_annotation_extract.py`
+- ✅ **Phase 1A**: Duplicate detection behavior from `duplicate_check.py`
+- ✅ **Phase 1B**: Five-stage DSWx-S1 pipeline from `accountability_tools/dswx_s1/`
+  at `9e9f07f`
+- ✅ **Phase 2**: DISP-S1 end-conflict behavior
+- ✅ **Phase 3**: Multi-strategy suite plus unified CMR transport
+- ✅ **Phase 4**: DIST-S1 ISO-XML behavior
+- ✅ **Phase 5**: Annotation-only SLC burst derivation from PCM `develop`
+  at `bf45e34bf598`
 
-**166 unit tests pass** (0 failures). See commit history for detailed verification of each algorithm, regex pattern, and data structure.
+The unit and integration suites cover the consolidated algorithms, regex
+patterns, data structures, and the five-stage DSWx-S1 workflow. See commit
+history and CI results for the test count associated with a specific revision.
 
 ### Items Not Yet Ported (blocked on PCM dependencies)
 - `dist_s1_input_tool.py` (1758 lines) — requires `data_subscriber.cmr.async_query_cmr_v2`

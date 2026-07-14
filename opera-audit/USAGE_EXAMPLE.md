@@ -136,6 +136,12 @@ opera-audit burst-coverage \
 opera-audit burst-coverage \
     --start 2026-02-01T00:00:00Z --end 2026-02-07T23:59:59Z \
     --geojson north_america.geojson --polarizations VV,VH --save
+
+# Re-query selected dates while reusing all other cached data
+opera-audit burst-coverage \
+    --start 2026-02-01T00:00:00Z --end 2026-02-07T23:59:59Z \
+    --geojson north_america.geojson \
+    --recheck-dates-file dates-to-recheck.txt
 ```
 
 When `--save` is used, results are written to
@@ -173,9 +179,17 @@ opera-audit accountability DSWX_S1 --days-back 7 --save --mgrs-db /path/to/MGRS_
 # Or set environment variable
 export OPERA_MGRS_DB=/path/to/MGRS_tile_collection.sqlite
 opera-audit accountability DSWX_S1 --days-back 7 --save
+
+# Optional: retain the raw four-stage result without real-coverage filtering
+opera-audit accountability DSWX_S1 --days-back 7 --save \
+    --mgrs-db /path/to/MGRS_tile_collection.sqlite \
+    --no-coverage-validation
 ```
 
-The MGRS tile-collection SQLite DB is available from JPL Artifactory or the ADT package repo.
+The default fifth stage checks whether each tile-set/cycle/sensor bucket had
+enough real RTC burst coverage to trigger DSWx-S1. It writes validated,
+dropped, and reduced recovery-candidate reports. The MGRS tile-collection
+SQLite DB is available from JPL Artifactory or the ADT package repo.
 
 #### DIST_S1 (Kevin - ISO-XML extraction)
 
@@ -311,11 +325,20 @@ Reports are saved under `./output/reports/{duplicates,accountability,burst_cover
   "missing_count": 2000,
   "missing": ["..."],
   "expected": 157000,
-  "actual": 155000
+  "actual": 155000,
+  "coverage_validation_enabled": true,
+  "coverage_threshold": 4,
+  "coverage_valid_count": 1013,
+  "coverage_dropped_count": 29,
+  "recovery_candidate_count": 742,
+  "recovery_candidates": ["..."]
 }
 ```
 
-Sibling files: `rtc_survey.json`, `dswx_survey.json`, `missing_rtc_products.json`, `rtc_to_dswx_map.json`.
+Sibling files include `rtc_survey.json`, `dswx_survey.json`,
+`missing_rtc_products.json`, `rtc_to_dswx_map.json`,
+`missing_mgrs_sets_by_coverage.json`, and
+`missing_rtc_mgrs_set_mappings_with_sufficient_coverage_reduced.json`.
 
 ### Burst Coverage Report
 
@@ -410,7 +433,7 @@ opera-audit accountability CUSTOM_PRODUCT --strategy date_count --days-back 30 -
 
 **Available strategies:**
 - `dswx_hls` — HLS→DSWx mapping with L9 cutoff (Chris)
-- `dswx_s1` — 4-step RTC→DSWx pipeline (Riley)
+- `dswx_s1` — 5-step RTC→DSWx pipeline with real-coverage validation (Riley)
 - `dist_s1` — ISO-XML RTC extraction (Kevin)
 - `forward_map` — Query inputs, generate expected outputs (Chris)
 - `date_count` — Count by date, flag low counts (Chris)
@@ -489,7 +512,8 @@ For detailed documentation of the consolidation:
 **Chris:**
 - `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_hls.py` → `src/opera_accountability/strategies/{dswx_hls,forward_map}.py`
 - `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_tropo.py` → `src/opera_accountability/strategies/date_count.py`
-- `opera-sds-pcm/tools/ops/cmr_audit/cmr_client.py` → `src/opera_accountability/cmr_async.py`
+- `opera-sds-pcm/tools/ops/cmr_audit/cmr_client.py` → `src/opera_accountability/cmr.py`
+  (`cmr_async.py` remains as a backward-compatible import facade)
 
 **Kevin:**
 - `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_dist_s1.py` → `src/opera_accountability/strategies/dist_s1/`

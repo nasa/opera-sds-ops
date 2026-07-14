@@ -6,6 +6,10 @@ cmr:
   url_uat: "https://cmr.uat.earthdata.nasa.gov/search/granules.umm_json"
   timeout: 60
   page_size: 2000
+  retry_max_time: 300
+  retry_interval: 15
+  async_max_attempts: 7
+  async_backoff_base: 1
 
 # Output settings
 output_dir: "./output"
@@ -98,6 +102,14 @@ products:
         S1C: "2025-05-20T00:00:00Z"
       # Thread pool size for SQLite tile-set lookups.
       tile_set_workers: 8
+      # Validate that each missing tile-set/cycle/sensor bucket had enough
+      # real RTC burst coverage to trigger DSWx-S1 before including it in the
+      # actionable recovery set.
+      coverage_validation:
+        enabled: true
+        min_rtc_count: 4
+        temporal_window_hours: 1
+        workers: 8
 
   DIST_S1:
     name: "Disturbance - Sentinel-1"

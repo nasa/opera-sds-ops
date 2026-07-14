@@ -8,14 +8,17 @@ Instead of downloading the entire multi-GB ZIP, this module uses HTTP Range
 requests to fetch only the ZIP central directory and the annotation XML
 entries (typically ~0.6-1.4 MB total).
 
-Ported from Gerald's ``slc_annotation_extract.py`` on PCM OPERA-2518 branch.
+Synchronized from Gerald's ``slc_annotation_extract.py`` on PCM ``develop``
+after OPERA-2518 was merged.
 """
 
 from __future__ import annotations
 
 import bisect
+import datetime as _dt
 import io
 import logging
+import math
 import os
 import pathlib
 import re
@@ -23,6 +26,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 import requests
+
+from .cmr import query_cmr_post
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +41,11 @@ CMR_GRANULE_URL = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
 def get_slc_download_url(slc_native_id: str) -> str:
     """Query CMR for the SLC granule and return its HTTPS download URL."""
     body = f"provider=ASF&native_id={slc_native_id}&page_size=1"
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-
-    resp = requests.post(CMR_GRANULE_URL, data=body, headers=headers, timeout=60)
-    resp.raise_for_status()
-    data = resp.json()
-
-    if data.get("hits", 0) == 0:
+    items = query_cmr_post(body, url=CMR_GRANULE_URL)
+    if not items:
         raise ValueError(f"No granule found in CMR for native_id: {slc_native_id}")
 
-    item = data["items"][0]
+    item = items[0]
     related_urls = item["umm"].get("RelatedUrls", [])
     for ru in related_urls:
         url = ru.get("URL", "")
@@ -259,6 +259,36 @@ def extract_annotations(zip_url: str, token: str) -> dict[str, bytes]:
     return annotations
 
 
+def extract_slc_metadata(zip_url: str, token: str) -> tuple[dict[str, bytes], bytes]:
+    """Extract annotation XMLs and ``manifest.safe`` from a remote SLC ZIP."""
+    remote = HTTPRangeFile(zip_url, token)
+
+    annotations: dict[str, bytes] = {}
+    manifest_bytes = b""
+    with zipfile.ZipFile(remote) as zf:
+        for entry in zf.namelist():
+            if (
+                "/annotation/" in entry
+                and entry.endswith(".xml")
+                and "/calibration/" not in entry
+            ):
+                logger.debug("Extracting: %s", entry)
+                annotations[entry] = zf.read(entry)
+            elif entry.endswith("/manifest.safe") or entry.endswith("manifest.safe"):
+                logger.debug("Extracting: %s", entry)
+                manifest_bytes = zf.read(entry)
+
+    logger.info(
+        "Extracted %d annotation XMLs + manifest.safe (%d HTTP requests, %.1f KB)",
+        len(annotations),
+        remote._request_count,
+        remote._bytes_downloaded / 1024,
+    )
+    if not manifest_bytes:
+        raise IOError("manifest.safe not found in SLC ZIP")
+    return annotations, manifest_bytes
+
+
 # ---------------------------------------------------------------------------
 # 5. Parse burst information from annotation XML
 # ---------------------------------------------------------------------------
@@ -398,6 +428,163 @@ def derive_burst_ids(
             burst_num = anchor_num + (i - anchor_idx)
             burst_ids.append(f"{track:03d}_{burst_num:06d}_{subswath}")
 
+    return burst_ids
+
+
+# Constants from Table 9-7 of the Sentinel-1 Level 1 Detailed Algorithm Definition.
+_T_BEAM = 2.758273
+_T_PRE = 2.299849
+_T_ORBIT = (12 * 86400.0) / 175.0
+_BURST_TIMES = (0.832, 1.078, 0.848)
+
+
+def _parse_iso_dt(text: str) -> _dt.datetime:
+    """Parse a Sentinel-1 ISO timestamp, including fractional seconds."""
+    text = text.rstrip("Z").strip()
+    if "." in text:
+        base, fraction = text.split(".", 1)
+        text = f"{base}.{(fraction + '000000')[:6]}"
+        fmt = "%Y-%m-%dT%H:%M:%S.%f"
+    else:
+        fmt = "%Y-%m-%dT%H:%M:%S"
+    return _dt.datetime.strptime(text, fmt).replace(tzinfo=_dt.timezone.utc)
+
+
+def compute_esa_burst_id(
+    sensing_time: _dt.datetime,
+    ascending_node_dt: _dt.datetime,
+    start_track: int,
+    end_track: int,
+    subswath: str,
+) -> tuple[int, int, str]:
+    """Compute an ESA burst ID using the same inputs and formula as s1-reader."""
+    subswath = subswath.upper()
+    swath_num = int(subswath[-1])
+
+    iw1_start_offsets = (
+        0.0,
+        -_BURST_TIMES[0],
+        -_BURST_TIMES[0] - _BURST_TIMES[1],
+    )
+    start_iw1 = sensing_time + _dt.timedelta(
+        seconds=iw1_start_offsets[swath_num - 1]
+    )
+    mid_iw2 = start_iw1 + _dt.timedelta(
+        seconds=_BURST_TIMES[0] + _BURST_TIMES[1] / 2
+    )
+
+    has_anx_crossing = (end_track == start_track + 1) or (
+        end_track == 1 and start_track == 175
+    )
+    time_since_anx_iw1 = (start_iw1 - ascending_node_dt).total_seconds()
+    time_since_anx = (mid_iw2 - ascending_node_dt).total_seconds()
+
+    if time_since_anx_iw1 - _T_ORBIT < 0:
+        track_number = start_track
+    else:
+        track_number = end_track
+        if not has_anx_crossing:
+            time_since_anx -= _T_ORBIT
+
+    dt_b = time_since_anx + (start_track - 1) * _T_ORBIT
+    esa_burst_id = 1 + int(math.floor((dt_b - _T_PRE) / _T_BEAM))
+    return track_number, esa_burst_id, subswath
+
+
+def parse_relative_orbit_numbers(manifest_bytes: bytes) -> tuple[int, int]:
+    """Extract start and stop relative-orbit numbers from ``manifest.safe``."""
+    root = ET.fromstring(manifest_bytes)
+    start_track = None
+    end_track = None
+    for element in root.iter():
+        if not element.tag.endswith("relativeOrbitNumber"):
+            continue
+        try:
+            value = int(element.text)
+        except (TypeError, ValueError):
+            continue
+        if element.get("type") == "start":
+            start_track = value
+        elif element.get("type") == "stop":
+            end_track = value
+
+    if start_track is None:
+        raise ValueError("relativeOrbitNumber type=start not found in manifest.safe")
+    return start_track, end_track if end_track is not None else start_track
+
+
+def parse_ascending_node_time(annotations: dict[str, bytes]) -> _dt.datetime:
+    """Extract the ascending-node time shared by an SLC's annotations."""
+    for path in sorted(annotations):
+        root = ET.fromstring(annotations[path])
+        for element in root.iter():
+            if element.tag.endswith("ascendingNodeTime") and element.text:
+                return _parse_iso_dt(element.text)
+    raise ValueError("ascendingNodeTime not found in any annotation XML")
+
+
+def parse_burst_sensing_times(
+    annotations: dict[str, bytes],
+) -> dict[str, list[_dt.datetime]]:
+    """Parse per-burst sensing times, using one polarization per subswath."""
+    entries: dict[str, dict[str, str]] = {}
+    for path in sorted(annotations):
+        filename = path.rsplit("/", 1)[-1]
+        parts = filename.split("-")
+        subswath = parts[1].upper()
+        polarization = parts[3].upper()
+        entries.setdefault(subswath, {})[polarization] = path
+
+    result: dict[str, list[_dt.datetime]] = {}
+    for subswath in sorted(entries):
+        polarizations = entries[subswath]
+        chosen_path = polarizations.get("VV") or next(iter(polarizations.values()))
+        root = ET.fromstring(annotations[chosen_path])
+        burst_list = next(
+            (element for element in root.iter() if element.tag.endswith("burstList")),
+            None,
+        )
+        if burst_list is None:
+            continue
+        times = []
+        for burst_element in burst_list:
+            if not burst_element.tag.endswith("burst"):
+                continue
+            sensing_time = next(
+                (
+                    child.text
+                    for child in burst_element
+                    if child.tag.endswith("sensingTime") and child.text
+                ),
+                None,
+            )
+            if sensing_time:
+                times.append(_parse_iso_dt(sensing_time))
+        if times:
+            result[subswath] = times
+    return result
+
+
+def derive_burst_ids_from_metadata(
+    annotations: dict[str, bytes],
+    manifest_bytes: bytes,
+) -> list[str]:
+    """Derive complete ASF-format burst IDs using only an SLC's own metadata."""
+    start_track, end_track = parse_relative_orbit_numbers(manifest_bytes)
+    ascending_node_dt = parse_ascending_node_time(annotations)
+    sensing_times = parse_burst_sensing_times(annotations)
+
+    burst_ids = []
+    for subswath in sorted(sensing_times):
+        for sensing_time in sensing_times[subswath]:
+            track, esa_id, swath = compute_esa_burst_id(
+                sensing_time,
+                ascending_node_dt,
+                start_track,
+                end_track,
+                subswath,
+            )
+            burst_ids.append(f"{track:03d}_{esa_id:06d}_{swath}")
     return burst_ids
 
 

@@ -1492,6 +1492,41 @@ def _render_dswx_s1_panel(product: str, report: dict) -> None:
                         description="unique (tile-set, 12-day cycle, sensor) groups",
                         key=_next_key("m"))
 
+    if report.get("coverage_validation_enabled"):
+        _section_label("Real RTC coverage validation")
+        cols = st.columns(4)
+        with cols[0]:
+            sui.metric_card(title="Required RTC coverage",
+                            content=f"{report.get('coverage_threshold', 0):,}",
+                            description="minimum unique RTC bursts",
+                            key=_next_key("m"))
+        with cols[1]:
+            sui.metric_card(title="Valid cycle buckets",
+                            content=f"{report.get('coverage_valid_count', 0):,}",
+                            description="sufficient real coverage",
+                            key=_next_key("m"))
+        with cols[2]:
+            sui.metric_card(title="Dropped cycle buckets",
+                            content=f"{report.get('coverage_dropped_count', 0):,}",
+                            description="insufficient RTC coverage",
+                            key=_next_key("m"))
+        with cols[3]:
+            sui.metric_card(title="Recovery RTC candidates",
+                            content=f"{report.get('recovery_candidate_count', 0):,}",
+                            description="deduplicated trigger set",
+                            key=_next_key("m"))
+
+        recovery_candidates = report.get("recovery_candidates") or []
+        if recovery_candidates:
+            today = datetime.now().strftime("%Y-%m-%d")
+            _download_header(
+                title="Validated recovery RTC candidates",
+                count=len(recovery_candidates),
+                file_base=f"{product}_validated_recovery_rtcs_{today}",
+                items=recovery_candidates,
+                include_json=True,
+            )
+
     # Missing RTC list.
     missing_list = report.get("missing") or []
     if missing_list:

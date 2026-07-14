@@ -10,6 +10,11 @@ from opera_accountability.slc_annotations import (
     parse_burst_count,
     parse_burst_anx_times,
     derive_burst_ids,
+    compute_esa_burst_id,
+    parse_relative_orbit_numbers,
+    parse_ascending_node_time,
+    parse_burst_sensing_times,
+    derive_burst_ids_from_metadata,
     analyze_annotations,
 )
 from opera_accountability.burst_coverage import (
@@ -19,7 +24,7 @@ from opera_accountability.burst_coverage import (
     RequestCache,
     geojson_to_bbox,
     generate_time_chunks,
-    _parse_asf_burst_response,
+    fetch_bursts_for_slc,
 )
 
 
@@ -178,33 +183,6 @@ class TestTimeUtils:
 
 
 # =============================================================================
-# ASF burst response parsing tests
-# =============================================================================
-
-class TestASFParsing:
-    def test_parse_empty_response(self):
-        result = asyncio.run(_parse_asf_burst_response([]))
-        assert result == []
-
-    def test_parse_with_polarization_filter(self):
-        data = [
-            {"burst": {"fullBurstID": "035_073254_IW1"}, "polarization": "VV"},
-            {"burst": {"fullBurstID": "035_073255_IW1"}, "polarization": "VH"},
-        ]
-        result = asyncio.run(_parse_asf_burst_response(data, polarization="VV"))
-        assert len(result) == 1
-        assert result[0] == "035_073254_IW1"
-
-    def test_parse_deduplication(self):
-        data = [
-            {"burst": {"fullBurstID": "035_073254_IW1"}, "polarization": "VV"},
-            {"burst": {"fullBurstID": "035_073254_IW1"}, "polarization": "VV"},
-        ]
-        result = asyncio.run(_parse_asf_burst_response(data))
-        assert len(result) == 1
-
-
-# =============================================================================
 # SLC Annotation tests
 # =============================================================================
 
@@ -246,3 +224,84 @@ class TestAnnotationParsing:
                 reference_burst_num=1000, reference_anx_time=100.0,
                 reference_subswath="IW1",
             )
+
+    def test_parse_metadata_and_derive_ids(self):
+        manifest = b"""<xfdu><metadataSection><relativeOrbitNumber type="start">35</relativeOrbitNumber><relativeOrbitNumber type="stop">35</relativeOrbitNumber></metadataSection></xfdu>"""
+        annotation = b"""<product><adsHeader><ascendingNodeTime>2024-01-01T00:00:00.000000</ascendingNodeTime></adsHeader><swathTiming><burstList count="2"><burst><sensingTime>2024-01-01T00:01:40.000000</sensingTime></burst><burst><sensingTime>2024-01-01T00:01:42.758273</sensingTime></burst></burstList></swathTiming></product>"""
+        annotations = {"S1.SAFE/annotation/s1a-iw1-slc-vv-test.xml": annotation}
+
+        assert parse_relative_orbit_numbers(manifest) == (35, 35)
+        assert parse_ascending_node_time(annotations) == datetime(
+            2024, 1, 1, tzinfo=timezone.utc
+        )
+        sensing_times = parse_burst_sensing_times(annotations)
+        assert len(sensing_times["IW1"]) == 2
+
+        expected = []
+        for sensing_time in sensing_times["IW1"]:
+            track, burst_id, subswath = compute_esa_burst_id(
+                sensing_time,
+                datetime(2024, 1, 1, tzinfo=timezone.utc),
+                35,
+                35,
+                "IW1",
+            )
+            expected.append(f"{track:03d}_{burst_id:06d}_{subswath}")
+        assert derive_burst_ids_from_metadata(annotations, manifest) == expected
+
+    def test_relative_orbit_defaults_stop_to_start(self):
+        manifest = b"""<xfdu><relativeOrbitNumber type="start">175</relativeOrbitNumber></xfdu>"""
+        assert parse_relative_orbit_numbers(manifest) == (175, 175)
+
+    def test_relative_orbit_requires_start(self):
+        with pytest.raises(ValueError, match="type=start"):
+            parse_relative_orbit_numbers(b"<xfdu />")
+
+
+class TestAnnotationOnlyBurstFetch:
+    def test_success_is_cached(self):
+        slc = SLCGranule.from_native_id(
+            "S1A_IW_SLC__1SDV_20240101T120000_20240101T120030_015470_019672_103F-SLC"
+        )
+        cache = MagicMock()
+        cache.get.return_value = None
+        with (
+            patch("opera_accountability.burst_coverage.get_cache", return_value=cache),
+            patch("opera_accountability.burst_coverage._edl_token", "token"),
+            patch(
+                "opera_accountability.burst_coverage.get_slc_download_url",
+                return_value="https://example.test/slc.zip",
+            ),
+            patch(
+                "opera_accountability.burst_coverage.extract_slc_metadata",
+                return_value=({"annotation.xml": b"xml"}, b"manifest"),
+            ),
+            patch(
+                "opera_accountability.burst_coverage.derive_burst_ids_from_metadata",
+                return_value=["035_073254_IW1"],
+            ),
+        ):
+            result = asyncio.run(fetch_bursts_for_slc(slc, MagicMock(), MagicMock()))
+
+        assert [burst.asf_id for burst in result] == ["035_073254_IW1"]
+        cache.set.assert_called_once()
+        assert cache.set.call_args.args[2] == ["035_073254_IW1"]
+
+    def test_failure_is_not_cached(self):
+        slc = SLCGranule.from_native_id(
+            "S1A_IW_SLC__1SDV_20240101T120000_20240101T120030_015470_019672_103F-SLC"
+        )
+        cache = MagicMock()
+        cache.get.return_value = None
+        with (
+            patch("opera_accountability.burst_coverage.get_cache", return_value=cache),
+            patch("opera_accountability.burst_coverage._edl_token", "token"),
+            patch(
+                "opera_accountability.burst_coverage.get_slc_download_url",
+                side_effect=OSError("range request failed"),
+            ),
+        ):
+            result = asyncio.run(fetch_bursts_for_slc(slc, MagicMock(), MagicMock()))
+
+        assert result == []
+        cache.set.assert_not_called()

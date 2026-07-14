@@ -600,13 +600,14 @@ def test_accountability_matches_cmr(test_name, test_case):
 @pytest.mark.integration
 @pytest.mark.slow
 def test_dswx_s1_accountability_pipeline_end_to_end(tmp_path):
-    """Run the full 4-step DSWx-S1 pipeline against live CMR for a narrow window.
+    """Run the full 5-step DSWx-S1 pipeline against live CMR for a narrow window.
 
     Validates:
     - CMR survey works for both RTC-S1 and DSWx-S1 collections
     - RTC → DSWx input mapping and sensor-start filtering execute
     - MGRS tile-set resolution against the bundled SQLite DB succeeds
     - Cycle/sensor expansion produces deterministic output
+    - Real RTC burst coverage validation produces actionable candidates
     - All expected JSON artifacts are written
 
     Requires OPERA_MGRS_DB env var or --mgrs-db to be set (the DB is no longer bundled).
@@ -642,6 +643,7 @@ def test_dswx_s1_accountability_pipeline_end_to_end(tmp_path):
         "rtc_survey", "dswx_survey",
         "missing_rtc_products", "rtc_to_dswx_map",
         "missing_rtcs_to_tile_sets", "missing_mgrs_set_cycle_indices",
+        "coverage_validation", "reduced_recovery_candidates",
         "summary_json",
     )
     for key in expected_files:

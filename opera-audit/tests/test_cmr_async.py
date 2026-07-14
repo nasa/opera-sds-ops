@@ -2,7 +2,15 @@
 
 import pytest
 
+from opera_accountability import cmr
+from opera_accountability import cmr_async
 from opera_accountability.cmr_async import params_to_request_body, paramss_to_request_body
+
+
+def test_module_is_backward_compatible_facade():
+    assert cmr_async.async_cmr_post is cmr.async_cmr_post
+    assert cmr_async.fetch_post_url is cmr.fetch_post_url
+    assert cmr_async.params_to_request_body is cmr.params_to_request_body
 
 
 class TestParamsToRequestBody:

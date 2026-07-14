@@ -271,6 +271,14 @@ def accountability(
             "Falls back to the OPERA_MGRS_DB environment variable when omitted."
         )
     ),
+    coverage_validation: Optional[bool] = typer.Option(
+        None,
+        "--coverage-validation/--no-coverage-validation",
+        help=(
+            "Validate real RTC burst coverage before producing DSWX_S1 "
+            "recovery candidates (DSWX_S1 only; defaults to config.yaml)."
+        ),
+    ),
     max_concurrent: Optional[int] = typer.Option(
         None, "--max-concurrent",
         help="Maximum concurrent DIST-S1 iso.xml downloads (DIST_S1 only)."
@@ -291,7 +299,7 @@ def accountability(
     Supported products (selected via ``accountability.strategy`` in config.yaml):
 
     - ``DSWX_HLS`` — strategy ``dswx_hls`` (HLS input → DSWx-HLS output mapping)
-    - ``DSWX_S1`` — strategy ``dswx_s1`` (RTC-S1 → DSWx-S1 4-step pipeline)
+    - ``DSWX_S1`` — strategy ``dswx_s1`` (RTC-S1 → DSWx-S1 5-step pipeline)
     - ``DIST_S1`` — strategy ``dist_s1`` (RTC-S1 → DIST-S1 ISO XML input mapping)
     
     New strategies (Phase 3):
@@ -318,6 +326,7 @@ def accountability(
             mgrs_db=mgrs_db,
             db_path=db_path,
             recovery_format=recovery_format,
+            coverage_validation=coverage_validation,
         )
         return
 
@@ -368,7 +377,8 @@ def accountability(
         )
     elif strategy_name == "dswx_s1":
         _run_dswx_s1_accountability(
-            start_date, end_date, venue, save, output_dir, mgrs_db, quiet, recovery_format
+            start_date, end_date, venue, save, output_dir, mgrs_db, quiet,
+            recovery_format, coverage_validation
         )
     elif strategy_name == "dist_s1":
         _run_dist_s1_accountability(
@@ -727,13 +737,14 @@ def _run_dswx_s1_accountability(
     mgrs_db: Optional[str],
     quiet: bool,
     recovery_format: Optional[str] = None,
+    validate_coverage: Optional[bool] = None,
 ) -> dict:
-    """DSWx-S1 pipeline dispatcher: runs the 4-step strategy and renders results."""
+    """DSWx-S1 pipeline dispatcher: runs the 5-step strategy and renders results."""
     # Imported lazily so the dswx_s1 package is only loaded when used.
     from .strategies.dswx_s1 import run as run_dswx_s1
 
     if not quiet:
-        console.print("\n[cyan]Running DSWx-S1 4-step accountability pipeline...[/cyan]")
+        console.print("\n[cyan]Running DSWx-S1 5-step accountability pipeline...[/cyan]")
 
     results = run_dswx_s1(
         start_date=start_date,
@@ -742,13 +753,19 @@ def _run_dswx_s1_accountability(
         venue=venue,
         save=save,
         mgrs_db_override=mgrs_db,
+        validate_coverage=validate_coverage,
     )
 
-    if recovery_format and results.get("missing"):
+    recovery_ids = (
+        results["recovery_candidates"]
+        if results.get("coverage_validation_enabled")
+        else results.get("missing", [])
+    )
+    if recovery_format and recovery_ids:
         from opera_accountability.recovery_file import write_recovery_file
         output_path = f"{output_dir}/recovery_DSWX_S1"
         write_recovery_file(
-            {"missing": results["missing"]}, output_path, recovery_format
+            {"missing": recovery_ids}, output_path, recovery_format
         )
         if not quiet:
             console.print(f"[cyan]Recovery file written to {output_path}.{recovery_format}[/cyan]")
@@ -769,6 +786,10 @@ def _run_dswx_s1_accountability(
             table.add_row("Accountability rate", f"{acc_rate:.2f}%")
         table.add_row("MGRS tile sets affected", f"{results['tile_set_count']:,}")
         table.add_row("Cycle/sensor buckets", f"{results['cycle_bucket_count']:,}")
+        if results["coverage_validation_enabled"]:
+            table.add_row("Coverage-valid buckets", f"{results['coverage_valid_count']:,}")
+            table.add_row("Coverage-dropped buckets", f"{results['coverage_dropped_count']:,}")
+            table.add_row("Recovery RTC candidates", f"{results['recovery_candidate_count']:,}")
 
         console.print(table)
 
@@ -781,7 +802,9 @@ def _run_dswx_s1_accountability(
         print(
             f"{results['rtc_surveyed']},{results['dswx_surveyed']},"
             f"{results['used_rtc_count']},{results['missing_count']},"
-            f"{results['tile_set_count']},{results['cycle_bucket_count']}"
+            f"{results['tile_set_count']},{results['cycle_bucket_count']},"
+            f"{results['coverage_valid_count']},{results['coverage_dropped_count']},"
+            f"{results['recovery_candidate_count']}"
         )
     else:
         console.print("[green]Done![/green]")
@@ -968,6 +991,7 @@ def _run_accountability_all(
     mgrs_db: Optional[str] = None,
     db_path: Optional[str] = None,
     recovery_format: Optional[str] = None,
+    coverage_validation: Optional[bool] = None,
 ) -> None:
     """Internal helper to run accountability for all products with accountability enabled."""
     
@@ -1014,7 +1038,8 @@ def _run_accountability_all(
                 )
             elif strategy_name == "dswx_s1":
                 results = _run_dswx_s1_accountability(
-                    start_date, end_date, venue, save, output_dir, mgrs_db, quiet, recovery_format
+                    start_date, end_date, venue, save, output_dir, mgrs_db, quiet,
+                    recovery_format, coverage_validation
                 )
             elif strategy_name == "dist_s1":
                 prefer_s3 = CONFIG["products"][product]["accountability"].get("prefer_s3_iso_xml", False)
@@ -1092,13 +1117,21 @@ def burst_coverage(
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path"),
     save: bool = typer.Option(False, "--save", help="Save report to reports/burst_coverage/ for dashboard"),
     output_dir: str = typer.Option("./output", "--output-dir", help="Output directory (used with --save)"),
-    low_memory: bool = typer.Option(False, help="Stream results to JSONL (for long date ranges)"),
+    low_memory: bool = typer.Option(False, "--low-memory", help="Stream results to JSONL (for long date ranges)"),
     chunk_days: int = typer.Option(30, help="Days per chunk in low-memory mode"),
     buffer_deg: float = typer.Option(0.5, help="Buffer in degrees to expand GeoJSON boundary"),
     cache_dir: Optional[str] = typer.Option(None, help="Cache directory path"),
-    no_cache: bool = typer.Option(False, help="Disable caching"),
-    clear_cache: bool = typer.Option(False, help="Clear all cached data before running"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Disable caching"),
+    clear_cache: bool = typer.Option(False, "--clear-cache", help="Clear all cached data before running"),
+    clear_cache_namespace: Optional[str] = typer.Option(
+        None,
+        help="Clear one cache namespace: asf_bursts, cmr_slc, or cmr_opera",
+    ),
     recheck_dates: Optional[str] = typer.Option(None, help="Comma-separated dates (YYYY-MM-DD) to recheck"),
+    recheck_dates_file: Optional[str] = typer.Option(
+        None,
+        help="File containing dates (YYYY-MM-DD) to recheck, one per line",
+    ),
     show_missing: int = typer.Option(20, help="Show first N missing products in console"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
 ):
@@ -1141,7 +1174,14 @@ def burst_coverage(
     # Setup cache
     recheck_set = set()
     if recheck_dates:
-        recheck_set = {d.strip() for d in recheck_dates.split(",")}
+        recheck_set.update(d.strip() for d in recheck_dates.split(",") if d.strip())
+    if recheck_dates_file:
+        try:
+            with Path(recheck_dates_file).open() as stream:
+                recheck_set.update(line.strip() for line in stream if line.strip())
+        except OSError as exc:
+            console.print(f"[red]Unable to read --recheck-dates-file: {exc}[/red]")
+            raise typer.Exit(1) from exc
 
     cache = bc_init_cache(
         Path(cache_dir) if cache_dir else None,
@@ -1151,6 +1191,19 @@ def burst_coverage(
     if clear_cache:
         deleted = cache.clear()
         console.print(f"Cleared {deleted} cached files")
+    elif clear_cache_namespace:
+        valid_namespaces = {"asf_bursts", "cmr_slc", "cmr_opera"}
+        if clear_cache_namespace not in valid_namespaces:
+            console.print(
+                "[red]--clear-cache-namespace must be one of: "
+                "asf_bursts, cmr_slc, cmr_opera[/red]"
+            )
+            raise typer.Exit(1)
+        deleted = cache.clear(clear_cache_namespace)
+        console.print(
+            f"Cleared {deleted} cached files in namespace "
+            f"'{clear_cache_namespace}'"
+        )
 
     # Ensure JSONL extension for low-memory mode
     output_path = output

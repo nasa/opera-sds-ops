@@ -89,7 +89,13 @@ def analyze_accountability(
 
             # Check if it matches HLS pattern
             if hls_pattern.match(input_name):
-                hls_to_dswx.setdefault((input_name, date_facet), []).append(granule_id)
+                product_ids = hls_to_dswx.setdefault((input_name, date_facet), [])
+                # A DSWx product lists several band files from the same HLS
+                # granule. After the band suffix is stripped they all resolve
+                # to the same input, so retain each distinct DSWx product only
+                # once. Multiple revisions remain visible as real duplicates.
+                if granule_id not in product_ids:
+                    product_ids.append(granule_id)
 
     n_dswx_hls_inputs = len(hls_to_dswx)
     logger.info(f"Mapped DSWx to {n_dswx_hls_inputs} unique HLS inputs")

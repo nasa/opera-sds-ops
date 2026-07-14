@@ -72,6 +72,12 @@ def test_load_reports_nested_dswx_s1_layout(tmp_path: Path):
         "missing_count": 2, "missing": ["b", "c"],
         "tile_set_count": 1, "cycle_bucket_count": 1,
         "expected": 10, "actual": 8,
+        "coverage_validation_enabled": True,
+        "coverage_threshold": 4,
+        "coverage_valid_count": 1,
+        "coverage_dropped_count": 0,
+        "recovery_candidate_count": 1,
+        "recovery_candidates": ["b"],
     })
 
     reports = load_reports(tmp_path)
@@ -80,6 +86,8 @@ def test_load_reports_nested_dswx_s1_layout(tmp_path: Path):
     # Latest date dir wins.
     assert loaded["rtc_surveyed"] == 10
     assert loaded["tile_set_count"] == 1
+    assert loaded["coverage_valid_count"] == 1
+    assert loaded["recovery_candidates"] == ["b"]
     # The loader stamps the source dir so the UI can find sibling artifacts.
     assert loaded["_report_dir"] == str(newer_dir)
 

@@ -4,12 +4,13 @@ Audits OPERA product coverage at the Sentinel-1 burst level:
 
 1. Query CMR for Sentinel-1 SLC granules covering a GeoJSON region
 2. Filter SLCs by exact polygon intersection (not just bounding box)
-3. Query ASF SLC-BURST API to get burst IDs for each SLC
+3. Derive burst IDs from each SLC's annotation XML and ``manifest.safe``
 4. Deduplicate bursts (same burst can appear in overlapping SLCs)
 5. Query CMR for OPERA products matching those burst IDs
 6. Report coverage statistics and missing products
 
-Ported from Gerald's ``cmr_audit_burst_coverage.py`` on PCM OPERA-2518 branch.
+Synchronized from Gerald's ``cmr_audit_burst_coverage.py`` on PCM ``develop``
+after OPERA-2518 was merged.
 
 Requires optional dependency: ``shapely`` (for polygon intersection filtering).
 Install via: ``pip install opera-accountability[burst_coverage]``
@@ -32,12 +33,12 @@ from typing import Optional, Iterator
 
 import aiohttp
 
+from .cmr import async_cmr_post_items
 from .slc_annotations import (
     get_slc_download_url,
     get_edl_token,
-    extract_annotations,
-    parse_burst_anx_times,
-    derive_burst_ids,
+    extract_slc_metadata,
+    derive_burst_ids_from_metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,6 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 CMR_GRANULE_URL = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
-ASF_BURST_API_URL = "https://api.daac.asf.alaska.edu/services/search/param"
 
 # OPERA product short names in CMR
 OPERA_PRODUCTS = {
@@ -55,12 +55,6 @@ OPERA_PRODUCTS = {
     "RTC-S1": "OPERA_L2_RTC-S1_V1",
 }
 
-# Sentinel-1 platform name mapping (ASF API format)
-PLATFORM_MAP = {
-    "S1A": "SENTINEL-1A",
-    "S1B": "SENTINEL-1B",
-    "S1C": "SENTINEL-1C",
-}
 
 
 # =============================================================================
@@ -349,78 +343,7 @@ def generate_time_chunks(start: datetime, end: datetime, days: int = 30) -> Iter
         current = chunk_end
 
 
-# =============================================================================
-# ASF Burst API
-# =============================================================================
-
-async def _parse_asf_burst_response(
-    data: list, polarization: str = None, slc_product_id: str = None,
-) -> list[str]:
-    """Parse ASF SLC-BURST API response and return unique burst IDs."""
-    items = data[0] if data and isinstance(data[0], list) else data
-    seen = set()
-    burst_ids = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if polarization and item.get("polarization", "").upper() != polarization.upper():
-            continue
-        if slc_product_id:
-            download_url = item.get("downloadUrl", "")
-            if slc_product_id not in download_url:
-                continue
-        bid = item.get("burst", {}).get("fullBurstID")
-        if bid and bid not in seen:
-            seen.add(bid)
-            burst_ids.append(bid)
-    return burst_ids
-
-
 _edl_token: str | None = None  # Lazy-initialized on first annotation derivation
-
-
-async def _derive_bursts_from_annotation(
-    slc: SLCGranule,
-    asf_burst_ids: list[str],
-    ref_burst_anx_time: float,
-    polarization: str,
-) -> list[str] | None:
-    """Derive complete burst IDs from SLC annotation XMLs."""
-    global _edl_token
-
-    try:
-        if _edl_token is None:
-            try:
-                _edl_token = await asyncio.to_thread(get_edl_token)
-            except Exception as exc:
-                logger.warning(f"EDL token acquisition failed: {exc}")
-                _edl_token = ""  # sentinel to avoid retrying
-                return None
-
-        if _edl_token == "":
-            return None
-
-        zip_url = await asyncio.to_thread(get_slc_download_url, slc.native_id)
-        annotations = await asyncio.to_thread(extract_annotations, zip_url, _edl_token)
-        anx_times = parse_burst_anx_times(annotations)
-
-        if not anx_times:
-            logger.warning(f"No ANX times parsed from annotations for {slc.native_id}")
-            return None
-
-        ref_bid = asf_burst_ids[0]
-        ref_track_str, ref_burst_str, ref_sw = ref_bid.split("_")
-        ref_track = int(ref_track_str)
-        ref_burst_num = int(ref_burst_str)
-
-        all_ids = derive_burst_ids(
-            anx_times, ref_track, ref_burst_num, ref_burst_anx_time, ref_sw,
-        )
-        return all_ids
-
-    except Exception as exc:
-        logger.warning(f"Annotation burst derivation failed for {slc.native_id}: {exc}")
-        return None
 
 
 async def fetch_bursts_for_slc(
@@ -429,7 +352,14 @@ async def fetch_bursts_for_slc(
     sem: asyncio.Semaphore,
     polarization: str = None,
 ) -> list[BurstInfo]:
-    """Query ASF SLC-BURST API to get burst IDs for an SLC granule."""
+    """Derive burst IDs from an SLC's annotation XML and ``manifest.safe``.
+
+    The ``session``, ``sem``, and ``polarization`` arguments remain for API
+    compatibility. Metadata access uses authenticated HTTP range requests in
+    worker threads. Failures are deliberately not cached.
+    """
+    del session, sem, polarization
+    global _edl_token
     cache = get_cache()
 
     cache_params = {
@@ -437,9 +367,9 @@ async def fetch_bursts_for_slc(
         "orbit": slc.absolute_orbit,
         "start": slc.start_time.isoformat(),
         "end": slc.end_time.isoformat(),
-        "pol": polarization,
         "slc": slc.native_id,
-        "_v": 5,
+        "derivation": "annotation_v1",
+        "_v": 6,
     }
 
     cached = cache.get("asf_bursts", cache_params)
@@ -449,87 +379,39 @@ async def fetch_bursts_for_slc(
         else:
             return []
 
-    params = {
-        "dataset": "SLC-BURST",
-        "platform": PLATFORM_MAP.get(slc.platform, slc.platform),
-        "absoluteOrbit": slc.absolute_orbit,
-        "start": slc.start_time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "end": slc.end_time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "output": "json",
-        "maxResults": 500,
-    }
-    if polarization:
-        params["polarization"] = polarization.upper()
+    if _edl_token is None:
+        try:
+            _edl_token = await asyncio.to_thread(get_edl_token)
+        except Exception as exc:
+            logger.warning("EDL token acquisition failed: %s", exc)
+            _edl_token = ""
+            return []
+    if _edl_token == "":
+        return []
 
-    url = f"{ASF_BURST_API_URL}?{urllib.parse.urlencode(params)}"
-    slc_product_id = slc.native_id.removesuffix("-SLC")
-
-    best_burst_ids = []
-    best_ref_anx = 0.0
-    successful_attempts = 0
-
-    for attempt in range(3):
-        async with sem:
-            try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-                    if resp.status == 429:
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-                    if resp.status != 200:
-                        return []
-
-                    data = await resp.json()
-                    burst_ids = await _parse_asf_burst_response(data, polarization, slc_product_id)
-                    successful_attempts += 1
-
-                    if burst_ids and len(burst_ids) > len(best_burst_ids):
-                        best_burst_ids = burst_ids
-                        items = data[0] if data and isinstance(data[0], list) else data
-                        ref_bid = burst_ids[0]
-                        for item in items:
-                            if isinstance(item, dict) and item.get("burst", {}).get("fullBurstID") == ref_bid:
-                                best_ref_anx = float(item["burst"].get("azimuthAnxTime", 0))
-                                break
-
-                    if best_burst_ids:
-                        break
-
-                    if successful_attempts >= 2:
-                        logger.debug(
-                            f"No bursts for {slc.native_id} after "
-                            f"{successful_attempts} attempts — caching empty result"
-                        )
-                        cache.set("asf_bursts", cache_params, [])
-                        return []
-
-                    await asyncio.sleep(2 ** attempt)
-
-            except (asyncio.TimeoutError, aiohttp.ClientError):
-                if attempt < 2:
-                    await asyncio.sleep(2 ** attempt)
-                    continue
-                logger.debug(f"Failed to get bursts for {slc.native_id}")
-                break
-
-    if best_burst_ids:
-        all_ids = await _derive_bursts_from_annotation(
-            slc, best_burst_ids, best_ref_anx, polarization or "VV",
+    try:
+        zip_url = await asyncio.to_thread(get_slc_download_url, slc.native_id)
+        annotations, manifest_bytes = await asyncio.to_thread(
+            extract_slc_metadata,
+            zip_url,
+            _edl_token,
         )
-        if all_ids:
-            logger.info(
-                f"Annotation-derived bursts for {slc.native_id}: "
-                f"{len(all_ids)} (ASF reference: {len(best_burst_ids)})"
-            )
-            cache.set("asf_bursts", cache_params, all_ids)
-            return [BurstInfo.from_asf_id(bid) for bid in all_ids]
-        else:
-            logger.warning(
-                f"Annotation derivation failed for {slc.native_id}, "
-                f"using ASF data only ({len(best_burst_ids)} bursts). Result NOT cached."
-            )
-            return [BurstInfo.from_asf_id(bid) for bid in best_burst_ids]
+        burst_ids = derive_burst_ids_from_metadata(annotations, manifest_bytes)
+    except Exception as exc:
+        logger.warning(
+            "Burst derivation failed for %s: %s. Result NOT cached.",
+            slc.native_id,
+            exc,
+        )
+        return []
 
-    return []
+    if not burst_ids:
+        logger.warning("No bursts derived for %s. Result NOT cached.", slc.native_id)
+        return []
+
+    logger.info("Annotation-derived bursts for %s: %d", slc.native_id, len(burst_ids))
+    cache.set("asf_bursts", cache_params, burst_ids)
+    return [BurstInfo.from_asf_id(burst_id) for burst_id in burst_ids]
 
 
 # =============================================================================
@@ -541,47 +423,8 @@ async def _cmr_post_all_pages(
     body: str,
     sem: asyncio.Semaphore,
 ) -> list[dict]:
-    """Issue paginated CMR POST requests and return all items."""
-    page_size = 2000
-    full_body = f"{body}&page_size={page_size}"
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-
-    all_items = []
-    current_page = 1
-    max_pages = 1
-
-    while current_page <= max_pages:
-        async with sem:
-            async with session.post(
-                CMR_GRANULE_URL, data=full_body, headers=headers,
-                timeout=aiohttp.ClientTimeout(total=120),
-            ) as resp:
-                resp.raise_for_status()
-                response_json = await resp.json()
-
-        items = response_json.get("items", [])
-        all_items.extend(items)
-
-        if current_page == 1:
-            import math
-            hits = response_json.get("hits", 0)
-            if hits == 0:
-                logger.warning("CMR response missing 'hits' or returned 0 results")
-                break
-            max_pages = math.ceil(hits / page_size)
-
-        cmr_search_after = resp.headers.get("CMR-Search-After")
-        if cmr_search_after:
-            headers["CMR-Search-After"] = cmr_search_after
-
-        if len(items) < page_size:
-            break
-
-        current_page += 1
-
-    return all_items
+    """Issue a paginated CMR POST through the unified async client."""
+    return await async_cmr_post_items(CMR_GRANULE_URL, body, session, sem)
 
 
 async def fetch_slc_granules(
@@ -673,36 +516,21 @@ async def fetch_opera_products(
         f"&native-id=*{burst.filename_pattern}*"
         "&options[native-id][pattern]=true"
         f"&temporal[]={urllib.parse.quote(start_dt.isoformat(), safe='/:')},{urllib.parse.quote(end_dt.isoformat(), safe='/:')}"
-        "&page_size=100"
     )
 
-    for attempt in range(3):
-        async with sem:
-            try:
-                async with session.post(
-                    CMR_GRANULE_URL,
-                    data=body,
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as resp:
-                    if resp.status == 429:
-                        await asyncio.sleep(0.5 * (2 ** attempt))
-                        continue
-                    if resp.status != 200:
-                        return set()
+    try:
+        items = await async_cmr_post_items(CMR_GRANULE_URL, body, session, sem)
+    except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+        logger.warning(
+            "CMR query failed for burst %s: %s; result NOT cached",
+            burst.filename_pattern,
+            exc,
+        )
+        return set()
 
-                    data = await resp.json()
-                    product_ids = [item["meta"]["native-id"] for item in data.get("items", [])]
-                    cache.set("cmr_opera", cache_params, product_ids)
-                    return set(product_ids)
-
-            except (asyncio.TimeoutError, aiohttp.ClientError):
-                if attempt < 2:
-                    await asyncio.sleep(0.5 * (2 ** attempt))
-                    continue
-                return set()
-
-    return set()
+    product_ids = [item["meta"]["native-id"] for item in items]
+    cache.set("cmr_opera", cache_params, product_ids)
+    return set(product_ids)
 
 
 # =============================================================================
