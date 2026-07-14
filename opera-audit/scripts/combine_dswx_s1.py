@@ -29,7 +29,9 @@ import re
 import sqlite3
 import sys
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -493,32 +495,61 @@ def phase4_tile_sets_and_cycles(
     mgrs_db_path = str(tile_sets.resolve_mgrs_tile_db(mgrs_db_override))
     _log(f"  MGRS DB: {mgrs_db_path}")
 
-    mgrs_conn = sqlite3.connect(mgrs_db_path)
+    # Parallelize with 8 worker threads, each with its own sqlite connection.
+    workers = 8
+    _local = threading.local()
+    conns_lock = threading.Lock()
+    all_conns: list[sqlite3.Connection] = []
+
+    def _init_worker() -> None:
+        _local.conn = sqlite3.connect(mgrs_db_path, check_same_thread=False)
+        with conns_lock:
+            all_conns.append(_local.conn)
+
+    _QUERY = (
+        "SELECT mgrs_set_id, land_ocean_flag FROM mgrs_burst_db "
+        "WHERE (SELECT 1 FROM json_each(bursts) WHERE value = ?)"
+    )
+
+    def _lookup(rtc_id: str) -> tuple[str, list[tuple[str, str]]]:
+        burst_key = rtc_id.split("_")[3].lower().replace("-", "_")
+        rows = _local.conn.execute(_QUERY, (burst_key,)).fetchall()
+        return rtc_id, rows
+
     mgrs_set_to_rtc: dict[str, list[str]] = {}
     dropped_water = 0
     unmatched_bursts = 0
     t_start = time.monotonic()
+    _log(f"  Starting {workers}-thread MGRS DB lookups for {missing_count:,} RTCs...")
 
-    for idx, rtc_id in enumerate(missing_list, 1):
-        burst_key = rtc_id.split("_")[3].lower().replace("-", "_")
-        rows = mgrs_conn.execute(
-            "SELECT mgrs_set_id, land_ocean_flag FROM mgrs_burst_db "
-            "WHERE (SELECT 1 FROM json_each(bursts) WHERE value = ?)",
-            (burst_key,),
-        ).fetchall()
-        if not rows:
-            unmatched_bursts += 1
-        for mgrs_set_id, lof in rows:
-            if lof == "water":
-                dropped_water += 1
-                continue
-            mgrs_set_to_rtc.setdefault(mgrs_set_id, []).append(rtc_id)
-        if idx % 10_000 == 0:
-            elapsed = time.monotonic() - t_start
-            _log(f"  ... {idx:,}/{missing_count:,} RTCs resolved "
-                 f"({len(mgrs_set_to_rtc):,} tile sets, {elapsed:.0f}s)")
+    with ThreadPoolExecutor(max_workers=workers, initializer=_init_worker) as pool:
+        futures = [pool.submit(_lookup, rtc_id) for rtc_id in missing_list]
+        _log(f"  Submitted {len(futures):,} lookup futures, waiting for results...")
+        completed = 0
+        for fut in as_completed(futures):
+            rtc_id, rows = fut.result()
+            if not rows:
+                unmatched_bursts += 1
+            for mgrs_set_id, lof in rows:
+                if lof == "water":
+                    dropped_water += 1
+                    continue
+                mgrs_set_to_rtc.setdefault(mgrs_set_id, []).append(rtc_id)
+            completed += 1
+            # heartbeats: quick early feedback, then regular progress every 5K
+            if completed == 1 or completed == 100 or completed == 1_000 or completed % 5_000 == 0:
+                elapsed = time.monotonic() - t_start
+                rate = completed / elapsed if elapsed > 0 else 0
+                eta = (missing_count - completed) / rate if rate > 0 else 0
+                _log(f"  ... {completed:,}/{missing_count:,} RTCs resolved "
+                     f"({len(mgrs_set_to_rtc):,} tile sets, {elapsed:.1f}s, "
+                     f"{rate:.0f} RTC/s, ETA {eta/60:.1f}min)")
 
-    mgrs_conn.close()
+    for c in all_conns:
+        try:
+            c.close()
+        except sqlite3.Error:
+            pass
     elapsed = time.monotonic() - t_start
     _log(f"  Done: {len(mgrs_set_to_rtc):,} tile sets, "
          f"{dropped_water:,} water-dropped, {unmatched_bursts:,} unmatched "
