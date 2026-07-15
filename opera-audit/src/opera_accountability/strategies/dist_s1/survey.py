@@ -48,6 +48,7 @@ def survey_rtc(
     checkpoint: Optional[CheckpointStore] = None,
     chunk_days: Optional[int] = None,
 ) -> list[dict]:
+    logger.info("Surveying RTC-S1 products for DIST-S1 (venue=%s)", venue)
     ccid = CONFIG["products"]["RTC_S1"]["ccid"][venue]
     pattern = re.compile(CONFIG["products"]["RTC_S1"]["pattern"])
     unique_fields = tuple(CONFIG["products"]["RTC_S1"]["unique_fields"])
@@ -72,8 +73,10 @@ def survey_rtc(
                 "rtc_survey", chunk, shaped_chunk, fetched_count=len(cmr_records)
             )
         shaped = list(checkpoint.iter_payloads("rtc_survey"))
+        logger.info("RTC-S1 survey (checkpointed): %d raw records loaded", len(shaped))
     else:
         cmr_records = query_cmr(ccid, start, end, venue)
+        logger.info("RTC-S1 survey: fetched %d raw records from CMR", len(cmr_records))
         shaped = [
             {
                 "id": granule_id,
@@ -82,7 +85,9 @@ def survey_rtc(
             for record in cmr_records
             if (granule_id := _native_id(record))
         ]
-    return _dedupe_by_creation_ts(shaped, pattern, unique_fields)
+    deduped = _dedupe_by_creation_ts(shaped, pattern, unique_fields)
+    logger.info("RTC-S1 survey complete: %d unique records after dedup", len(deduped))
+    return deduped
 
 
 async def _fetch_dist_product_inputs(
@@ -120,6 +125,10 @@ async def survey_dist_async(
     checkpoint: Optional[CheckpointStore] = None,
     chunk_days: Optional[int] = None,
 ) -> tuple[list[dict], set[str]]:
+    logger.info(
+        "Surveying DIST-S1 products (venue=%s, max_concurrent=%d, prefer_s3=%s)",
+        venue, max_concurrent, prefer_s3,
+    )
     cfg = CONFIG["products"]["DIST_S1"]
     ccid = cfg["ccid"].get(venue)
     def query_range(range_start, range_end):
@@ -135,10 +144,23 @@ async def survey_dist_async(
         )
 
     if checkpoint is not None and start is not None and end is not None:
-        for chunk in generate_time_chunks(start, end, chunk_days):
+        chunks_list = list(generate_time_chunks(start, end, chunk_days))
+        for ci, chunk in enumerate(chunks_list):
             if checkpoint.is_chunk_complete("dist_survey", chunk):
+                logger.info(
+                    "[dist_survey] chunk %d/%d SKIP (already complete): %s -> %s",
+                    ci + 1, len(chunks_list), chunk.start.date(), chunk.end.date(),
+                )
                 continue
+            logger.info(
+                "[dist_survey] chunk %d/%d RUN: %s -> %s (querying + ISO XML download)",
+                ci + 1, len(chunks_list), chunk.start.date(), chunk.end.date(),
+            )
             cmr_records = query_range(chunk.start, chunk.end)
+            logger.info(
+                "[dist_survey] chunk %d/%d: fetched %d CMR records, starting ISO XML download",
+                ci + 1, len(chunks_list), len(cmr_records),
+            )
             semaphore = asyncio.Semaphore(max_concurrent)
             tasks = [
                 _fetch_dist_product_inputs(
@@ -147,6 +169,12 @@ async def survey_dist_async(
                 for product in cmr_records
             ]
             loaded = await asyncio.gather(*tasks)
+            logger.info(
+                "[dist_survey] chunk %d/%d: ISO XML download complete (%d succeeded, %d failed)",
+                ci + 1, len(chunks_list),
+                sum(1 for r in loaded if r is not None),
+                sum(1 for r in loaded if r is None),
+            )
             loaded_by_id = {
                 result["id"]: result for result in loaded if result is not None
             }
@@ -196,9 +224,14 @@ async def survey_dist_async(
             for payload in payloads
             if payload.get("loaded")
         ]
+        logger.info(
+            "DIST-S1 survey (checkpointed): %d products loaded, %d existing tile-times",
+            len(results), len(existing_tile_times),
+        )
         return results, existing_tile_times
 
     cmr_records = query_range(start, end)
+    logger.info("DIST-S1 survey (non-checkpointed): %d CMR records, downloading ISO XML", len(cmr_records))
 
     existing_tile_times = set()
     for product in cmr_records:
@@ -214,8 +247,13 @@ async def survey_dist_async(
         _fetch_dist_product_inputs(product, semaphore, max_retries, prefer_s3)
         for product in cmr_records
     ]
-    results = await asyncio.gather(*tasks)
-    return [result for result in results if result is not None], existing_tile_times
+    raw_results = await asyncio.gather(*tasks)
+    results = [result for result in raw_results if result is not None]
+    logger.info(
+        "DIST-S1 survey complete: %d products with ISO XML (%d existing tile-times)",
+        len(results), len(existing_tile_times),
+    )
+    return results, existing_tile_times
 
 
 def survey_dist(

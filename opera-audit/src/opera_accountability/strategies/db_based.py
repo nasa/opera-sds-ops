@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -41,6 +42,12 @@ class DBBasedStrategy(AccountabilityStrategy):
         **kwargs
     ) -> dict[str, Any]:
         """Run DB-based accountability analysis."""
+        t0 = time.monotonic()
+        logger.info(
+            "=== DB-based accountability START for %s (venue=%s, %s .. %s) ===",
+            self.product, venue, start_date.date(), end_date.date(),
+        )
+
         config = self.product_config.get("accountability", {}).get("db_based", {})
         
         # Get database path from config or parameter
@@ -66,13 +73,15 @@ class DBBasedStrategy(AccountabilityStrategy):
         if not db_path.exists():
             raise FileNotFoundError(f"Database file not found: {db_path}")
         
-        logger.info(f"Loading reference database from {db_path}")
+        logger.info("[Step 1/4] Loading reference database from %s", db_path)
         with db_path.open() as f:
             db_data = json.load(f)
         
         # Extract expected items from database
         # For DISP-S1-STATIC, this would be frame IDs
+        logger.info("[Step 2/4] Extracting expected items from database")
         expected_items = self._extract_expected_items(db_data, config)
+        logger.info("Extracted %d expected items from reference DB", len(expected_items))
         
         # Query CMR for products
         ccid = self.product_config["ccid"].get(venue)
@@ -94,7 +103,10 @@ class DBBasedStrategy(AccountabilityStrategy):
             keep=kwargs.get("keep_checkpoints", False),
             extra_identity={"db_path": str(db_path), "static": is_static},
         )
-        logger.info(f"Querying CMR for {self.product} from {start_date} to {end_date}")
+        logger.info(
+            "[Step 3/4] Querying CMR for %s (ccid=%s, static=%s)",
+            self.product, ccid, is_static,
+        )
 
         def project(granule: dict):
             native_id = granule.get("meta", {}).get("native-id")
@@ -117,7 +129,10 @@ class DBBasedStrategy(AccountabilityStrategy):
         )
         granules = list(checkpoint.iter_payloads("products"))
         
+        logger.info("Fetched %d %s granules from CMR", len(granules), self.product)
+
         # Extract actual items from CMR results
+        logger.info("[Step 4/4] Comparing expected vs. actual items")
         actual_items_raw = self._extract_actual_items(granules, config)
         
         # Filter actual items to only include those that are expected
@@ -132,6 +147,14 @@ class DBBasedStrategy(AccountabilityStrategy):
         actual_count = len(actual_items)
         missing_count = len(missing_items)
         
+        elapsed = time.monotonic() - t0
+        logger.info(
+            "=== DB-based accountability DONE for %s in %.1fs "
+            "(expected=%d, actual=%d, missing=%d, coverage=%.1f%%) ===",
+            self.product, elapsed, expected_count, actual_count, missing_count,
+            (actual_count / expected_count * 100) if expected_count > 0 else 0,
+        )
+
         results = {
             "strategy": self.get_strategy_name(),
             "expected": expected_count,

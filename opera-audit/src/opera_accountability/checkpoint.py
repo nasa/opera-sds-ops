@@ -603,6 +603,7 @@ def collect_paged_records(
 
     fetched_count = 0
     projected_count = 0
+    page_num = 0
     for page in pages:
         projected: list[tuple[str, Any]] = []
         page_count = 0
@@ -613,6 +614,12 @@ def collect_paged_records(
                 projected.append(value)
         fetched_count += page_count
         projected_count += store.upsert_records(namespace, projected)
+        page_num += 1
+        if page_num <= 3 or page_num % 10 == 0:
+            logger.info(
+                "[%s] page %d: %d fetched, %d projected so far",
+                namespace, page_num, fetched_count, projected_count,
+            )
         del projected
 
     store.mark_chunk_complete(
@@ -622,10 +629,11 @@ def collect_paged_records(
         stored_count=projected_count,
     )
     logger.info(
-        "Checkpointed %s chunk %d page-by-page: %d fetched, %d projected",
+        "Checkpointed %s chunk %d page-by-page: %d fetched, %d projected (%d pages)",
         namespace,
         chunk.index + 1,
         fetched_count,
         projected_count,
+        page_num,
     )
     return store.count_records(namespace)

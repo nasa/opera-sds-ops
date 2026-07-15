@@ -36,8 +36,15 @@ def _dedupe_by_creation_ts(
     """
     grouping_products_map = {}
     parse_failures = 0
+    total_items = len(items)
+    dedup_progress = max(100_000, total_items // 10)
 
-    for item in items:
+    for idx, item in enumerate(items):
+        if idx > 0 and idx % dedup_progress == 0:
+            logger.info(
+                "  ... dedup progress: %d / %d records (%d unique groups so far)",
+                idx, total_items, len(grouping_products_map),
+            )
         granule_id = item["id"]
         match = pattern.match(granule_id)
 

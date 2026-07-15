@@ -1,6 +1,7 @@
 """Date-count accountability strategy (ported from Chris's cmr_audit_tropo.py)."""
 
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Any
 from collections import defaultdict
@@ -38,6 +39,12 @@ class DateCountStrategy(AccountabilityStrategy):
         **kwargs,
     ) -> dict[str, Any]:
         """Run date-count accountability analysis."""
+        t0 = time.monotonic()
+        logger.info(
+            "=== Date-count accountability START for %s (venue=%s, %s .. %s) ===",
+            self.product, venue, start_date.date(), end_date.date(),
+        )
+
         config = self.product_config.get("accountability", {}).get("date_count", {})
         
         # Get expected count per day (default: 1)
@@ -62,7 +69,10 @@ class DateCountStrategy(AccountabilityStrategy):
             keep=kwargs.get("keep_checkpoints", False),
         )
 
-        logger.info(f"Querying CMR for {self.product} from {start_date} to {end_date}")
+        logger.info(
+            "[Step 1/3] Querying CMR for %s (ccid=%s, expected_per_day=%d)",
+            self.product, ccid, expected_per_day,
+        )
 
         def project(granule: dict):
             granule_id = granule["umm"]["GranuleUR"]
@@ -83,6 +93,7 @@ class DateCountStrategy(AccountabilityStrategy):
         )
         
         # Count only beginning dates owned by this half-open run window. CMR
+        logger.info("[Step 2/3] Counting granules by beginning date")
         # temporal search uses interval intersection, so it may return a
         # granule that begins before ``start_date`` or exactly at ``end_date``.
         # A same-day programmatic range still represents that one calendar day.
@@ -92,7 +103,14 @@ class DateCountStrategy(AccountabilityStrategy):
             end_day_exclusive = start_day + timedelta(days=1)
 
         date_counts = defaultdict(int)
+        counted = 0
         for granule in checkpoint.iter_payloads("products"):
+            counted += 1
+            if counted % 100_000 == 0:
+                logger.info(
+                    "  ... date counting: %d granules processed (%d unique dates so far)",
+                    counted, len(date_counts),
+                )
             begin_dt = granule.get("begin")
             if begin_dt:
                 begin_day = datetime.fromisoformat(
@@ -100,6 +118,7 @@ class DateCountStrategy(AccountabilityStrategy):
                 ).date()
                 if start_day <= begin_day < end_day_exclusive:
                     date_counts[begin_day.strftime("%Y-%m-%d")] += 1
+        logger.info("Date counting complete: %d granules, %d unique dates", counted, len(date_counts))
         
         # Ensure all dates in range are represented
         current = start_day
@@ -109,6 +128,8 @@ class DateCountStrategy(AccountabilityStrategy):
                 date_counts[date_str] = 0
             current += timedelta(days=1)
         
+        logger.info("[Step 3/3] Identifying missing dates (threshold=%d per day)", expected_per_day)
+
         # Identify missing dates (dates with fewer than expected count)
         missing_dates = {
             date: count for date, count in date_counts.items() 
@@ -121,6 +142,13 @@ class DateCountStrategy(AccountabilityStrategy):
         expected_total = total_dates * expected_per_day
         actual_total = sum(date_counts.values())
         
+        elapsed = time.monotonic() - t0
+        logger.info(
+            "=== Date-count accountability DONE for %s in %.1fs "
+            "(total_dates=%d, missing_dates=%d, expected_total=%d, actual_total=%d) ===",
+            self.product, elapsed, total_dates, missing_count, expected_total, actual_total,
+        )
+
         results = {
             "strategy": self.get_strategy_name(),
             "expected_per_day": expected_per_day,

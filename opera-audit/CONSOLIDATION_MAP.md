@@ -42,10 +42,10 @@ duplicates/duplicate_check.py (branch: main)
 **CLI:**
 ```bash
 # CMR source (default)
-opera-audit duplicates <PRODUCT> [--start] [--end] [--venue PROD|UAT] [--save]
+opera-audit duplicates <PRODUCT> [--start] [--end] [--venue PROD|UAT] [--no-save]
 
 # GRQ source (requires opensearch-py)
-opera-audit duplicates <PRODUCT> --venue GRQ --grq-url <url> [--start] [--end] [--save]
+opera-audit duplicates <PRODUCT> --venue GRQ --grq-url <url> [--start] [--end] [--no-save]
 ```
 
 ---
@@ -493,6 +493,18 @@ pick them up automatically.
   - Formats: `txt` (newline-separated IDs), `json` (structured)
   - Compatible with `daac_data_subscriber.py` for automated re-processing
 
+### Granular Logging
+- All modules use `logging.getLogger(__name__)` for module-level traceability
+- Log format: `%(asctime)s [%(levelname)s] %(name)s: %(message)s`
+- Key features:
+  - Step-level banners with elapsed time for every pipeline stage
+  - Per-page CMR pagination progress (pages 1-3, then every 10th, plus final summary)
+  - Per-chunk checkpoint progress with fetch counts and cumulative totals
+  - Per-N-record progress inside million-record loops (every 50k-100k records)
+  - Pipeline start/end banners with timing and key metrics
+  - Per-product progress when running all-product sweeps
+- Use `--verbose` for DEBUG-level output or `--quiet` for WARNING-only
+
 ### CLI
 - `src/opera_accountability/cli.py`
   - Unified CLI for all operations
@@ -502,8 +514,8 @@ pick them up automatically.
     - `opera-audit burst-coverage` - SLC burst-level coverage audit
     - `opera-audit dashboard` - Launch Streamlit dashboard
     - `opera-audit version` - Show version
-  - Options: `--venue PROD|UAT|GRQ`, `--grq-url`, `--save`, `--output-dir`,
-    `--check-end-conflicts`, `--memory-efficient`, `--recovery-format`,
+  - Options: `--venue PROD|UAT|GRQ`, `--grq-url`, `--save/--no-save` (default: save),
+    `--output-dir`, `--check-end-conflicts`, `--memory-efficient`, `--recovery-format`,
     `--low-memory`, `--chunk-days`, etc.
 
 ---

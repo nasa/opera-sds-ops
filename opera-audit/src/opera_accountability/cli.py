@@ -39,7 +39,7 @@ from .strategies.dswx_hls import analyze_accountability
 # still promotes to DEBUG below, and --quiet raises it back to WARNING.
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ def duplicates(
     end: Optional[str] = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
     venue: str = typer.Option("PROD", "--venue", "-v", help="Venue (PROD, UAT, or GRQ)"),
     grq_url: Optional[str] = typer.Option(None, "--grq-url", help="GRQ OpenSearch URL (required when --venue GRQ)"),
-    save: bool = typer.Option(False, "--save", help="Save reports to files (default: stdout only)"),
+    save: bool = typer.Option(True, "--save/--no-save", help="Save reports to files"),
     output_dir: str = typer.Option("./output", "--output-dir", "-o", help="Output directory (used with --save)"),
     check_end_conflicts: bool = typer.Option(False, "--check-end-conflicts", help="Check for DISP-S1 end conflicts (same frame+end date, different begin date)"),
     memory_efficient: bool = typer.Option(True, "--memory-efficient/--no-memory-efficient", help="Use memory-efficient batched processing (default: enabled)"),
@@ -401,7 +401,7 @@ def accountability(
     start: Optional[str] = typer.Option(None, "--start", help="Start date (YYYY-MM-DD)"),
     end: Optional[str] = typer.Option(None, "--end", help="End date (YYYY-MM-DD)"),
     venue: str = typer.Option("PROD", "--venue", "-v", help="Venue (PROD or UAT)"),
-    save: bool = typer.Option(False, "--save", help="Save reports to files (default: stdout only)"),
+    save: bool = typer.Option(True, "--save/--no-save", help="Save reports to files"),
     output_dir: str = typer.Option("./output", "--output-dir", "-o", help="Output directory (used with --save)"),
     recovery_format: Optional[str] = typer.Option(None, "--recovery-format", help="Recovery file format (txt, json). Generates recovery files for missing products."),
     db_path: Optional[str] = typer.Option(None, "--db-path", help="Database path for db_based strategy (e.g., frame-to-burst JSON)"),
@@ -1198,6 +1198,11 @@ def _run_duplicates_all(
     else:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days_back)
+
+    logger.info(
+        "=== Duplicate detection ALL products START (venue=%s, %s .. %s) ===",
+        venue, start_date.date(), end_date.date(),
+    )
     
     if not quiet:
         console.print(Panel(
@@ -1212,6 +1217,7 @@ def _run_duplicates_all(
     # Run duplicate detection for each product
     all_results = {}
     for product in CONFIG["products"].keys():
+        logger.info("--- Duplicates: starting product %s ---", product)
         if not quiet:
             console.print(f"\n[cyan]Processing {product}...[/cyan]")
         
@@ -1413,6 +1419,7 @@ def _run_duplicates_all(
                     checkpoint.close()
             
             all_results[product] = results
+            logger.info("--- Duplicates: finished product %s ---", product)
             
             if not quiet:
                 if check_end_conflicts and product == "DISP_S1":
@@ -1425,9 +1432,12 @@ def _run_duplicates_all(
                 save_reports(results, output_dir, product, "duplicates", venue, start_date=start_date, end_date=end_date)
         
         except Exception as e:
+            logger.error("Duplicates: %s failed: %s", product, e, exc_info=True)
             if not quiet:
                 console.print(f"  [red]Error: {e}[/red]")
             all_results[product] = {"error": str(e)}
+
+    logger.info("=== Duplicate detection ALL products DONE ===")
     
     # Display summary table
     if not quiet:
@@ -1481,6 +1491,11 @@ def _run_accountability_all(
     # Get products with accountability enabled
     enabled_products = [p for p, config in CONFIG["products"].items() 
                        if config.get("accountability", {}).get("enabled", False)]
+
+    logger.info(
+        "=== Accountability ALL products START (venue=%s, %s .. %s, products=%d) ===",
+        venue, start_date.date(), end_date.date(), len(enabled_products),
+    )
     
     if not quiet:
         console.print(Panel(
@@ -1501,6 +1516,10 @@ def _run_accountability_all(
     all_results = {}
     for product in enabled_products:
         strategy_name = CONFIG["products"][product]["accountability"]["strategy"]
+        logger.info(
+            "--- Accountability: starting product %s (strategy=%s) ---",
+            product, strategy_name,
+        )
         
         if not quiet:
             console.print(f"\n[cyan]Processing {product} (strategy: {strategy_name})...[/cyan]")
@@ -1556,8 +1575,10 @@ def _run_accountability_all(
 
             if results is not None:
                 all_results[product] = results
+                logger.info("--- Accountability: finished product %s ---", product)
         
         except Exception as e:
+            logger.error("Accountability: %s failed: %s", product, e, exc_info=True)
             if not quiet:
                 console.print(f"  [red]Error: {e}[/red]")
             all_results[product] = {"error": str(e)}

@@ -5,6 +5,7 @@ Ported from Riley's ``dswx-hls-input-map.py`` on PCM develop branch.
 
 import re
 import logging
+import time
 from datetime import datetime, timezone
 from os.path import basename
 from typing import Any
@@ -60,6 +61,12 @@ def analyze_accountability(
     Returns:
         Dict with accountability results including by_date and by_month breakdowns.
     """
+    t0 = time.monotonic()
+    logger.info(
+        "=== DSWx-HLS accountability analysis START (%d DSWx + %d HLS granules) ===",
+        len(dswx_granules), len(hls_granules),
+    )
+
     if L9_CUTOFF is None:
         _parse_l9_cutoff()
 
@@ -72,9 +79,16 @@ def analyze_accountability(
     # Uses tuple key to match PCM's grouping (HLS ID + acquisition date facet).
     hls_to_dswx: dict[tuple[str, str], list[str]] = {}
 
-    logger.info(f"Processing {len(dswx_granules)} DSWx-HLS granules")
+    logger.info("[Step 1/4] Extracting HLS inputs from %d DSWx-HLS granules", len(dswx_granules))
+    total_dswx = len(dswx_granules)
+    dswx_progress = max(50_000, total_dswx // 10)
 
-    for granule in dswx_granules:
+    for idx, granule in enumerate(dswx_granules):
+        if idx > 0 and idx % dswx_progress == 0:
+            logger.info(
+                "  ... DSWx input extraction: %d / %d granules (%d HLS inputs found)",
+                idx, total_dswx, len(hls_to_dswx),
+            )
         granule_id = granule["umm"]["GranuleUR"]
         input_granules = granule["umm"].get("InputGranules", [])
         acq_time_str = granule["umm"]["TemporalExtent"]["RangeDateTime"]["BeginningDateTime"]
@@ -98,13 +112,20 @@ def analyze_accountability(
                     product_ids.append(granule_id)
 
     n_dswx_hls_inputs = len(hls_to_dswx)
-    logger.info(f"Mapped DSWx to {n_dswx_hls_inputs} unique HLS inputs")
-    logger.info(f"Processing {len(hls_granules)} HLS granules")
+    logger.info("Mapped DSWx to %d unique HLS inputs", n_dswx_hls_inputs)
+    logger.info("[Step 2/4] Processing %d HLS granules (L9 cutoff=%s)", len(hls_granules), L9_CUTOFF)
 
     # Process HLS granules and filter L9
     filtered_hls = []
+    total_hls = len(hls_granules)
+    hls_progress = max(50_000, total_hls // 10)
 
-    for granule in hls_granules:
+    for idx, granule in enumerate(hls_granules):
+        if idx > 0 and idx % hls_progress == 0:
+            logger.info(
+                "  ... HLS filtering: %d / %d granules (%d passed so far)",
+                idx, total_hls, len(filtered_hls),
+            )
         granule_id = granule["umm"]["GranuleUR"]
         acq_time_str = granule["umm"]["TemporalExtent"]["RangeDateTime"]["BeginningDateTime"]
         acq_time = datetime.fromisoformat(acq_time_str.replace("Z", "+00:00"))
@@ -123,12 +144,13 @@ def analyze_accountability(
         if (granule_id, date_facet) not in hls_to_dswx:
             hls_to_dswx[(granule_id, date_facet)] = []
 
-    logger.info(f"After L9 filtering: {len(filtered_hls)} HLS granules")
+    logger.info("After L9 filtering: %d HLS granules", len(filtered_hls))
     logger.info(
-        f"Found {len(hls_to_dswx) - n_dswx_hls_inputs} HLS granules "
-        f"not mapped to an OPERA DSWx-HLS product"
+        "Found %d HLS granules not mapped to any OPERA DSWx-HLS product",
+        len(hls_to_dswx) - n_dswx_hls_inputs,
     )
 
+    logger.info("[Step 3/4] Grouping by date and aggregating counts")
     # Group by date (ported from PCM dswx-hls-input-map.py)
     date_map: dict[str, dict[str, list[str]]] = {}
     hls_mappings: dict[str, list[str]] = {}
@@ -160,6 +182,7 @@ def analyze_accountability(
             for k in day_counts:
                 by_month[month_str][k] += day_counts[k]
 
+    logger.info("[Step 4/4] Identifying missing DSWx outputs and duplicates")
     # Find missing DSWx outputs
     missing = [hls_id for hls_id, dswx_list in hls_mappings.items() if len(dswx_list) == 0]
 
@@ -184,8 +207,14 @@ def analyze_accountability(
         "hls_to_no_dswx": sum(v["hls_to_no_dswx"] for v in by_date.values()),
     }
 
-    logger.info(f"Found {len(missing)} HLS granules with no DSWx output")
-    logger.info(f"Found {len(duplicates)} DSWx-HLS duplicates")
+    elapsed = time.monotonic() - t0
+    logger.info("Found %d HLS granules with no DSWx output", len(missing))
+    logger.info("Found %d DSWx-HLS duplicates", len(duplicates))
+    logger.info(
+        "=== DSWx-HLS accountability analysis DONE in %.1fs "
+        "(expected=%d, missing=%d) ===",
+        elapsed, len(filtered_hls), len(missing),
+    )
 
     return {
         "expected": len(filtered_hls),

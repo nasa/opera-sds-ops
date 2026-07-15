@@ -242,6 +242,8 @@ def validate_cycle_coverage(
         threshold,
         workers,
     )
+    validated_count = 0
+    total_buckets = len(cycle_map)
     with ThreadPoolExecutor(max_workers=min(workers, len(cycle_map))) as pool:
         items = list(cycle_map.items())
         submit_batch_size = max(100, workers * 8)
@@ -268,6 +270,15 @@ def validate_cycle_coverage(
             for future in as_completed(futures):
                 bucket_key, is_valid, detail = future.result()
                 (valid if is_valid else dropped)[bucket_key] = detail
+                validated_count += 1
+
+            logger.info(
+                "  ... validated %d / %d cycle buckets (valid=%d, dropped=%d)",
+                validated_count,
+                total_buckets,
+                len(valid),
+                len(dropped),
+            )
 
     valid = {key: valid[key] for key in sorted(valid)}
     dropped = {key: dropped[key] for key in sorted(dropped)}

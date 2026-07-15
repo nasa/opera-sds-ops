@@ -31,6 +31,10 @@ for detailed documentation of the consolidation process.
 - **Burst-level coverage audit** for CSLC-S1 and RTC-S1: derive expected
   bursts from each SLC's ESA annotation XML and `manifest.safe`, check CMR for matching products, report
   coverage gaps with streaming JSONL support for long date ranges. *[Gerald]*
+- **Granular operational logging** with step-level banners, per-page CMR
+  pagination progress, per-chunk checkpoint progress, and per-N-record
+  progress inside million-record loops — all emitted via Python `logging`
+  with module-level traceability (`%(name)s`).
 - **CLI** built on Typer + Rich (`opera-audit duplicates`, `accountability`,
   `burst-coverage`, `dashboard`).
 - **Streamlit dashboard** with per-product panels, status pills
@@ -92,25 +96,25 @@ pip install -e ".[test]"
 
 ### Usage
 
-**Check for duplicates (last 7 days):**
+**Check for duplicates (last 7 days, reports saved by default):**
 ```bash
 opera-audit duplicates DSWX_HLS --days-back 7
 ```
 
-**Check for duplicates (specific date range, save to files):**
+**Check for duplicates (specific date range):**
 ```bash
-opera-audit duplicates RTC_S1 --start 2026-01-01 --end 2026-01-21 --save
+opera-audit duplicates RTC_S1 --start 2026-01-01 --end 2026-01-21
 ```
 
 **Check for DISP-S1 end-conflicts (same frame + end-date, different begin-date):**
 ```bash
-opera-audit duplicates DISP_S1 --check-end-conflicts --start 2026-02-01 --end 2026-02-07 --save
+opera-audit duplicates DISP_S1 --check-end-conflicts --start 2026-02-01 --end 2026-02-07
 ```
 
 **Memory-efficient mode for very large windows:**
 ```bash
 opera-audit duplicates RTC_S1 --start 2026-01-01 --end 2026-03-01 \
-    --chunk-days 30 --save
+    --chunk-days 30
 ```
 
 ### Resumable chunking and checkpoints
@@ -141,6 +145,7 @@ opera-audit accountability DSWX_S1 \
 - `--no-resume` discards a compatible prior run and starts over.
 - `--checkpoint-dir PATH` changes the checkpoint root.
 - `--keep-checkpoints` retains state after success for audit/debugging.
+- `--no-save` disables automatic report saving (reports are saved by default).
 - `--no-chunking` runs accountability or burst coverage as one range.
 - Successful runs remove checkpoints unless `--keep-checkpoints` is set;
   interrupted and failed runs retain them for resume.
@@ -149,7 +154,7 @@ opera-audit accountability DSWX_S1 \
 **Check for duplicates from GRQ (OpenSearch) instead of CMR:**
 ```bash
 opera-audit duplicates DSWX_HLS --venue GRQ --grq-url https://grq.example.com \
-    --start 2026-01-01 --end 2026-01-21 --save
+    --start 2026-01-01 --end 2026-01-21
 ```
 
 **SLC burst-level coverage audit (replaces legacy cmr_audit_slc.py):**
@@ -160,11 +165,11 @@ opera-audit burst-coverage --start 2026-02-01 --end 2026-02-07 --save
 **Run accountability analysis for a specific product:**
 ```bash
 # DSWX-HLS (strategy: dswx_hls)
-opera-audit accountability DSWX_HLS --start 2026-02-01 --end 2026-02-07 --save
+opera-audit accountability DSWX_HLS --start 2026-02-01 --end 2026-02-07
 
 # DSWX-S1 (5-step pipeline; requires an MGRS tile-collection SQLite DB)
 opera-audit accountability DSWX_S1 \
-    --start 2026-02-01 --end 2026-02-07 --save \
+    --start 2026-02-01 --end 2026-02-07 \
     --mgrs-db /path/to/MGRS_tile_collection_v0.3.sqlite
 
 # Inspect raw missing RTCs without validating real tile-set coverage
@@ -175,17 +180,17 @@ opera-audit accountability DSWX_S1 \
 
 # DIST-S1 (ISO-XML pipeline; tune downloads if needed)
 opera-audit accountability DIST_S1 \
-    --start 2026-02-01 --end 2026-02-07 --save \
+    --start 2026-02-01 --end 2026-02-07 \
     --max-concurrent 10 --max-retries 3
 ```
 
 **Sweep all products in one command:**
 ```bash
 # All duplicate checks (omit product argument)
-opera-audit duplicates --start 2026-02-01 --end 2026-02-07 --save
+opera-audit duplicates --start 2026-02-01 --end 2026-02-07
 
 # All accountability strategies that are enabled in config.yaml (omit product argument)
-opera-audit accountability --start 2026-02-01 --end 2026-02-07 --save
+opera-audit accountability --start 2026-02-01 --end 2026-02-07
 ```
 
 **Launch the dashboard:**
@@ -388,6 +393,29 @@ The dashboard has four tabs:
   coverage % bar chart, found vs missing stacked chart, missing burst
   detail tables with TXT / JSON export.
 
+## Logging
+
+All modules use Python's `logging` library with module-level loggers
+(`logging.getLogger(__name__)`).
+The default log format includes timestamps, level, and module name for
+traceability:
+
+```
+2026-07-15 08:25:47,481 [INFO] opera_accountability.duplicates: Starting memory-efficient duplicate detection ...
+2026-07-15 08:25:51,650 [INFO] opera_accountability.cmr: CMR page 1 (PROD, ccid=C2617126679-POCLOUD): 2000 cumulative granules (4.2s)
+2026-07-15 08:26:36,952 [INFO] opera_accountability.checkpoint: [granule_ids] chunk 1/6 DONE: 18363 fetched (cumulative stored: 18363)
+```
+
+Key logging features:
+- **Step-level banners** with elapsed time for every pipeline stage
+- **Per-page CMR progress** (pages 1-3, then every 10th page, plus final summary)
+- **Per-chunk checkpoint progress** showing fetch counts and cumulative totals
+- **Per-N-record progress** inside million-record loops (every 50k-100k records)
+- **Pipeline start/end banners** with timing and key metrics
+- **Per-product progress** when running all-product sweeps
+
+Use `--verbose` for DEBUG-level output or `--quiet` for WARNING-only.
+
 ## Configuration
 
 Edit `src/opera_accountability/config.yaml` to:
@@ -443,7 +471,8 @@ Key files:
 - `duplicates.py` — duplicate detection (regular + DISP-S1 end-conflict mode).
 - `reports.py` — JSON / text / summary report generation.
 - `recovery_file.py` — recovery-file writers for missing products.
-- `cli.py` — Typer-based CLI (`opera-audit …`).
+- `cli.py` — Typer-based CLI (`opera-audit …`). Reports are saved by
+  default (`--save` is `True`); use `--no-save` to disable.
 - `dashboard.py` — Streamlit dashboard.
 - `burst_coverage.py` / `slc_annotations.py` — Gerald’s SLC burst coverage.
 - `strategies/dswx_hls/` — DSWX-HLS accountability (HLS input mapping).

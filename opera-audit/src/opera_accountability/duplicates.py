@@ -72,6 +72,10 @@ def get_granules_from_grq(
 
     query: dict[str, Any] = {"query": {"bool": {"must": [temporal_query]}}}
 
+    logger.info(
+        "Scanning GRQ index %s (url=%s, start=%s, end=%s)",
+        index, grq_url, start, end,
+    )
     granules: list[dict] = []
     for hit in scan(client, index=index, query=query, scroll="5m", size=2000):
         native_id = hit["_source"].get("metadata", {}).get("FileName", "")
@@ -80,6 +84,8 @@ def get_granules_from_grq(
         if test_pattern and not test_pattern.match(native_id):
             continue
         granules.append({"umm": {"GranuleUR": native_id}})
+        if len(granules) % 50000 == 0:
+            logger.info("  ... scanned %d granules from GRQ so far", len(granules))
 
     logger.info(
         "Fetched %d granules from GRQ index %s (url=%s)", len(granules), index, grq_url
@@ -134,7 +140,7 @@ def detect_duplicates(cmr_granules: list[dict], product: str) -> dict[str, Any]:
     # Extract granule IDs from CMR response
     granule_ids = [g["umm"]["GranuleUR"] for g in cmr_granules]
 
-    logger.info(f"Processing {len(granule_ids)} granules for {product}")
+    logger.info("Processing %d granules for %s duplicate detection", len(granule_ids), product)
 
     # Track unique granules: {unique_id_tuple: (granule_id, repr(unique_id_tuple))}
     unique_granules = {}
@@ -144,7 +150,17 @@ def detect_duplicates(cmr_granules: list[dict], product: str) -> dict[str, Any]:
     granule_month_map = {}
     parse_failures = 0
 
-    for granule_id in granule_ids:
+    total_granules = len(granule_ids)
+    progress_interval = max(100_000, total_granules // 10)
+    for idx, granule_id in enumerate(granule_ids):
+        if idx > 0 and idx % progress_interval == 0:
+            logger.info(
+                "  ... %s duplicate scan: %d / %d processed (%d unique, %d duplicates so far)",
+                product, idx, total_granules,
+                len(unique_granules),
+                sum(m["n_duplicates"] for m in granule_month_map.values()),
+            )
+
         match = pattern.match(granule_id)
 
         if match is None:
@@ -342,14 +358,24 @@ def detect_disp_s1_end_conflicts(cmr_granules: list[dict]) -> dict[str, Any]:
         }
     """
     granule_ids = [g["umm"]["GranuleUR"] for g in cmr_granules]
-    logger.info(f"Processing {len(granule_ids)} DISP-S1 granules for end conflicts")
+    logger.info(
+        "Processing %d DISP-S1 granules for end conflict detection", len(granule_ids)
+    )
 
     # Group by frame+end datetime (Gerald's original: line 380-400)
     # Store (begin_dt, production_dt, version, granule_id) tuples
     end_grouped = defaultdict(list)
     parse_failures = 0
     
-    for granule in cmr_granules:
+    total_granules = len(cmr_granules)
+    progress_interval = max(100_000, total_granules // 10)
+    for idx, granule in enumerate(cmr_granules):
+        if idx > 0 and idx % progress_interval == 0:
+            logger.info(
+                "  ... end-conflict grouping: %d / %d granules parsed (%d groups so far)",
+                idx, total_granules, len(end_grouped),
+            )
+
         granule_id = granule["umm"]["GranuleUR"]
         match = DISP_S1_END_CONFLICT_PATTERN.match(granule_id)
         
@@ -436,6 +462,10 @@ def detect_disp_s1_end_conflicts_memory_efficient(
     if not ccid:
         raise ValueError(f"No CCID configured for DISP_S1 in {venue}")
 
+    logger.info(
+        "Starting DISP-S1 end-conflict detection (venue=%s, %s .. %s)",
+        venue, start_date.date(), end_date.date(),
+    )
     checkpoint = CheckpointStore(
         command="duplicates_end_conflicts",
         product="DISP_S1",
@@ -523,10 +553,16 @@ def detect_duplicates_memory_efficient(
     if end_date is None:
         end_date = datetime.now()
 
+    logger.info(
+        "Starting memory-efficient duplicate detection for %s "
+        "(venue=%s, %s .. %s, batch_size=%d)",
+        product, venue, start_date.date(), end_date.date(), batch_size,
+    )
+
     # Generate time chunks and persist only the GranuleUR projection. Stable
     # keys remove CMR's inclusive-boundary overlap across adjacent chunks.
     time_chunks = list(generate_time_chunks(start_date, end_date, chunk_days))
-    logger.info(f"Split query into {len(time_chunks)} time chunks of ~{chunk_days} days each")
+    logger.info("Split query into %d time chunks of ~%d days each", len(time_chunks), chunk_days)
 
     checkpoint = CheckpointStore(
         command="duplicates",
@@ -566,9 +602,14 @@ def detect_duplicates_memory_efficient(
     granule_month_map = {}
     parse_failures = 0
 
+    logger.info("Processing %d unique granule IDs in batches of %d", len(granule_ids), batch_size)
     for batch_start in range(0, len(granule_ids), batch_size):
         batch_end = min(batch_start + batch_size, len(granule_ids))
         batch = granule_ids[batch_start:batch_end]
+        logger.info(
+            "  ... processing batch %d-%d / %d",
+            batch_start + 1, batch_end, len(granule_ids),
+        )
 
         for granule_id in batch:
             match = pattern.match(granule_id)
@@ -632,6 +673,10 @@ def detect_duplicates_memory_efficient(
 
     del granule_ids
     gc.collect()
+    logger.info(
+        "Duplicate analysis complete: %d unique, %d total processed",
+        len(unique_granules), total_products,
+    )
 
     if parse_failures > 0:
         logger.error(

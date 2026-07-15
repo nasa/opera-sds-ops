@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -73,6 +74,14 @@ def run(
     resume: bool = True,
     keep_checkpoints: bool = False,
 ) -> dict[str, Any]:
+    pipeline_t0 = time.monotonic()
+    logger.info(
+        "=== DIST-S1 accountability pipeline START (venue=%s, %s .. %s) ===",
+        venue,
+        start_date.date() if start_date else "open",
+        end_date.date() if end_date else "open",
+    )
+
     cfg = CONFIG["products"]["DIST_S1"]["accountability"]
     if max_concurrent is None:
         max_concurrent = cfg.get("max_concurrent_iso_downloads", 10)
@@ -105,6 +114,8 @@ def run(
             },
         )
 
+    logger.info("--- Step 1/3: RTC-S1 + DIST-S1 CMR survey ---")
+    step_t0 = time.monotonic()
     rtc_products = survey.survey_rtc(
         start_date,
         end_date,
@@ -123,6 +134,13 @@ def run(
         chunk_days=chunk_days,
     )
 
+    logger.info(
+        "--- Step 1/3 complete (%.1fs): %d RTCs, %d DIST-S1 products ---",
+        time.monotonic() - step_t0, len(rtc_products), len(dist_products),
+    )
+
+    logger.info("--- Step 2/3: Loading burst DB + analyzing accountability ---")
+    step_t0 = time.monotonic()
     bursts_to_products = load_dist_s1_bursts_to_products(burst_db)
     results = accountability.analyze(
         rtc_products,
@@ -131,6 +149,15 @@ def run(
         bursts_to_products=bursts_to_products,
     )
 
+    logger.info(
+        "--- Step 2/3 complete (%.1fs): expected=%s, actual=%s, missing=%d ---",
+        time.monotonic() - step_t0,
+        results.get("expected"),
+        results.get("actual"),
+        results.get("missing_count", 0),
+    )
+
+    logger.info("--- Step 3/3: Saving reports ---")
     if save:
         artifacts = {
             "rtc_survey": ("rtc_survey.json", rtc_products),
@@ -189,4 +216,9 @@ def run(
         checkpoint.mark_successful()
         checkpoint.close()
 
+    elapsed = time.monotonic() - pipeline_t0
+    logger.info(
+        "=== DIST-S1 accountability pipeline DONE in %.1fs ===",
+        elapsed,
+    )
     return results

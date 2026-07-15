@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import inspect
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -181,6 +182,14 @@ def run(
     # Fail fast on mis-configuration before any CMR traffic.
     _validate_sensor_config()
 
+    pipeline_t0 = time.monotonic()
+    logger.info(
+        "=== DSWx-S1 accountability pipeline START (venue=%s, %s .. %s) ===",
+        venue,
+        start_date.date() if start_date else "open",
+        end_date.date() if end_date else "open",
+    )
+
     generated_at = datetime.now()
     date_str = generated_at.strftime("%Y-%m-%d")
     report_dir = Path(output_dir) / "reports" / "accountability" / "DSWX_S1" / date_str
@@ -203,6 +212,8 @@ def run(
         )
 
     # --- Step 1: CMR survey -------------------------------------------------
+    step_t0 = time.monotonic()
+    logger.info("--- Step 1/5: CMR survey (RTC-S1 + DSWx-S1) ---")
     rtc_params = inspect.signature(survey.survey_rtc).parameters
     dswx_params = inspect.signature(survey.survey_dswx).parameters
     checkpoint_reducer = (
@@ -228,7 +239,14 @@ def run(
         **{key: value for key, value in survey_kwargs.items() if key in dswx_params},
     )
 
+    logger.info(
+        "--- Step 1/5 complete (%.1fs) ---",
+        time.monotonic() - step_t0,
+    )
+
     # --- Step 2: RTC → DSWx mapping + missing RTC set ----------------------
+    step_t0 = time.monotonic()
+    logger.info("--- Step 2/5: RTC → DSWx-S1 mapping ---")
     if checkpoint_reducer:
         map_results = mapping.analyze_checkpoint(checkpoint)
         rtc_surveyed_count = map_results.pop("rtc_surveyed")
@@ -239,6 +257,16 @@ def run(
         dswx_surveyed_count = len(dswx_products)
 
     missing_rtcs: list[str] = map_results["missing"]
+    logger.info(
+        "Step 2 results: expected=%s, actual=%s, missing=%s",
+        map_results["expected"],
+        map_results["actual"],
+        map_results["missing_count"],
+    )
+    logger.info(
+        "--- Step 2/5 complete (%.1fs) ---",
+        time.monotonic() - step_t0,
+    )
 
     if save:
         if checkpoint_reducer:
@@ -280,6 +308,8 @@ def run(
         del dswx_products
 
     # --- Steps 3 & 4: tile-set resolution + cycle/sensor expansion ---------
+    step_t0 = time.monotonic()
+    logger.info("--- Steps 3-4/5: tile-set resolution + cycle expansion ---")
     tile_set_map: dict[str, list[str]] = {}
     cycle_map: dict[str, list[str]] = {}
     db_path: Optional[Path] = None
@@ -291,6 +321,16 @@ def run(
     else:
         logger.info("No missing RTCs — skipping tile-set resolution and cycle expansion.")
 
+    logger.info(
+        "Steps 3-4 results: %d tile sets, %d cycle/sensor buckets",
+        len(tile_set_map),
+        len(cycle_map),
+    )
+    logger.info(
+        "--- Steps 3-4/5 complete (%.1fs) ---",
+        time.monotonic() - step_t0,
+    )
+
     if save:
         _write_json(report_dir / "missing_rtcs_to_tile_sets.json", tile_set_map)
         _write_json(report_dir / "missing_mgrs_set_cycle_indices.json", cycle_map)
@@ -298,6 +338,8 @@ def run(
         files["missing_mgrs_set_cycle_indices"] = report_dir / "missing_mgrs_set_cycle_indices.json"
 
     # --- Step 5: validate real RTC burst coverage --------------------------
+    step_t0 = time.monotonic()
+    logger.info("--- Step 5/5: RTC burst coverage validation ---")
     coverage_cfg = (
         CONFIG["products"]["DSWX_S1"]["accountability"].get("coverage_validation")
         or {}
@@ -321,6 +363,11 @@ def run(
         logger.info("No cycle buckets — coverage validation has nothing to check.")
     else:
         logger.info("DSWx-S1 real-coverage validation is disabled.")
+
+    logger.info(
+        "--- Step 5/5 complete (%.1fs) ---",
+        time.monotonic() - step_t0,
+    )
 
     recovery_candidates = (
         sorted(coverage_results["reduced"])
@@ -397,4 +444,14 @@ def run(
         checkpoint.mark_successful()
         checkpoint.close()
 
+    elapsed = time.monotonic() - pipeline_t0
+    logger.info(
+        "=== DSWx-S1 accountability pipeline DONE in %.1fs "
+        "(expected=%s, actual=%s, missing=%s, recovery=%d) ===",
+        elapsed,
+        results["expected"],
+        results["actual"],
+        results["missing_count"],
+        results["recovery_candidate_count"],
+    )
     return results

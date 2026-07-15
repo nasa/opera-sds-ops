@@ -181,31 +181,28 @@ def iter_cmr_pages(
         end_str = end_date.strftime("%Y-%m-%dT%H:%M:%SZ") if end_date else ""
         params["temporal[]"] = f"{start_str},{end_str}"
 
-    # Start timer and show initial message
+    # Start timer
     start_time = time.time()
-
-    # Show initial progress
-    print(f"\rQuerying CMR ({venue}): 0 granules retrieved | 00:00", end="", file=sys.stderr)
-    sys.stderr.flush()
+    page_size = CONFIG["cmr"]["page_size"]
 
     total = 0
+    page_num = 0
     headers: dict[str, str] = {}
     completed = False
     try:
         while True:
+            page_num += 1
             page_granules, search_after = _do_cmr_request(
                 cmr_url, params, headers
             )
             total += len(page_granules)
 
-            elapsed = int(time.time() - start_time)
-            elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
-            print(
-                f"\rQuerying CMR ({venue}): {total} granules retrieved | {elapsed_str}",
-                end="",
-                file=sys.stderr,
-            )
-            sys.stderr.flush()
+            elapsed = time.time() - start_time
+            if page_num <= 3 or page_num % 10 == 0 or not search_after:
+                logger.info(
+                    "CMR page %d (%s, ccid=%s): %d cumulative granules (%.1fs)",
+                    page_num, venue, collection_id, total, elapsed,
+                )
 
             if page_granules:
                 yield page_granules
@@ -214,10 +211,14 @@ def iter_cmr_pages(
                 break
             headers = {"CMR-Search-After": search_after}
     finally:
-        print(file=sys.stderr)
+        pass
 
     if completed:
-        logger.info("Retrieved %d granules from CMR", total)
+        elapsed = time.time() - start_time
+        logger.info(
+            "CMR query complete (ccid=%s): %d granules in %d pages (%.1fs)",
+            collection_id, total, page_num, elapsed,
+        )
 
 
 def query_cmr(
@@ -324,31 +325,33 @@ def query_cmr_by_short_name(
         params["temporal[]"] = f"{start_str},{end_str}"
 
     start_time = time.time()
+    page_num = 0
 
-    print(f"\rQuerying CMR ({venue}): 0 granules retrieved | 00:00", end="", file=sys.stderr)
-    sys.stderr.flush()
-
+    page_num += 1
     page_granules, search_after = _do_cmr_request(cmr_url, params)
     granules.extend(page_granules)
-
-    elapsed = int(time.time() - start_time)
-    elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
-    print(f"\rQuerying CMR ({venue}): {len(granules)} granules retrieved | {elapsed_str}", end="", file=sys.stderr)
-    sys.stderr.flush()
+    logger.info(
+        "CMR page %d (%s, short_name=%s): %d cumulative granules (%.1fs)",
+        page_num, venue, short_name, len(granules), time.time() - start_time,
+    )
 
     while search_after:
+        page_num += 1
         headers = {"CMR-Search-After": search_after}
         page_granules, search_after = _do_cmr_request(cmr_url, params, headers)
         granules.extend(page_granules)
 
-        elapsed = int(time.time() - start_time)
-        elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
-        print(f"\rQuerying CMR ({venue}): {len(granules)} granules retrieved | {elapsed_str}", end="", file=sys.stderr)
-        sys.stderr.flush()
+        if page_num <= 3 or page_num % 10 == 0 or not search_after:
+            logger.info(
+                "CMR page %d (%s, short_name=%s): %d cumulative granules (%.1fs)",
+                page_num, venue, short_name, len(granules), time.time() - start_time,
+            )
 
-    print(file=sys.stderr)
-
-    logger.info(f"Retrieved {len(granules)} granules from CMR")
+    elapsed = time.time() - start_time
+    logger.info(
+        "CMR query complete (short_name=%s): %d granules in %d pages (%.1fs)",
+        short_name, len(granules), page_num, elapsed,
+    )
     return granules
 
 

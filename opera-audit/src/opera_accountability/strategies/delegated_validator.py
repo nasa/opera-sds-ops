@@ -2,6 +2,7 @@
 
 import logging
 import sys
+import time
 from datetime import datetime
 from typing import Any
 from pathlib import Path
@@ -40,6 +41,12 @@ class DelegatedValidatorStrategy(AccountabilityStrategy):
         **kwargs
     ) -> dict[str, Any]:
         """Run delegated-validator accountability analysis."""
+        t0 = time.monotonic()
+        logger.info(
+            "=== Delegated-validator accountability START for %s (venue=%s, %s .. %s) ===",
+            self.product, venue, start_date.date(), end_date.date(),
+        )
+
         config = self.product_config.get("accountability", {}).get("delegated_validator", {})
         
         # Get validator module path (optional - if not configured, skip delegation)
@@ -64,7 +71,10 @@ class DelegatedValidatorStrategy(AccountabilityStrategy):
             resume=kwargs.get("resume", True),
             keep=kwargs.get("keep_checkpoints", False),
         )
-        logger.info(f"Querying CMR for {self.product} from {start_date} to {end_date}")
+        logger.info(
+            "[Step 1/2] Querying CMR for %s (ccid=%s)",
+            self.product, ccid,
+        )
         collect_chunked_records(
             store=checkpoint,
             namespace="products",
@@ -78,6 +88,7 @@ class DelegatedValidatorStrategy(AccountabilityStrategy):
             ),
         )
         granules = list(checkpoint.iter_payloads("products"))
+        logger.info("Fetched %d %s granules from CMR", len(granules), self.product)
         
         # If validator is configured, delegate to it
         if validator_module and validator_function:
@@ -93,7 +104,10 @@ class DelegatedValidatorStrategy(AccountabilityStrategy):
                 module = __import__(validator_module, fromlist=[validator_function])
                 validator_func = getattr(module, validator_function)
                 
-                logger.info(f"Delegating validation to {validator_module}.{validator_function}")
+                logger.info(
+                    "[Step 2/2] Delegating validation to %s.%s",
+                    validator_module, validator_function,
+                )
                 
                 # Pass validator-specific parameters from kwargs
                 processing_mode = kwargs.get("processing_mode", "forward")
@@ -123,8 +137,13 @@ class DelegatedValidatorStrategy(AccountabilityStrategy):
                     f"use basic (unvalidated) mode."
                 ) from e
         else:
-            logger.info("No validator configured, performing basic analysis")
+            logger.info("[Step 2/2] No validator configured, performing basic analysis")
             results = self._basic_analysis(granules)
+            elapsed = time.monotonic() - t0
+            logger.info(
+                "=== Delegated-validator accountability DONE for %s in %.1fs (actual=%d) ===",
+                self.product, elapsed, results.get("actual", 0),
+            )
             return self._finish_checkpoint(results, checkpoint, chunk_days, kwargs)
 
     @staticmethod

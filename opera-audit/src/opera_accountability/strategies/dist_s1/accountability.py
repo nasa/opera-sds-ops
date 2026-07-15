@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from ...burst_db import map_rtc_granules_to_product_groups
 from .utils import normalize_tile_time_key, reduce_product_id_times, rtc_acquisition_timestamp
+
+logger = logging.getLogger(__name__)
 
 
 def _product_id_times(product_group: str, rtc_granules: list[str]) -> list[str]:
@@ -21,10 +24,21 @@ def analyze(
     existing_tile_times: set[str],
     bursts_to_products: Optional[dict[str, list[str]]] = None,
 ) -> dict[str, Any]:
+    logger.info(
+        "DIST-S1 accountability analysis: %d RTCs, %d DIST products",
+        len(rtc_products), len(dist_products),
+    )
     rtc_ids = sorted({product["id"] for product in rtc_products})
     used_rtc_to_dist: dict[str, list[str]] = {}
 
-    for dist_product in dist_products:
+    total_dist = len(dist_products)
+    dist_progress = max(50_000, total_dist // 10)
+    for idx, dist_product in enumerate(dist_products):
+        if idx > 0 and idx % dist_progress == 0:
+            logger.info(
+                "  ... DIST-S1 input mapping: %d / %d products (%d unique RTCs so far)",
+                idx, total_dist, len(used_rtc_to_dist),
+            )
         dist_id = dist_product["id"]
         for rtc_id in dist_product.get("input_rtcs", []):
             used_rtc_to_dist.setdefault(rtc_id, []).append(dist_id)
@@ -32,6 +46,10 @@ def analyze(
     used_rtc_ids = set(used_rtc_to_dist)
     available_rtc_ids = set(rtc_ids)
     missing_rtcs = sorted(available_rtc_ids - used_rtc_ids)
+    logger.info(
+        "DIST-S1 accountability: %d available RTCs, %d used, %d missing",
+        len(available_rtc_ids), len(used_rtc_ids), len(missing_rtcs),
+    )
 
     missing_by_product_group: dict[str, list[str]] = {}
     missing_dist_rows = []

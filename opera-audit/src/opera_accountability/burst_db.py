@@ -90,11 +90,22 @@ def map_rtc_granules_to_product_groups(
     bursts_to_products: dict[str, list[str]],
 ) -> dict[str, list[str]]:
     mapped: dict[str, list[str]] = {}
-    for granule_id in rtc_granules:
+    total = len(rtc_granules)
+    progress_interval = max(50_000, total // 10)
+    for idx, granule_id in enumerate(rtc_granules):
+        if idx > 0 and idx % progress_interval == 0:
+            logger.info(
+                "  ... burst-to-product mapping: %d / %d RTCs (%d product groups so far)",
+                idx, total, len(mapped),
+            )
         burst_id = extract_rtc_burst_id(granule_id)
         if not burst_id:
             continue
         product_groups = bursts_to_products.get(normalize_burst_id(burst_id), [])
         for product_group in product_groups:
             mapped.setdefault(product_group, []).append(granule_id)
+    logger.info(
+        "Burst-to-product mapping complete: %d RTCs -> %d product groups",
+        total, len(mapped),
+    )
     return {group: sorted(set(granules)) for group, granules in sorted(mapped.items())}

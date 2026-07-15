@@ -52,14 +52,14 @@ opera-audit version
 ```bash
 opera-audit duplicates DSWX_HLS --days-back 7
 opera-audit duplicates RTC_S1 --start 2026-01-01 --end 2026-01-21 --venue PROD
-opera-audit duplicates DSWX_HLS --days-back 7 --save        # save reports to disk
+opera-audit duplicates DSWX_HLS --days-back 7 --no-save     # stdout only, skip saving
 opera-audit duplicates DSWX_HLS --days-back 7 --quiet       # minimal output (for cron)
 ```
 
 #### All Products at Once
 
 ```bash
-opera-audit duplicates --days-back 7 --save
+opera-audit duplicates --days-back 7
 ```
 
 Example output:
@@ -82,6 +82,8 @@ Example output:
 ```bash
 opera-audit duplicates DISP_S1 --days-back 30 --check-end-conflicts
 ```
+
+Reports are saved to `./output/reports/` by default. Use `--no-save` to disable.
 
 Detects cases where the same frame+end-date has multiple begin-dates (conflicting time-series segments).
 This is Gerald's "end-conflict" detection algorithm from `detect_cmr_duplicates_for_disp_s1.py`.
@@ -132,10 +134,10 @@ non-temporal chunk because they have no meaningful date partition.
 ```bash
 # Single product from GRQ
 opera-audit duplicates DSWX_HLS --venue GRQ --grq-url https://grq.example.com \
-    --start 2026-01-01 --end 2026-01-21 --save
+    --start 2026-01-01 --end 2026-01-21
 
 # All products from GRQ
-opera-audit duplicates --venue GRQ --grq-url https://grq.example.com --days-back 7 --save
+opera-audit duplicates --venue GRQ --grq-url https://grq.example.com --days-back 7
 ```
 
 Requires `opensearch-py` (`pip install -e ".[grq]"`). Each product's GRQ index pattern is configured via the `grq_index` field in `config.yaml`.
@@ -183,7 +185,7 @@ Replaces the deprecated `cmr_audit_slc.py`. Requires `shapely` (`pip install -e 
 #### DSWX_HLS
 
 ```bash
-opera-audit accountability DSWX_HLS --days-back 7 --save
+opera-audit accountability DSWX_HLS --days-back 7
 ```
 
 Example output:
@@ -202,14 +204,14 @@ Example output:
 
 ```bash
 # Pass DB path explicitly
-opera-audit accountability DSWX_S1 --days-back 7 --save --mgrs-db /path/to/MGRS_tile_collection.sqlite
+opera-audit accountability DSWX_S1 --days-back 7 --mgrs-db /path/to/MGRS_tile_collection.sqlite
 
 # Or set environment variable
 export OPERA_MGRS_DB=/path/to/MGRS_tile_collection.sqlite
-opera-audit accountability DSWX_S1 --days-back 7 --save
+opera-audit accountability DSWX_S1 --days-back 7
 
 # Optional: retain the raw four-stage result without real-coverage filtering
-opera-audit accountability DSWX_S1 --days-back 7 --save \
+opera-audit accountability DSWX_S1 --days-back 7 \
     --mgrs-db /path/to/MGRS_tile_collection.sqlite \
     --no-coverage-validation
 ```
@@ -223,13 +225,13 @@ SQLite DB is available from JPL Artifactory or the ADT package repo.
 
 ```bash
 # Basic DIST-S1 accountability (CMR-only)
-opera-audit accountability DIST_S1 --days-back 7 --save
+opera-audit accountability DIST_S1 --days-back 7
 
 # With burst DB for cross-checking
-opera-audit accountability DIST_S1 --days-back 7 --save --burst-db /path/to/burst_db.json
+opera-audit accountability DIST_S1 --days-back 7 --burst-db /path/to/burst_db.json
 
 # Tune download concurrency and retries
-opera-audit accountability DIST_S1 --days-back 7 --save \
+opera-audit accountability DIST_S1 --days-back 7 \
     --max-concurrent 10 --max-retries 3
 ```
 
@@ -242,7 +244,7 @@ opera-audit accountability DIST_S1 --days-back 7 --save \
 #### TROPO (Chris - date_count strategy)
 
 ```bash
-opera-audit accountability TROPO --days-back 30 --save
+opera-audit accountability TROPO --days-back 30
 ```
 
 **Strategy details:**
@@ -254,10 +256,10 @@ opera-audit accountability TROPO --days-back 30 --save
 
 ```bash
 # Uses pre-configured sample database
-opera-audit accountability DISP_S1_STATIC --days-back 30 --save
+opera-audit accountability DISP_S1_STATIC --days-back 30
 
 # Or override with custom database
-opera-audit accountability DISP_S1_STATIC --days-back 30 --save \
+opera-audit accountability DISP_S1_STATIC --days-back 30 \
     --db-path /path/to/your-frame-to-burst.json
 ```
 
@@ -270,7 +272,7 @@ opera-audit accountability DISP_S1_STATIC --days-back 30 --save \
 #### DISP_S1 (Gerald + Chris - delegated_validator)
 
 ```bash
-opera-audit accountability DISP_S1 --days-back 7 --save
+opera-audit accountability DISP_S1 --days-back 7
 ```
 
 **Strategy details:**
@@ -282,17 +284,17 @@ opera-audit accountability DISP_S1 --days-back 7 --save
 #### All Enabled Products
 
 ```bash
-opera-audit accountability --days-back 7 --save
+opera-audit accountability --days-back 7
 ```
 
 #### Recovery Files
 
 ```bash
 # Generate a text recovery file listing missing granule IDs
-opera-audit accountability DSWX_HLS --days-back 7 --save --recovery-format txt
+opera-audit accountability DSWX_HLS --days-back 7 --recovery-format txt
 
 # JSON format
-opera-audit accountability DIST_S1 --days-back 7 --save --recovery-format json
+opera-audit accountability DIST_S1 --days-back 7 --recovery-format json
 ```
 
 Recovery files are compatible with `daac_data_subscriber.py` for automated re-processing.
@@ -432,19 +434,19 @@ The `accountability` command for DSWX_S1 (when running all products) also requir
 
 ```bash
 export OPERA_MGRS_DB=/path/to/MGRS_tile_collection.sqlite
-opera-audit accountability --days-back 7 --save
+opera-audit accountability --days-back 7
 ```
 
 ## Integration with Cron
 
 ### Daily Duplicate Check (all products)
 ```bash
-0 2 * * * cd /path/to/opera-audit && source .venv/bin/activate && opera-audit duplicates --days-back 1 --save --quiet >> /var/log/opera-audit.log 2>&1
+0 2 * * * cd /path/to/opera-audit && source .venv/bin/activate && opera-audit duplicates --days-back 1 --quiet >> /var/log/opera-audit.log 2>&1
 ```
 
 ### Weekly Accountability Check
 ```bash
-0 3 * * 1 cd /path/to/opera-audit && source .venv/bin/activate && opera-audit accountability --days-back 7 --save --quiet >> /var/log/opera-audit.log 2>&1
+0 3 * * 1 cd /path/to/opera-audit && source .venv/bin/activate && opera-audit accountability --days-back 7 --quiet >> /var/log/opera-audit.log 2>&1
 ```
 
 ## Strategy Override Examples
@@ -453,10 +455,10 @@ You can override the default accountability strategy for any product:
 
 ```bash
 # Use forward_map strategy instead of dswx_hls for DSWX_HLS
-opera-audit accountability DSWX_HLS --strategy forward_map --days-back 7 --save
+opera-audit accountability DSWX_HLS --strategy forward_map --days-back 7
 
 # Use date_count for a custom product
-opera-audit accountability CUSTOM_PRODUCT --strategy date_count --days-back 30 --save
+opera-audit accountability CUSTOM_PRODUCT --strategy date_count --days-back 30
 ```
 
 **Available strategies:**
@@ -545,6 +547,26 @@ For detailed documentation of the consolidation:
 
 **Kevin:**
 - `opera-sds-pcm/tools/ops/cmr_audit/cmr_audit_dist_s1.py` → `src/opera_accountability/strategies/dist_s1/`
+
+## Logging
+
+All modules emit structured log lines via Python's `logging` library with
+module-level traceability (`%(name)s`):
+
+```
+2026-07-15 08:25:47 [INFO] opera_accountability.cli: === Duplicate detection ALL products START (venue=PROD, 2024-01-23 .. 2024-02-08) ===
+2026-07-15 08:25:51 [INFO] opera_accountability.cmr: CMR page 1 (PROD, ccid=C2617126679-POCLOUD): 2000 cumulative granules (4.2s)
+2026-07-15 08:26:36 [INFO] opera_accountability.checkpoint: [granule_ids] chunk 1/6 DONE: 18363 fetched (cumulative stored: 18363)
+2026-07-15 08:30:31 [INFO] opera_accountability.duplicates: Found 0 duplicate granule IDs out of 102220 granules (0.0%)
+```
+
+Progress is logged at granular intervals:
+- **CMR pagination**: pages 1-3, then every 10th page, plus a final summary
+- **Checkpoint chunks**: each chunk start/completion with cumulative counts
+- **Million-record loops**: every 50k-100k records (configurable per module)
+- **Pipeline stages**: start/end banners with elapsed time and metrics
+
+Use `--verbose` for DEBUG-level output or `--quiet` for WARNING-only.
 
 ## Troubleshooting
 

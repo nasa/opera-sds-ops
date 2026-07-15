@@ -2,6 +2,7 @@
 
 import re
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Any, Optional
 from collections import defaultdict
@@ -47,6 +48,12 @@ class ForwardMapStrategy(AccountabilityStrategy):
         3. Query CMR for actual outputs
         4. Find missing outputs (inputs that should have been processed but weren't)
         """
+        t0 = time.monotonic()
+        logger.info(
+            "=== Forward-map accountability START for %s (venue=%s, %s .. %s) ===",
+            self.product, venue, start_date.date(), end_date.date(),
+        )
+
         input_config = self.product_config.get("accountability", {}).get("forward_map", {})
         
         if not input_config:
@@ -77,7 +84,7 @@ class ForwardMapStrategy(AccountabilityStrategy):
         )
 
         # Step 1: Query CMR for INPUT products (Chris's line 217-218, 220-222)
-        logger.info(f"Querying CMR for input products from {start_date} to {end_date}")
+        logger.info("[Step 1/5] Querying CMR for input products (ccid=%s)", input_ccid)
         chunks = list(generate_time_chunks(start_date, end_date, chunk_days))
         collect_chunked_records(
             store=checkpoint,
@@ -94,6 +101,7 @@ class ForwardMapStrategy(AccountabilityStrategy):
         logger.info(f"Expected input (granules): {len(input_ids):,}")
         
         # Step 2: Generate expected output patterns from inputs (Chris's line 224-228)
+        logger.info("[Step 2/5] Generating expected output patterns from %d inputs", len(input_ids))
         input_to_outputs_map = defaultdict(set)
         output_to_inputs_map = defaultdict(set)
         expected_output_patterns = self._generate_output_patterns_from_inputs(
@@ -101,7 +109,7 @@ class ForwardMapStrategy(AccountabilityStrategy):
         )
         
         # Step 3: Query CMR for actual OUTPUT products (Chris's line 231)
-        logger.info(f"Querying CMR for {self.product} outputs")
+        logger.info("[Step 3/5] Querying CMR for %s output products (ccid=%s)", self.product, output_ccid)
         collect_chunked_records(
             store=checkpoint,
             namespace="outputs",
@@ -115,12 +123,16 @@ class ForwardMapStrategy(AccountabilityStrategy):
         )
         actual_output_ids = set(checkpoint.iter_payloads("outputs"))
         
+        logger.info("Found %d actual output IDs from CMR", len(actual_output_ids))
+
         # Step 4: Extract output prefixes (Chris's line 233-235)
+        logger.info("[Step 4/5] Comparing expected vs. actual output prefixes")
         expected_output_prefixes = {pattern.rstrip("*") for pattern in expected_output_patterns}
         actual_output_prefixes = self._extract_output_prefixes(actual_output_ids)
         missing_output_prefixes = expected_output_prefixes - actual_output_prefixes
         
         # Step 5: Map back to missing inputs (Chris's line 242-243)
+        logger.info("[Step 5/5] Mapping missing output prefixes back to input granules")
         missing_input_sets = [output_to_inputs_map[prefix] for prefix in missing_output_prefixes]
         missing_inputs = set()
         if missing_input_sets:
@@ -136,9 +148,15 @@ class ForwardMapStrategy(AccountabilityStrategy):
         actual_output_count = len(actual_output_prefixes)
         missing_output_count = len(missing_output_prefixes)
         
-        logger.info(f"Expected output prefixes: {expected_output_count:,}")
-        logger.info(f"Actual output prefixes: {actual_output_count:,}")
-        logger.info(f"Missing output prefixes: {missing_output_count:,}")
+        elapsed = time.monotonic() - t0
+        logger.info("Expected output prefixes: %s", f"{expected_output_count:,}")
+        logger.info("Actual output prefixes: %s", f"{actual_output_count:,}")
+        logger.info("Missing output prefixes: %s", f"{missing_output_count:,}")
+        logger.info("Missing input granules: %s", f"{len(missing_inputs):,}")
+        logger.info(
+            "=== Forward-map accountability DONE for %s in %.1fs ===",
+            self.product, elapsed,
+        )
         
         results = {
             "strategy": self.get_strategy_name(),
@@ -203,8 +221,15 @@ class ForwardMapStrategy(AccountabilityStrategy):
         Exact port of Chris's cmr_audit_hls.py:140-164
         """
         dswx_native_id_patterns = set()
+        total_hls = len(hls_ids)
+        hls_progress = max(100_000, total_hls // 10)
         
-        for granule in hls_ids:
+        for idx, granule in enumerate(hls_ids):
+            if idx > 0 and idx % hls_progress == 0:
+                logger.info(
+                    "  ... pattern generation: %d / %d HLS IDs (%d patterns so far)",
+                    idx, total_hls, len(dswx_native_id_patterns),
+                )
             # HLS pattern (Chris's line 143-149)
             m = re.match(
                 r"(?P<product_shortname>HLS[.]([LS])30)[.]"
@@ -249,7 +274,14 @@ class ForwardMapStrategy(AccountabilityStrategy):
             r"(?P<acquisition_ts>(?P<acq_year>\d{4})(?P<acq_month>\d{2})(?P<acq_day>\d{2})T(?P<acq_hour>\d{2})(?P<acq_minute>\d{2})(?P<acq_second>\d{2})Z)_"
         )
         prefixes = set()
-        for prefix in output_ids:
+        total_outputs = len(output_ids)
+        prefix_progress = max(100_000, total_outputs // 10)
+        for idx, prefix in enumerate(output_ids):
+            if idx > 0 and idx % prefix_progress == 0:
+                logger.info(
+                    "  ... prefix extraction: %d / %d output IDs",
+                    idx, total_outputs,
+                )
             m = re.match(dswx_regex_pattern, prefix)
             if m:
                 prefixes.add(m.group(0))

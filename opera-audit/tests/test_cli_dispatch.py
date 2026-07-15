@@ -69,7 +69,7 @@ def test_accountability_dswx_s1_passes_args_in_helper_order(monkeypatch, runner)
     assert args[0] == datetime(2025, 1, 1)
     assert args[1] == datetime(2025, 1, 2)
     assert args[2] == "PROD"
-    assert args[3] is False  # save
+    assert args[3] is True  # save (default)
     assert args[4] == "./output"  # output_dir default
     assert args[5] == "/tmp/mgrs.sqlite"  # mgrs_db
     assert args[6] is True  # quiet
@@ -103,7 +103,7 @@ def test_accountability_dist_s1_passes_args_in_helper_order(monkeypatch, runner)
     assert args[0] == datetime(2025, 1, 1)
     assert args[1] == datetime(2025, 1, 2)
     assert args[2] == "PROD"
-    assert args[3] is False  # save
+    assert args[3] is True  # save (default)
     assert args[4] == "./output"  # output_dir default
     assert args[5] == "/tmp/bursts.json"  # burst_db
     assert args[6] == 5  # max_concurrent
