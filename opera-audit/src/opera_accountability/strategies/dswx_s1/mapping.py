@@ -133,8 +133,13 @@ def analyze(
 
     # Build latest-ID lookup from surveyed (filtered) RTCs.
     rtc_id_to_latest: dict[tuple[str, str, str], str] = {}
-    for rec in rtc_filtered:
+    total_filtered = len(rtc_filtered)
+    latest_progress = max(100_000, total_filtered // 10)
+    for idx, rec in enumerate(rtc_filtered):
         rtc_id_to_latest[rtc_to_id_tuple(rec["id"])] = rec["id"]
+        if idx > 0 and idx % latest_progress == 0:
+            logger.info("  ... built latest-ID lookup: %d / %d RTCs", idx, total_filtered)
+    logger.info("Built latest-ID lookup for %d filtered RTCs", total_filtered)
 
     used_rtc_ids = set(rtc_to_dswx_map.keys())
     avail_rtc_ids = set(rtc_id_to_latest.keys())
@@ -154,10 +159,15 @@ def analyze(
     logger.info("Unused (missing) RTC count: %d", len(missing_rtc_products))
 
     # Serializable form of the mapping (str keys).
-    rtc_to_dswx_map_serializable = {
-        "$".join(key): sorted(set(dswx_ids))
-        for key, dswx_ids in rtc_to_dswx_map.items()
-    }
+    logger.info("Serializing RTC → DSWx-S1 map (%d entries)", len(rtc_to_dswx_map))
+    rtc_to_dswx_map_serializable = {}
+    total_map_entries = len(rtc_to_dswx_map)
+    serialize_progress = max(100_000, total_map_entries // 10)
+    for idx, (key, dswx_ids) in enumerate(rtc_to_dswx_map.items()):
+        rtc_to_dswx_map_serializable["$".join(key)] = sorted(set(dswx_ids))
+        if idx > 0 and idx % serialize_progress == 0:
+            logger.info("  ... serialized %d / %d map entries", idx, total_map_entries)
+    logger.info("Serialization complete (%d entries)", total_map_entries)
 
     return {
         "expected": len(avail_rtc_ids),
@@ -258,6 +268,7 @@ def analyze_checkpoint(
         logger.error("Skipped %d non-conformant DSWx-S1 records", dswx_failures)
 
     logger.info("Checkpoint reducer: filtering RTCs by sensor start dates")
+    filter_batch_count = 0
     for batch in _batches(checkpoint.iter_reduced_payloads("rtc_unique")):
         available = []
         for product in batch:
@@ -265,8 +276,13 @@ def analyze_checkpoint(
                 key = "$".join(rtc_to_id_tuple(product["id"]))
                 available.append((key, product["id"], product))
         checkpoint.upsert_reduced_records("available_rtcs", available)
+        filter_batch_count += 1
+        if filter_batch_count % 10 == 0:
+            logger.info("  ... filtered %d RTC-S1 batches by sensor start dates", filter_batch_count)
+    logger.info("Checkpoint reducer: sensor-date filtering done (%d batches)", filter_batch_count)
 
     logger.info("Checkpoint reducer: building RTC → DSWx-S1 usage map")
+    usage_batch_count = 0
     for batch in _batches(checkpoint.iter_reduced_payloads("dswx_unique")):
         used = []
         pairs = []
@@ -287,6 +303,10 @@ def analyze_checkpoint(
                 )
         checkpoint.upsert_reduced_records("used_rtcs", used)
         checkpoint.upsert_records("rtc_to_dswx_pairs", pairs)
+        usage_batch_count += 1
+        if usage_batch_count % 10 == 0:
+            logger.info("  ... processed %d DSWx-S1 usage-map batches", usage_batch_count)
+    logger.info("Checkpoint reducer: usage map done (%d batches)", usage_batch_count)
 
     logger.info("Checkpoint reducer: computing final set differences")
     expected = checkpoint.count_reduced_records("available_rtcs")

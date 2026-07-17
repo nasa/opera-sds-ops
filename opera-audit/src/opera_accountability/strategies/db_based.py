@@ -206,7 +206,9 @@ class DBBasedStrategy(AccountabilityStrategy):
         # Example: 'OPERA_L3_DISP-S1-STATIC_F16938_20140403_S1A_v1.0'
         # Frame ID is in position [3], with 'F' prefix and leading zeros
         items = set()
-        for granule in granules:
+        total_granules = len(granules)
+        parse_progress = max(50_000, total_granules // 10)
+        for idx, granule in enumerate(granules):
             # Try to get native-id from meta first, fall back to GranuleUR
             native_id = granule.get("meta", {}).get("native-id")
             if not native_id:
@@ -223,5 +225,7 @@ class DBBasedStrategy(AccountabilityStrategy):
                     logger.warning(f"Could not parse frame ID from: {native_id}")
             except (ValueError, IndexError) as e:
                 logger.warning(f"Failed to parse frame ID from {native_id}: {e}")
-        
+            if idx > 0 and idx % parse_progress == 0:
+                logger.info("  ... parsing actual items: %d / %d granules (%d unique items)", idx, total_granules, len(items))
+        logger.info("Parsed %d actual items from %d granules", len(items), total_granules)
         return items

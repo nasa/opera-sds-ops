@@ -25,7 +25,9 @@ def _native_id(record: dict) -> Optional[str]:
 
 def _dedupe_by_creation_ts(records: list[dict], pattern: re.Pattern, unique_fields: tuple[str, ...]) -> list[dict]:
     latest: dict[tuple, dict] = {}
-    for record in records:
+    total_records = len(records)
+    dedup_progress = max(100_000, total_records // 10)
+    for idx, record in enumerate(records):
         match = pattern.match(record["id"])
         if match is None:
             logger.warning("Skipping granule with unparseable ID: %s", record["id"])
@@ -36,6 +38,9 @@ def _dedupe_by_creation_ts(records: list[dict], pattern: re.Pattern, unique_fiel
         existing = latest.get(key)
         if existing is None or creation_ts > existing["_creation_ts"]:
             latest[key] = {**record, "_creation_ts": creation_ts}
+        if idx > 0 and idx % dedup_progress == 0:
+            logger.info("  ... dedup grouping: %d / %d records (%d unique so far)", idx, total_records, len(latest))
+    logger.info("Dedup grouping complete: %d records -> %d unique groups", total_records, len(latest))
     for record in latest.values():
         record.pop("_creation_ts", None)
     return list(latest.values())

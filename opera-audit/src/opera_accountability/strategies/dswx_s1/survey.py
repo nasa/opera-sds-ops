@@ -73,10 +73,15 @@ def _dedupe_by_creation_ts(
             parse_failures, len(items),
         )
 
-    for id_tuple in grouping_products_map:
+    total_groups = len(grouping_products_map)
+    dedup_sort_progress = max(100_000, total_groups // 10)
+    for idx, id_tuple in enumerate(grouping_products_map):
         grouping_products_map[id_tuple].sort(key=lambda x: x["_timestamp"], reverse=True)
         grouping_products_map[id_tuple] = grouping_products_map[id_tuple][0]
         del grouping_products_map[id_tuple]["_timestamp"]
+        if idx > 0 and idx % dedup_sort_progress == 0:
+            logger.info("  ... dedup final pass: %d / %d groups", idx, total_groups)
+    logger.info("Dedup final pass complete: %d unique groups", total_groups)
 
     return list(grouping_products_map.values())
 

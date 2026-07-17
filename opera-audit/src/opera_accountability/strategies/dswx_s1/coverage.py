@@ -73,9 +73,12 @@ def _load_tile_bursts(
 ) -> dict[str, list[str]]:
     """Load expected RTC burst IDs for every requested MGRS tile set."""
     result: dict[str, list[str]] = {}
+    total_ids = len(tile_set_ids)
+    load_progress = max(1000, total_ids // 10)
+    logger.info("Loading burst IDs for %d MGRS tile sets from DB", total_ids)
     with closing(sqlite3.connect(str(mgrs_db_path))) as conn:
         cursor = conn.cursor()
-        for tile_set_id in sorted(tile_set_ids):
+        for idx, tile_set_id in enumerate(sorted(tile_set_ids)):
             cursor.execute(_BURSTS_QUERY, (tile_set_id,))
             row = cursor.fetchone()
             if row is None:
@@ -83,6 +86,9 @@ def _load_tile_bursts(
                     f"MGRS tile set {tile_set_id} is missing from {mgrs_db_path}"
                 )
             result[tile_set_id] = _parse_bursts(row[0], tile_set_id)
+            if idx > 0 and idx % load_progress == 0:
+                logger.info("  ... loaded burst IDs for %d / %d tile sets", idx, total_ids)
+    logger.info("Loaded burst IDs for all %d tile sets", total_ids)
     return result
 
 
@@ -172,7 +178,11 @@ def reduce_valid_candidates(valid: dict[str, dict]) -> dict[str, list[str]]:
         for rtc_id in detail["candidate_rtc_ids"]:
             rtc_to_buckets.setdefault(rtc_id, set()).add(bucket_key)
 
+    initial_rtc_count = len(rtc_to_buckets)
+    logger.info("Reducing %d candidate RTCs across %d valid buckets", initial_rtc_count, len(valid))
+    reduce_progress = max(1000, initial_rtc_count // 10)
     reduced: dict[str, list[str]] = {}
+    iteration = 0
     while rtc_to_buckets:
         # Pick the RTC covering the most remaining buckets; lexical tie-break
         # makes report output stable across runs and worker completion order.
@@ -188,6 +198,13 @@ def reduce_valid_candidates(valid: dict[str, dict]) -> dict[str, list[str]]:
             if not rtc_to_buckets[other_rtc]:
                 del rtc_to_buckets[other_rtc]
 
+        iteration += 1
+        if iteration % reduce_progress == 0:
+            logger.info(
+                "  ... reduction iteration %d: %d RTCs remaining, %d selected so far",
+                iteration, len(rtc_to_buckets), len(reduced),
+            )
+    logger.info("Reduction complete: %d representative RTCs selected from %d candidates", len(reduced), initial_rtc_count)
     return reduced
 
 

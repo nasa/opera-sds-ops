@@ -61,7 +61,9 @@ def analyze(
             missing_rtcs,
             bursts_to_products,
         )
-        for product_group, granules in missing_by_product_group.items():
+        total_groups = len(missing_by_product_group)
+        group_progress = max(1000, total_groups // 10)
+        for grp_idx, (product_group, granules) in enumerate(missing_by_product_group.items()):
             product_id_times = _product_id_times(product_group, granules)
             retained = [value for value in product_id_times if value not in existing_tile_times]
             filtered_existing_count += len(product_id_times) - len(retained)
@@ -73,6 +75,15 @@ def analyze(
                 "rtc_granules": granules,
                 "product_id_time": retained,
             })
+            if grp_idx > 0 and grp_idx % group_progress == 0:
+                logger.info(
+                    "  ... product group filtering: %d / %d groups (%d missing products so far)",
+                    grp_idx, total_groups, len(missing_product_id_times),
+                )
+        logger.info(
+            "Product group filtering complete: %d groups, %d missing product times",
+            total_groups, len(missing_product_id_times),
+        )
 
     actual = len(available_rtc_ids & used_rtc_ids)
     return {

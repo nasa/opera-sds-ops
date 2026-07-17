@@ -606,7 +606,9 @@ async def process_slcs_to_expected_bursts(
 
     # Deduplicate: same burst can appear in overlapping SLCs
     unique: dict[tuple, ExpectedBurst] = {}
-    for slc in slcs:
+    total_slcs = len(slcs)
+    dedup_progress = max(1000, total_slcs // 10)
+    for slc_idx, slc in enumerate(slcs):
         # Filter requested polarizations to those the SLC actually supports.
         # Dual-pol SLCs (SDV/SDH) carry co- and cross-pol; single-pol SLCs
         # (SSV/SSH) carry co-pol only.  Without this filter, requesting
@@ -631,6 +633,8 @@ async def process_slcs_to_expected_bursts(
                         slc_native_id=slc.native_id,
                         slc_end_time=slc.end_time,
                     )
+        if slc_idx > 0 and slc_idx % dedup_progress == 0:
+            logger.info("  ... burst dedup: %d / %d SLCs (%d unique bursts so far)", slc_idx, total_slcs, len(unique))
 
     expected = list(unique.values())
     logger.info(f"  Unique bursts after dedup: {len(expected):,}")
@@ -802,7 +806,9 @@ async def audit_burst_coverage(
 
             # Step 2: Filter by polygon intersection
             filtered_ids = set()
-            for native_id, item in slc_details.items():
+            total_slc_details = len(slc_details)
+            filter_progress = max(1000, total_slc_details // 10)
+            for filt_idx, (native_id, item) in enumerate(slc_details.items()):
                 try:
                     points = (item.get("umm", {})
                               .get("SpatialExtent", {})
@@ -815,6 +821,8 @@ async def audit_burst_coverage(
                         filtered_ids.add(native_id)
                 except Exception:
                     filtered_ids.add(native_id)  # Include on error
+                if filt_idx > 0 and filt_idx % filter_progress == 0:
+                    logger.info("    ... polygon filtering: %d / %d SLCs (%d passed so far)", filt_idx, total_slc_details, len(filtered_ids))
 
             logger.info(f"  After polygon filtering: {len(filtered_ids)} SLCs")
 

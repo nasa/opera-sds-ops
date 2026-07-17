@@ -45,8 +45,11 @@ def expand_with_cycle_indices(
     sensor code. The returned mapping is sorted for stable diffs.
     """
     expanded: dict[str, list[str]] = {}
+    total_tile_sets = len(mgrs_set_to_rtc)
+    tile_set_progress = max(1000, total_tile_sets // 10)
+    rtc_count = 0
 
-    for tile_set, rtc_ids in mgrs_set_to_rtc.items():
+    for ts_idx, (tile_set, rtc_ids) in enumerate(mgrs_set_to_rtc.items()):
         for rtc in rtc_ids:
             match = _RTC_GRANULE_PATTERN.match(rtc)
             if match is None:
@@ -56,6 +59,12 @@ def expand_with_cycle_indices(
 
             key = f"{tile_set}${cycle}${sensor}"
             expanded.setdefault(key, []).append(rtc)
+            rtc_count += 1
+        if ts_idx > 0 and ts_idx % tile_set_progress == 0:
+            logger.info(
+                "  ... cycle expansion: %d / %d tile sets (%d RTCs processed, %d buckets so far)",
+                ts_idx, total_tile_sets, rtc_count, len(expanded),
+            )
 
     # Sort inner lists and outer keys deterministically.
     sorted_map = {
