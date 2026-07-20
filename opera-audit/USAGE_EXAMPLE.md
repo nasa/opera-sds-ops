@@ -21,19 +21,19 @@ uv pip install -e ".[dist_s1]"          # DIST-S1 S3 ISO-XML access
 
 ## Supported Products
 
-| Product | Duplicates | Accountability | Burst Coverage | Strategy | Notes |
-|---------|-----------|----------------|----------------|----------|-------|
-| DSWX_HLS | yes | yes | — | `dswx_hls` / `forward_map` | Chris |
-| RTC_S1 | yes | no | yes | — | Riley |
-| CSLC_S1 | yes | no | yes | — | Riley |
-| DSWX_S1 | yes | yes | — | `dswx_s1` | Riley, requires `--mgrs-db` |
-| DIST_S1 | yes | yes | — | `dist_s1` | Kevin, uses ISO-XML extraction |
-| DISP_S1 | yes | yes | — | `delegated_validator` | Gerald + Chris, supports `--check-end-conflicts` |
-| TROPO | yes | yes | — | `date_count` | Chris, counts by date |
-| DISP_S1_STATIC | yes | yes | — | `db_based` | Chris, sample DB included |
-| DIST_ALERT_HLS | yes | no | — | — | Riley |
-| CSLC_S1_STATIC | yes | no | — | — | Riley |
-| RTC_S1_STATIC | yes | no | — | — | Riley |
+| Product | Duplicates | Accountability | Burst Coverage | Strategy | Feature Owners / Provenance |
+|---|:---:|:---:|:---:|---|---|
+| `DSWX_HLS` | yes | yes | — | `dswx_hls` / `forward_map` | Duplicates: Riley; Accountability: Riley (`dswx_hls`) / Chris (`forward_map`) |
+| `RTC_S1` | yes | no | yes | — | Duplicates: Riley; Burst Coverage: Gerald |
+| `CSLC_S1` | yes | no | yes | — | Duplicates: Riley; Burst Coverage: Gerald |
+| `DSWX_S1` | yes | yes | — | `dswx_s1` | Duplicates: Riley; Accountability: Riley. Requires `--mgrs-db`. |
+| `DIST_S1` | yes | yes | — | `dist_s1` | Duplicates: Riley framework; Accountability: Kevin. Uses ISO-XML extraction. |
+| `DISP_S1` | yes | yes | — | `delegated_validator` | Duplicates: Riley; End-conflict detection: Gerald; Accountability: Chris. Supports `--check-end-conflicts`; accountability requires an external validator. |
+| `TROPO` | yes | yes | — | `date_count` | Duplicates: Riley; Accountability: Chris. Counts expected products by date. |
+| `DISP_S1_STATIC` | yes | yes | — | `db_based` | Duplicates: Riley framework; Accountability: Chris. Sample DB included; operational use needs the complete frame-to-burst DB. |
+| `DIST_ALERT_HLS` | yes | no | — | — | Duplicates: Riley. CMR only; no GRQ index is configured. |
+| `CSLC_S1_STATIC` | yes | no | — | — | Duplicates: Riley. |
+| `RTC_S1_STATIC` | yes | no | — | — | Duplicates: Riley. |
 
 **Note on products without accountability:** 5 products (RTC_S1, CSLC_S1, CSLC_S1_STATIC, RTC_S1_STATIC, DIST_ALERT_HLS) are **intermediate inputs** or **static layers** where duplicate detection is sufficient for operational monitoring. See README.md "Why Some Products Don't Have Accountability" for detailed explanation.
 

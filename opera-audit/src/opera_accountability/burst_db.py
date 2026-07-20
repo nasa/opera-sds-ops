@@ -37,7 +37,10 @@ def _coerce_bursts_to_products(data: Any) -> dict[str, list[str]]:
         raise ValueError("Could not locate bursts_to_products mapping in burst DB data")
 
     coerced = {}
-    for burst_id, product_groups in data.items():
+    total_bursts = len(data)
+    coerce_progress = max(50_000, total_bursts // 10)
+    logger.info("Coercing burst DB with %d burst entries", total_bursts)
+    for idx, (burst_id, product_groups) in enumerate(data.items()):
         if product_groups is None:
             values = []
         elif isinstance(product_groups, (set, tuple, list)):
@@ -45,6 +48,9 @@ def _coerce_bursts_to_products(data: Any) -> dict[str, list[str]]:
         else:
             values = [str(product_groups)]
         coerced[normalize_burst_id(str(burst_id))] = values
+        if idx > 0 and idx % coerce_progress == 0:
+            logger.info("  ... coerced %d / %d burst entries", idx, total_bursts)
+    logger.info("Burst DB coercion complete: %d burst entries", total_bursts)
     return coerced
 
 

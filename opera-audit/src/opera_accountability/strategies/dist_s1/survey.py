@@ -59,9 +59,18 @@ def survey_rtc(
     unique_fields = tuple(CONFIG["products"]["RTC_S1"]["unique_fields"])
 
     if checkpoint is not None and start is not None and end is not None:
-        for chunk in generate_time_chunks(start, end, chunk_days):
+        chunks_list = list(generate_time_chunks(start, end, chunk_days))
+        for ci, chunk in enumerate(chunks_list):
             if checkpoint.is_chunk_complete("rtc_survey", chunk):
+                logger.info(
+                    "[rtc_survey] chunk %d/%d SKIP (already complete): %s -> %s",
+                    ci + 1, len(chunks_list), chunk.start.date(), chunk.end.date(),
+                )
                 continue
+            logger.info(
+                "[rtc_survey] chunk %d/%d RUN: %s -> %s (querying CMR...)",
+                ci + 1, len(chunks_list), chunk.start.date(), chunk.end.date(),
+            )
             cmr_records = query_cmr(ccid, chunk.start, chunk.end, venue)
             shaped_chunk = [
                 (
@@ -76,6 +85,11 @@ def survey_rtc(
             ]
             checkpoint.commit_chunk(
                 "rtc_survey", chunk, shaped_chunk, fetched_count=len(cmr_records)
+            )
+            logger.info(
+                "[rtc_survey] chunk %d/%d DONE: %d fetched (cumulative stored: %d)",
+                ci + 1, len(chunks_list), len(cmr_records),
+                checkpoint.count_records("rtc_survey"),
             )
         shaped = list(checkpoint.iter_payloads("rtc_survey"))
         logger.info("RTC-S1 survey (checkpointed): %d raw records loaded", len(shaped))

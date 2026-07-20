@@ -210,19 +210,26 @@ def analyze_checkpoint(
     dswx_pattern = re.compile(CONFIG["products"]["DSWX_S1"]["pattern"])
     dswx_unique_fields = tuple(CONFIG["products"]["DSWX_S1"]["unique_fields"])
 
-    logger.info("Checkpoint reducer: clearing derived namespaces")
-    for namespace in (
+    derived_namespaces = (
         "rtc_unique",
         "dswx_unique",
         "available_rtcs",
         "used_rtcs",
         "rtc_to_dswx_pairs",
-    ):
+    )
+    total_namespaces = len(derived_namespaces)
+    logger.info("Checkpoint reducer: clearing %d derived namespaces", total_namespaces)
+    for ns_idx, namespace in enumerate(derived_namespaces, start=1):
+        logger.info(
+            "  ... clearing namespace %d/%d: %s", ns_idx, total_namespaces, namespace
+        )
         checkpoint.clear_namespace(namespace)
+    logger.info("Checkpoint reducer: cleared %d derived namespaces", total_namespaces)
 
     logger.info("Checkpoint reducer: deduplicating RTC-S1 survey records")
     rtc_failures = 0
     rtc_batch_count = 0
+    rtc_record_count = 0
     for batch in _batches(checkpoint.iter_payloads("rtc_survey")):
         reduced = []
         for product in batch:
@@ -237,13 +244,21 @@ def analyze_checkpoint(
             )
         checkpoint.upsert_reduced_records("rtc_unique", reduced)
         rtc_batch_count += 1
+        rtc_record_count += len(batch)
         if rtc_batch_count % 10 == 0:
-            logger.info("  ... processed %d RTC-S1 batches", rtc_batch_count)
-    logger.info("Checkpoint reducer: RTC-S1 dedup done (%d batches)", rtc_batch_count)
+            logger.info(
+                "  ... deduplicated %d RTC-S1 batches (%d records processed)",
+                rtc_batch_count, rtc_record_count,
+            )
+    logger.info(
+        "Checkpoint reducer: RTC-S1 dedup done (%d batches, %d records)",
+        rtc_batch_count, rtc_record_count,
+    )
 
     logger.info("Checkpoint reducer: deduplicating DSWx-S1 survey records")
     dswx_failures = 0
     dswx_batch_count = 0
+    dswx_record_count = 0
     for batch in _batches(checkpoint.iter_payloads("dswx_survey")):
         reduced = []
         for product in batch:
@@ -258,9 +273,16 @@ def analyze_checkpoint(
             )
         checkpoint.upsert_reduced_records("dswx_unique", reduced)
         dswx_batch_count += 1
+        dswx_record_count += len(batch)
         if dswx_batch_count % 10 == 0:
-            logger.info("  ... processed %d DSWx-S1 batches", dswx_batch_count)
-    logger.info("Checkpoint reducer: DSWx-S1 dedup done (%d batches)", dswx_batch_count)
+            logger.info(
+                "  ... deduplicated %d DSWx-S1 batches (%d records processed)",
+                dswx_batch_count, dswx_record_count,
+            )
+    logger.info(
+        "Checkpoint reducer: DSWx-S1 dedup done (%d batches, %d records)",
+        dswx_batch_count, dswx_record_count,
+    )
 
     if rtc_failures:
         logger.error("Skipped %d non-conformant RTC-S1 records", rtc_failures)
@@ -269,6 +291,8 @@ def analyze_checkpoint(
 
     logger.info("Checkpoint reducer: filtering RTCs by sensor start dates")
     filter_batch_count = 0
+    filter_record_count = 0
+    filter_available_count = 0
     for batch in _batches(checkpoint.iter_reduced_payloads("rtc_unique")):
         available = []
         for product in batch:
@@ -277,12 +301,23 @@ def analyze_checkpoint(
                 available.append((key, product["id"], product))
         checkpoint.upsert_reduced_records("available_rtcs", available)
         filter_batch_count += 1
+        filter_record_count += len(batch)
+        filter_available_count += len(available)
         if filter_batch_count % 10 == 0:
-            logger.info("  ... filtered %d RTC-S1 batches by sensor start dates", filter_batch_count)
-    logger.info("Checkpoint reducer: sensor-date filtering done (%d batches)", filter_batch_count)
+            logger.info(
+                "  ... filtered %d RTC-S1 batches by sensor start dates "
+                "(%d records checked, %d retained)",
+                filter_batch_count, filter_record_count, filter_available_count,
+            )
+    logger.info(
+        "Checkpoint reducer: sensor-date filtering done (%d batches, %d records, %d retained)",
+        filter_batch_count, filter_record_count, filter_available_count,
+    )
 
     logger.info("Checkpoint reducer: building RTC → DSWx-S1 usage map")
     usage_batch_count = 0
+    usage_record_count = 0
+    usage_pair_count = 0
     for batch in _batches(checkpoint.iter_reduced_payloads("dswx_unique")):
         used = []
         pairs = []
@@ -304,9 +339,18 @@ def analyze_checkpoint(
         checkpoint.upsert_reduced_records("used_rtcs", used)
         checkpoint.upsert_records("rtc_to_dswx_pairs", pairs)
         usage_batch_count += 1
+        usage_record_count += len(batch)
+        usage_pair_count += len(pairs)
         if usage_batch_count % 10 == 0:
-            logger.info("  ... processed %d DSWx-S1 usage-map batches", usage_batch_count)
-    logger.info("Checkpoint reducer: usage map done (%d batches)", usage_batch_count)
+            logger.info(
+                "  ... processed %d DSWx-S1 usage-map batches "
+                "(%d DSWx records, %d RTC→DSWx pairs)",
+                usage_batch_count, usage_record_count, usage_pair_count,
+            )
+    logger.info(
+        "Checkpoint reducer: usage map done (%d batches, %d records, %d pairs)",
+        usage_batch_count, usage_record_count, usage_pair_count,
+    )
 
     logger.info("Checkpoint reducer: computing final set differences")
     expected = checkpoint.count_reduced_records("available_rtcs")

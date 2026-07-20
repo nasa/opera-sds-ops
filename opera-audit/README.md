@@ -246,24 +246,25 @@ downstream re-processing workflows.
 
 ## Supported Products
 
-| Product           | Duplicates | Accountability strategy | Burst Coverage | Status | Source |
-| ----------------- | :--------: | ----------------------- | :------------: | ------ | ------ |
-| `DSWX_HLS`        |     ✅     | `dswx_hls` / `forward_map` | — | ✅ Production | Chris |
-| `RTC_S1`          |     ✅     | —                       | ✅ | — | Riley |
-| `CSLC_S1`         |     ✅     | —                       | ✅ | — | Riley |
-| `DSWX_S1`         |     ✅     | `dswx_s1` (needs MGRS DB) | — | ✅ Production | Riley |
-| `DIST_S1`         |     ✅     | `dist_s1`               | — | ✅ Production | Kevin |
-| `DISP_S1`         |     ✅     | `delegated_validator` ⚠️ | — | ⚠️ Needs validator | Gerald + Chris |
-| `TROPO`           |     ✅     | `date_count`            | — | ✅ Production | Chris |
-| `DISP_S1_STATIC`  |     ✅     | `db_based`              | — | ✅ Production | Chris |
-| `DIST_ALERT_HLS`  |     ✅     | —                       | — | — | Riley |
-| `CSLC_S1_STATIC`  |     ✅     | —                       | — | — | Riley |
-| `RTC_S1_STATIC`   |     ✅     | —                       | — | — | Riley |
+| Product | Duplicates | Accountability | Burst Coverage | Strategy | Feature Owners / Provenance |
+|---|:---:|:---:|:---:|---|---|
+| `DSWX_HLS` | yes | yes | — | `dswx_hls` / `forward_map` | **Duplicates: Riley; Accountability: Riley (`dswx_hls`) / Chris (`forward_map`)** |
+| `RTC_S1` | yes | no | yes | — | **Duplicates: Riley; Burst Coverage: Gerald** |
+| `CSLC_S1` | yes | no | yes | — | **Duplicates: Riley; Burst Coverage: Gerald** |
+| `DSWX_S1` | yes | yes | — | `dswx_s1` | **Duplicates: Riley; Accountability: Riley. Requires `--mgrs-db`.** |
+| `DIST_S1` | yes | yes | — | `dist_s1` | **Duplicates: Riley framework; Accountability: Kevin. Uses ISO-XML extraction.** |
+| `DISP_S1` | yes | yes | — | `delegated_validator` | **Duplicates: Riley; End-conflict detection: Gerald; Accountability: Chris. Supports `--check-end-conflicts`; accountability requires an external validator.** |
+| `TROPO` | yes | yes | — | `date_count` | **Duplicates: Riley; Accountability: Chris. Counts expected products by date.** |
+| `DISP_S1_STATIC` | yes | yes | — | `db_based` | **Duplicates: Riley framework; Accountability: Chris. Sample DB included; operational use needs the complete frame-to-burst DB.** |
+| `DIST_ALERT_HLS` | yes | no | — | — | **Duplicates: Riley. CMR only; no GRQ index is configured.** |
+| `CSLC_S1_STATIC` | yes | no | — | — | **Duplicates: Riley.** |
+| `RTC_S1_STATIC` | yes | no | — | — | **Duplicates: Riley.** |
 
 **Legend:**
-- ✅ Production: Fully functional and production-ready
-- ⚠️ Needs validator: Requires external validator configuration (see Known Limitations)
-- — : Accountability analysis not implemented (duplicate detection only)
+- **Duplicates / Accountability / Burst Coverage**: `yes` = supported, `no` = not supported, `—` = not applicable
+- **Strategy**: accountability strategy used for the product (`—` = no accountability)
+- **Feature Owners / Provenance**: contributor(s) who authored each capability and any product-specific requirements
+- `DISP_S1` accountability requires an external validator (see Known Limitations)
 
 ### Why Some Products Don't Have Accountability
 

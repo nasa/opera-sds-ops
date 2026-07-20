@@ -551,10 +551,22 @@ def collect_chunked_records(
         )
         raw_records = query(chunk.start, chunk.end)
         projected: list[tuple[str, Any]] = []
-        for record in raw_records:
+        fetched_total = len(raw_records)
+        project_progress = max(50_000, fetched_total // 10) if fetched_total else 0
+        for rec_idx, record in enumerate(raw_records):
             value = project(record)
             if value is not None:
                 projected.append(value)
+            if project_progress and rec_idx > 0 and rec_idx % project_progress == 0:
+                logger.info(
+                    "[%s] chunk %d/%d projecting: %d / %d records (%d kept so far)",
+                    namespace,
+                    chunk.index + 1,
+                    total,
+                    rec_idx,
+                    fetched_total,
+                    len(projected),
+                )
         store.commit_chunk(
             namespace,
             chunk,

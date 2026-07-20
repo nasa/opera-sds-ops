@@ -57,6 +57,7 @@ def _write_json(path: Path, data: Any) -> None:
 def _write_json_array(path: Path, values) -> None:
     """Stream an iterable as a JSON array without materializing it."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
     with open(path, "w") as f:
         f.write("[\n")
         first = True
@@ -65,8 +66,11 @@ def _write_json_array(path: Path, values) -> None:
                 f.write(",\n")
             f.write(json.dumps(value, separators=(",", ":")))
             first = False
+            written += 1
+            if written % 100_000 == 0:
+                logger.info("  ... streamed %d records to %s", written, path.name)
         f.write("\n]\n")
-    logger.info("Wrote %s (%s)", path, _human_size(path.stat().st_size))
+    logger.info("Wrote %s (%s, %d records)", path, _human_size(path.stat().st_size), written)
 
 
 def _write_rtc_map(path: Path, checkpoint: CheckpointStore) -> None:
@@ -89,6 +93,7 @@ def _write_rtc_map(path: Path, checkpoint: CheckpointStore) -> None:
             f.write(json.dumps(current_values, separators=(",", ":")))
             first_group = False
 
+        pair_count = 0
         for _, payload in checkpoint.iter_records("rtc_to_dswx_pairs"):
             rtc_key = payload["rtc_key"]
             if current_key is not None and rtc_key != current_key:
@@ -96,6 +101,9 @@ def _write_rtc_map(path: Path, checkpoint: CheckpointStore) -> None:
                 current_values = []
             current_key = rtc_key
             current_values.append(payload["dswx_id"])
+            pair_count += 1
+            if pair_count % 100_000 == 0:
+                logger.info("  ... streamed %d RTC→DSWx pairs to %s", pair_count, path.name)
         flush()
         f.write("\n}\n")
     logger.info("Wrote %s (%s)", path, _human_size(path.stat().st_size))

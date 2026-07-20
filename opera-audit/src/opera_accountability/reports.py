@@ -68,27 +68,53 @@ def save_reports(
     # 2. Text format (DAAC format - list of granule IDs)
     if report_type == "duplicates" and "conflicts" in results:
         txt_path = base_dir / f"{date_str}_conflicts.txt"
+        conflicts = results["conflicts"]
+        total_conflicts = len(conflicts)
+        conflict_progress = max(10_000, total_conflicts // 10)
+        written = 0
         with open(txt_path, "w") as f:
-            for conflict_key, conflict in results["conflicts"].items():
+            for idx, (conflict_key, conflict) in enumerate(conflicts.items()):
                 f.write(f"# {conflict_key}\n")
                 for product_id in conflict["products"]:
                     f.write(f"{product_id}\n")
+                    written += 1
+                if idx > 0 and idx % conflict_progress == 0:
+                    logger.info(
+                        "  ... writing conflict list: %d / %d groups (%d products)",
+                        idx, total_conflicts, written,
+                    )
         logger.info(f"Saved conflict list: {txt_path}")
         files_created["text"] = txt_path
 
     elif report_type == "duplicates" and "duplicate_list" in results:
         txt_path = base_dir / f"{date_str}.txt"
+        duplicate_list = results["duplicate_list"]
+        total_dups = len(duplicate_list)
+        dup_progress = max(50_000, total_dups // 10)
         with open(txt_path, "w") as f:
-            for granule_id in results["duplicate_list"]:
+            for idx, granule_id in enumerate(duplicate_list):
                 f.write(f"{granule_id}\n")
+                if idx > 0 and idx % dup_progress == 0:
+                    logger.info(
+                        "  ... writing duplicate list: %d / %d granule IDs",
+                        idx, total_dups,
+                    )
         logger.info(f"Saved text list: {txt_path}")
         files_created["text"] = txt_path
 
     elif report_type == "accountability" and "missing" in results:
         txt_path = base_dir / f"{date_str}_missing.txt"
+        missing = results["missing"]
+        total_missing = len(missing)
+        missing_progress = max(50_000, total_missing // 10)
         with open(txt_path, "w") as f:
-            for granule_id in results["missing"]:
+            for idx, granule_id in enumerate(missing):
                 f.write(f"{granule_id}\n")
+                if idx > 0 and idx % missing_progress == 0:
+                    logger.info(
+                        "  ... writing missing list: %d / %d granule IDs",
+                        idx, total_missing,
+                    )
         logger.info(f"Saved missing list: {txt_path}")
         files_created["text"] = txt_path
 

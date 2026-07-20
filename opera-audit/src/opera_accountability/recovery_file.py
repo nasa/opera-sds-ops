@@ -1,8 +1,11 @@
 """Recovery-file output format (port from Chris's tools for daac_data_subscriber.py)."""
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def write_recovery_file(
@@ -30,9 +33,17 @@ def write_recovery_file(
     
     if format == "txt":
         txt_file = output_file.with_suffix(".txt")
+        total_missing = len(missing_ids)
+        write_progress = max(50_000, total_missing // 10)
         with txt_file.open("w") as f:
-            for granule_id in missing_ids:
+            for idx, granule_id in enumerate(missing_ids):
                 f.write(f"{granule_id}\n")
+                if idx > 0 and idx % write_progress == 0:
+                    logger.info(
+                        "  ... writing recovery file: %d / %d granule IDs",
+                        idx, total_missing,
+                    )
+        logger.info("Wrote recovery file %s (%d granule IDs)", txt_file, total_missing)
         return str(txt_file)
     
     elif format == "json":

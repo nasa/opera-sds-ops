@@ -917,9 +917,17 @@ async def audit_burst_coverage(
     slc_ids: set[str] = set()
     coverage_records = {pt: {} for pt in product_types}
     totals = {"slcs": 0, "bursts_raw": 0, "bursts_unique": 0}
+    logger.info("Reducing checkpointed chunk results into global coverage records")
+    reduced_chunks = 0
     for chunk_payload in checkpoint.iter_payloads("chunk_results"):
         slc_ids.update(chunk_payload.get("slc_ids", []))
         totals["bursts_raw"] += int(chunk_payload.get("bursts_raw", 0))
+        reduced_chunks += 1
+        if reduced_chunks % 10 == 0:
+            logger.info(
+                "  ... reduced %d chunk results (%d SLCs, %d raw bursts so far)",
+                reduced_chunks, len(slc_ids), totals["bursts_raw"],
+            )
         for pt in product_types:
             product_payload = chunk_payload.get("products", {}).get(pt, {})
             for status in ("found", "missing"):
