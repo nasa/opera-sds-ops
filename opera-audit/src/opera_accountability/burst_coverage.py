@@ -615,22 +615,46 @@ async def process_slcs_to_expected_bursts(
     Returns (total_raw_bursts, deduplicated_expected_bursts).
     """
     primary_pol = polarizations[0] if polarizations else None
-    logger.info(f"  Fetching burst IDs from ASF (polarization: {primary_pol})...")
+    total_slcs = len(slcs)
+    logger.info(
+        "  Fetching burst IDs from ASF (polarization: %s) for %d SLCs...",
+        primary_pol, total_slcs,
+    )
 
+    # Log every SLC as it completes so the whole phase is visible in real time
+    # (annotation downloads are slow and this step is otherwise silent).
     sem = asyncio.Semaphore(max_concurrent)
-    async with aiohttp_session() as session:
-        tasks = [fetch_bursts_for_slc(slc, session, sem, primary_pol) for slc in slcs]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    processed = 0
+    bursts_so_far = 0
 
-        for slc, result in zip(slcs, results):
-            slc.bursts = result if not isinstance(result, Exception) else []
+    async def _fetch_one(slc: SLCGranule, session: aiohttp.ClientSession):
+        result = await fetch_bursts_for_slc(slc, session, sem, primary_pol)
+        return slc, result
+
+    async with aiohttp_session() as session:
+        tasks = [asyncio.ensure_future(_fetch_one(slc, session)) for slc in slcs]
+        for coro in asyncio.as_completed(tasks):
+            try:
+                slc, result = await coro
+                slc.bursts = result if not isinstance(result, Exception) else []
+                n_bursts = len(slc.bursts)
+                bursts_so_far += n_bursts
+                last_id = slc.native_id
+            except Exception as exc:
+                logger.warning("Burst fetch task failed: %s", exc)
+                n_bursts = 0
+                last_id = "?"
+            processed += 1
+            logger.info(
+                "    burst fetch %d/%d | %s -> %d bursts | total %d",
+                processed, total_slcs, last_id, n_bursts, bursts_so_far,
+            )
 
     total_raw = sum(len(slc.bursts) for slc in slcs)
     logger.info(f"  Total bursts (before dedup): {total_raw:,}")
 
     # Deduplicate: same burst can appear in overlapping SLCs
     unique: dict[tuple, ExpectedBurst] = {}
-    total_slcs = len(slcs)
     dedup_progress = max(1000, total_slcs // 10)
     for slc_idx, slc in enumerate(slcs):
         # Filter requested polarizations to those the SLC actually supports.
