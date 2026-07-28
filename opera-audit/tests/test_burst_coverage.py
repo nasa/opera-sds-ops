@@ -25,7 +25,9 @@ from opera_accountability.burst_coverage import (
     geojson_to_bbox,
     generate_time_chunks,
     fetch_bursts_for_slc,
+    _preflight_edl_token,
 )
+import opera_accountability.burst_coverage as burst_coverage
 
 
 # =============================================================================
@@ -305,3 +307,26 @@ class TestAnnotationOnlyBurstFetch:
 
         assert result == []
         cache.set.assert_not_called()
+
+
+class TestPreflightEdlToken:
+    """Guard 1: auth must fail loudly instead of degrading to zero bursts."""
+
+    def teardown_method(self):
+        burst_coverage._edl_token = None
+
+    def test_raises_when_token_unavailable(self):
+        with patch(
+            "opera_accountability.burst_coverage.get_edl_token",
+            side_effect=RuntimeError("No entry for urs.earthdata.nasa.gov"),
+        ):
+            with pytest.raises(RuntimeError, match="EarthData Login"):
+                _preflight_edl_token()
+
+    def test_caches_token_on_success(self):
+        with patch(
+            "opera_accountability.burst_coverage.get_edl_token",
+            return_value="a-valid-token",
+        ):
+            _preflight_edl_token()
+        assert burst_coverage._edl_token == "a-valid-token"

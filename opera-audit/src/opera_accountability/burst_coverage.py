@@ -347,6 +347,30 @@ def generate_time_chunks(start: datetime, end: datetime, days: int = 30) -> Iter
 _edl_token: str | None = None  # Lazy-initialized on first annotation derivation
 
 
+def _preflight_edl_token() -> None:
+    """Acquire an EarthData Login (EDL) token up front so auth failures abort loudly.
+
+    Burst derivation requires authenticated access to each SLC's annotation
+    metadata. Without a valid token, every SLC yields zero bursts and the
+    audit silently reports vacuous 100%% coverage. Failing here converts that
+    silent degradation into an explicit, actionable error before any expensive
+    CMR queries run. The acquired token is cached in the module-level
+    ``_edl_token`` so per-SLC workers reuse it.
+    """
+    global _edl_token
+    try:
+        _edl_token = get_edl_token()
+    except Exception as exc:
+        raise RuntimeError(
+            "Cannot obtain an EarthData Login (EDL) token, which is required to "
+            "derive Sentinel-1 bursts from SLC annotation metadata. Without it "
+            "the audit would report a misleading 100% coverage from zero data. "
+            "Set the EARTHDATA_TOKEN environment variable or add a "
+            "'urs.earthdata.nasa.gov' entry to ~/.netrc, then retry. "
+            f"Underlying error: {exc}"
+        ) from exc
+
+
 async def fetch_bursts_for_slc(
     slc: SLCGranule,
     session: aiohttp.ClientSession,
@@ -720,6 +744,11 @@ async def audit_burst_coverage(
     In low-memory mode, results are streamed to JSONL file incrementally.
     In standard mode, all results are returned in a dict.
     """
+    # Guard 1: fail fast if we cannot authenticate to EDL. Burst derivation
+    # depends on it; without it the audit degrades to a misleading 100%
+    # coverage report from zero bursts.
+    _preflight_edl_token()
+
     # Load and parse GeoJSON
     logger.info(f"Loading GeoJSON from {geojson_path}")
     geojson = load_geojson(geojson_path)

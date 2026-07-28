@@ -1722,23 +1722,40 @@ def burst_coverage(
 
     pol_list = [p.strip() for p in polarizations.split(",")]
 
-    results = asyncio.run(audit_burst_coverage(
-        start_datetime=start_dt,
-        end_datetime=end_dt,
-        geojson_path=geojson,
-        product_types=product_types,
-        polarizations=pol_list,
-        low_memory=low_memory,
-        output_path=output_path,
-        chunk_days=chunk_days if chunking else None,
-        buffer_deg=buffer_deg,
-        checkpoint_dir=checkpoint_dir,
-        checkpoint_output_dir=output_dir,
-        resume=resume,
-        keep_checkpoints=keep_checkpoints,
-    ))
+    try:
+        results = asyncio.run(audit_burst_coverage(
+            start_datetime=start_dt,
+            end_datetime=end_dt,
+            geojson_path=geojson,
+            product_types=product_types,
+            polarizations=pol_list,
+            low_memory=low_memory,
+            output_path=output_path,
+            chunk_days=chunk_days if chunking else None,
+            buffer_deg=buffer_deg,
+            checkpoint_dir=checkpoint_dir,
+            checkpoint_output_dir=output_dir,
+            resume=resume,
+            keep_checkpoints=keep_checkpoints,
+        ))
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
 
     bc_print_report(results, show_missing=show_missing if not low_memory else 0)
+
+    # Guard 2: refuse to save a misleading report. If SLCs were found but no
+    # bursts could be derived, the coverage numbers are vacuous (0 expected ->
+    # "100%"). Fail loudly instead of persisting a clean-looking report.
+    meta = results.get("metadata", {})
+    if meta.get("slc_count", 0) > 0 and meta.get("unique_bursts", 0) == 0:
+        console.print(
+            f"[red]Sanity check failed: found {meta['slc_count']:,} SLC "
+            "granule(s) but derived 0 bursts. SLC annotation metadata could "
+            "not be read (auth/network issue). Refusing to write or save a "
+            "misleading 100% coverage report.[/red]"
+        )
+        raise typer.Exit(2)
 
     # Write output (non-low-memory mode)
     if output_path and not low_memory:
