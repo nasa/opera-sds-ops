@@ -26,6 +26,7 @@ from opera_accountability.burst_coverage import (
     generate_time_chunks,
     fetch_bursts_for_slc,
     _preflight_edl_token,
+    print_report,
 )
 import opera_accountability.burst_coverage as burst_coverage
 
@@ -330,3 +331,42 @@ class TestPreflightEdlToken:
         ):
             _preflight_edl_token()
         assert burst_coverage._edl_token == "a-valid-token"
+
+
+class TestPrintReport:
+    """The console report must not present vacuous 100% coverage as valid."""
+
+    @staticmethod
+    def _results(slc_count: int, unique_bursts: int, coverage_percent: float):
+        return {
+            "metadata": {
+                "start_datetime": "2026-03-01T00:00:00+00:00",
+                "end_datetime": "2026-03-02T23:59:59+00:00",
+                "geojson": "region.geojson",
+                "slc_count": slc_count,
+                "total_bursts_raw": 0 if unique_bursts == 0 else unique_bursts,
+                "unique_bursts": unique_bursts,
+                "polarizations": ["VV"],
+            },
+            "products": {
+                "RTC-S1": {
+                    "expected_count": unique_bursts,
+                    "found_count": 0,
+                    "missing_count": 0,
+                    "coverage_percent": coverage_percent,
+                },
+            },
+        }
+
+    def test_zero_bursts_with_slcs_shows_error_and_na(self, capsys):
+        print_report(self._results(slc_count=175, unique_bursts=0, coverage_percent=100.0))
+        out = capsys.readouterr().out
+        assert "0 bursts derived from 175" in out
+        assert "N/A (no bursts derived)" in out
+        assert "100.0%" not in out
+
+    def test_empty_range_shows_na_without_error_banner(self, capsys):
+        print_report(self._results(slc_count=0, unique_bursts=0, coverage_percent=100.0))
+        out = capsys.readouterr().out
+        assert "N/A (no bursts in range)" in out
+        assert "ERROR" not in out

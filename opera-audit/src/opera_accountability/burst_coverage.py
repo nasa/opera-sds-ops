@@ -1098,6 +1098,18 @@ def print_report(results: dict, show_missing: int = 20):
         print(f"Cache: {stats['hits']:,} hits, {stats['misses']:,} misses "
               f"({stats['hit_rate']:.1%} hit rate)")
 
+    # Detect the "SLCs found but no bursts derived" anomaly. In this state the
+    # per-product coverage is vacuous (0 expected -> "100%"), which is
+    # misleading, so surface it prominently instead of a clean-looking report.
+    no_bursts_anomaly = meta["slc_count"] > 0 and meta["unique_bursts"] == 0
+    if no_bursts_anomaly:
+        print("-" * 70)
+        print("!! ERROR: 0 bursts derived from "
+              f"{meta['slc_count']:,} SLC granule(s).")
+        print("   Burst-level coverage could NOT be computed. The percentages")
+        print("   below are NOT valid (0 expected). Likely cause: SLC annotation")
+        print("   metadata could not be read (EDL auth or network failure).")
+
     print("-" * 70)
 
     for product_type, coverage in results["products"].items():
@@ -1105,7 +1117,12 @@ def print_report(results: dict, show_missing: int = 20):
         print(f"  Expected:  {coverage['expected_count']:,}")
         print(f"  Found:     {coverage['found_count']:,}")
         print(f"  Missing:   {coverage['missing_count']:,}")
-        print(f"  Coverage:  {coverage['coverage_percent']:.1f}%")
+        if coverage["expected_count"] == 0:
+            # No expected bursts -> a percentage would be meaningless.
+            reason = "no bursts derived" if no_bursts_anomaly else "no bursts in range"
+            print(f"  Coverage:  N/A ({reason})")
+        else:
+            print(f"  Coverage:  {coverage['coverage_percent']:.1f}%")
 
         if show_missing > 0 and coverage.get("missing"):
             print(f"\n  First {min(show_missing, len(coverage['missing']))} missing:")
