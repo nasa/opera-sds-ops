@@ -4,6 +4,7 @@ import pickle
 import sqlite3
 import sys
 from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import logging
@@ -82,20 +83,24 @@ with ThreadPoolExecutor(initializer=_db_init, initargs=(local,)) as pool:
     for rtc in tqdm(rtcs, disable=args.disable_tqdm):
         futures.append(pool.submit(_rtc_to_mgrs_sets, rtc, local))
 
-    with tqdm(total=len(futures), disable=args.disable_tqdm) as pbar:
-        for future in as_completed(futures):
-            rtc, mgrs_sets, lofs = future.result()
+    with logging_redirect_tqdm():
+        with tqdm(total=len(futures), disable=args.disable_tqdm) as pbar:
+            for i, future in enumerate(as_completed(futures), start=1):
+                rtc, mgrs_sets, lofs = future.result()
 
-            for mgrs_set_id, lof in zip(mgrs_sets, lofs):
-                if lof == 'water':
-                    dropped_sets += 1
-                    continue
+                for mgrs_set_id, lof in zip(mgrs_sets, lofs):
+                    if lof == 'water':
+                        dropped_sets += 1
+                        continue
 
-                if mgrs_set_id not in mgrs_set_to_rtc_map:
-                    mgrs_set_to_rtc_map[mgrs_set_id] = []
-                mgrs_set_to_rtc_map[mgrs_set_id].append(rtc)
+                    if mgrs_set_id not in mgrs_set_to_rtc_map:
+                        mgrs_set_to_rtc_map[mgrs_set_id] = []
+                    mgrs_set_to_rtc_map[mgrs_set_id].append(rtc)
 
-            pbar.update()
+                pbar.update()
+
+                if args.disable_tqdm and i % int(len(futures) * 0.05) == 0:
+                    logger.info(f'Mapped {i:,} RTCs ({i/len(futures) * 100:0.2f}%)')
 
 logger.info(f'Finished mapping RTCs to {len(mgrs_set_to_rtc_map):,} MGRS tile set IDs '
             f'(Dropped {dropped_sets:,} sets over water)')
