@@ -1,3 +1,4 @@
+import argparse
 import pickle
 import re
 import json
@@ -15,6 +16,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    '--no-tqdm',
+    action='store_true',
+    dest='disable_tqdm',
+    help='Suppress tqdm progress bar',
+)
+
+args = parser.parse_args()
 
 with open('missing_rtcs_to_tile_sets.pickle', 'rb') as fp:
     base_map = pickle.load(fp)
@@ -25,7 +36,7 @@ expanded_map = {}
 
 logger.info('Remapping RTCs to TileSet$AcquisitionCycle$Sensor')
 
-for tile_set in tqdm(base_map):
+for tile_set in tqdm(base_map, disable=args.disable_tqdm):
     rtc_ids = base_map[tile_set]
 
     for rtc in rtc_ids:

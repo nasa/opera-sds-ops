@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import re
@@ -188,7 +189,7 @@ def _reduce_to_common(tile_set_mapping):
     return reduced_mapping
 
 
-def main():
+def main(disable_tqdm=False):
     thread_local = threading.local()
 
     with open('missing_mgrs_set_cycle_indices.json') as fp:
@@ -202,7 +203,7 @@ def main():
     with ThreadPoolExecutor(initializer=_db_init, initargs=(thread_local,)) as executor:
         futures = []
 
-        with tqdm(total=len(missing), leave=False) as pbar:
+        with tqdm(total=len(missing), leave=False, disable=disable_tqdm) as pbar:
             for k, v in missing.items():
                 futures.append(executor.submit(_tile_set_has_sufficient_coverage, k, v, thread_local))
 
@@ -259,5 +260,16 @@ def main():
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        '--no-tqdm',
+        action='store_true',
+        dest='disable_tqdm',
+        help='Suppress tqdm progress bar',
+    )
+
+    args = parser.parse_args()
+
     with logging_redirect_tqdm():
-        main()
+        main(args.disable_tqdm)

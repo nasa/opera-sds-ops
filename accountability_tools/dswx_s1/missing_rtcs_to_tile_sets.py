@@ -1,3 +1,4 @@
+import argparse
 import json
 import pickle
 import sqlite3
@@ -17,6 +18,16 @@ logger = logging.getLogger(__name__)
 
 MGRS_TILE_DB = 'MGRS_tile_collection_v0.3.sqlite'
 
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    '--no-tqdm',
+    action='store_true',
+    dest='disable_tqdm',
+    help='Suppress tqdm progress bar',
+)
+
+args = parser.parse_args()
 
 mgrs_set_to_rtc_map = {}
 
@@ -68,10 +79,10 @@ dropped_sets = 0
 with ThreadPoolExecutor(initializer=_db_init, initargs=(local,)) as pool:
     futures = []
 
-    for rtc in tqdm(rtcs):
+    for rtc in tqdm(rtcs, disable=args.disable_tqdm):
         futures.append(pool.submit(_rtc_to_mgrs_sets, rtc, local))
 
-    with tqdm(total=len(futures)) as pbar:
+    with tqdm(total=len(futures), disable=args.disable_tqdm) as pbar:
         for future in as_completed(futures):
             rtc, mgrs_sets, lofs = future.result()
 
