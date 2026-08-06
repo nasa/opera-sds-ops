@@ -1,6 +1,7 @@
 import json
 import pickle
 import sqlite3
+import sys
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -9,7 +10,8 @@ import logging
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] [%(name)s::%(lineno)d] %(message)s'
+    format='%(asctime)s [%(levelname)s] [%(name)s::%(lineno)d] %(message)s',
+    stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
 

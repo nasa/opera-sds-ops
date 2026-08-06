@@ -1,19 +1,21 @@
 import json
-import requests
-import backoff
 import logging
 import re
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+
+import backoff
+import requests
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] [%(name)s::%(lineno)d] %(message)s'
+    format='%(asctime)s [%(levelname)s] [%(name)s::%(lineno)d] %(message)s',
+    stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
 

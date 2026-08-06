@@ -1,6 +1,8 @@
 import pickle
 import re
 import json
+import sys
+
 from rtc_utils import determine_acquisition_cycle_for_rtc_granule, rtc_granule_regex
 from tqdm import tqdm
 import logging
@@ -8,7 +10,8 @@ import logging
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] [%(name)s::%(lineno)d] %(message)s'
+    format='%(asctime)s [%(levelname)s] [%(name)s::%(lineno)d] %(message)s',
+    stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
 

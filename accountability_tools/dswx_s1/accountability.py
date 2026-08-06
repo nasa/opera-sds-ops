@@ -3,12 +3,14 @@ import json
 import re
 import pickle
 import logging
+import sys
 from functools import cache
 
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] [%(name)s::%(lineno)d] %(message)s'
+    format='%(asctime)s [%(levelname)s] [%(name)s::%(lineno)d] %(message)s',
+    stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
 

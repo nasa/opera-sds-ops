@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import re
+import sys
 from datetime import datetime
 
 import backoff
@@ -10,7 +11,8 @@ import requests
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] [%(name)s::%(lineno)d] %(message)s'
+    format='%(asctime)s [%(levelname)s] [%(name)s::%(lineno)d] %(message)s',
+    stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
 
