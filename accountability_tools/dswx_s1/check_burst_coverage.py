@@ -78,6 +78,25 @@ def _db_init(thread_local):
     logger.debug(f'Connected to DB @ {MGRS_TILE_DB}')
 
 
+def _get_average_sensing_date_from_rtc_list(rtcs: list[str]) -> str:
+    real_acquisition_times = []
+
+    for rtc in rtcs:
+        match = RTC_PATTERN.fullmatch(rtc)
+
+        if not match:
+            raise ValueError(f'Invalid RTC ID: {rtc}')
+
+        real_acquisition_times.append(
+            datetime.strptime(match.group('acquisition_ts'), '%Y%m%dT%H%M%SZ')
+        )
+
+    epoch = datetime(1970, 1, 1)
+    deltas = [acq_time - epoch for acq_time in real_acquisition_times]
+
+    return (epoch + (sum(deltas, timedelta()) / len(deltas))).strftime("%Y-%m-%d")
+
+
 def _query_for_rtcs_from_native_id(native_id, burst_ids):
     # 1. Build list of native IDs
     # 2. Build temporal range
@@ -128,7 +147,7 @@ def _query_for_rtcs_from_native_id(native_id, burst_ids):
 
         uniq_rtcs.add(uniq_groups)
 
-    return len(uniq_rtcs)
+    return len(uniq_rtcs), _get_average_sensing_date_from_rtc_list(matching_rtcs)
 
 
 def _tile_set_has_sufficient_coverage(tile_set_id_cyc_sensor, identified_rtcs, thread_local):
@@ -147,13 +166,20 @@ def _tile_set_has_sufficient_coverage(tile_set_id_cyc_sensor, identified_rtcs, t
 
     if len(identified_rtcs) >= COVERAGE_THRESHOLD:
         logger.info(f'Tile set {tile_set_id_cyc_sensor} already has sufficient coverage from missing RTCs')
-        return True, tile_set_id_cyc_sensor, len(identified_rtcs), len(burst_ids)
+        return (True, tile_set_id_cyc_sensor, len(identified_rtcs), len(burst_ids),
+                _get_average_sensing_date_from_rtc_list(identified_rtcs))
 
     logger.info(f'Querying CMR to check absolute coverage for tile set {tile_set_id_cyc_sensor}')
 
-    coverage = _query_for_rtcs_from_native_id(identified_rtcs[0], burst_ids)
+    coverage, tile_set_sensing_date = _query_for_rtcs_from_native_id(identified_rtcs[0], burst_ids)
 
-    return coverage >= COVERAGE_THRESHOLD, tile_set_id_cyc_sensor, coverage, len(burst_ids)
+    return (
+        coverage >= COVERAGE_THRESHOLD,
+        tile_set_id_cyc_sensor,
+        coverage,
+        len(burst_ids),
+        tile_set_sensing_date
+    )
 
 
 def _reduce_to_common(tile_set_mapping):
@@ -208,12 +234,12 @@ def main(disable_tqdm=False):
                 futures.append(executor.submit(_tile_set_has_sufficient_coverage, k, v, thread_local))
 
             for future in as_completed(futures):
-                is_valid, tile_set_id, coverage, expected_burst_ids = future.result()
+                is_valid, tile_set_id, coverage, expected_burst_ids, sensing_date = future.result()
 
                 if is_valid:
-                    valid.append((tile_set_id, coverage, expected_burst_ids))
+                    valid.append((tile_set_id, coverage, expected_burst_ids, sensing_date))
                 else:
-                    dropped.append((tile_set_id, coverage, expected_burst_ids))
+                    dropped.append((tile_set_id, coverage, expected_burst_ids, sensing_date))
                 pbar.update()
 
     logger.info(f'Dropped {len(dropped):,} missing mgrs set cycles ({len(valid):,} valid sets remaining)')
@@ -226,9 +252,10 @@ def main(disable_tqdm=False):
                     ts_id: {
                         'coverage': coverage,
                         'expected_burst_ids': expected_burst_ids,
-                        'native-id': missing[ts_id][0]
+                        'native-id': missing[ts_id][0],
+                        'sensing-date': sensing_date,
                     }
-                } for ts_id, coverage, expected_burst_ids in valid
+                } for ts_id, coverage, expected_burst_ids, sensing_date in valid
             ]
         },
         'dropped': {
@@ -238,9 +265,10 @@ def main(disable_tqdm=False):
                     ts_id: {
                         'coverage': coverage,
                         'expected_burst_ids': expected_burst_ids,
-                        'native-id': missing[ts_id][0]
+                        'native-id': missing[ts_id][0],
+                        'sensing-date': sensing_date,
                     }
-                } for ts_id, coverage, expected_burst_ids in dropped
+                } for ts_id, coverage, expected_burst_ids, sensing_date in dropped
             ]
         },
     }
