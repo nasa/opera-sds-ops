@@ -817,7 +817,7 @@ def _download_header(title: str, count: int, file_base: str, items: list[str],
         with st.popover(
             f"Export · {count:,}",
             icon=":material/download:",
-            use_container_width=True,
+            width="stretch",
         ):
             st.caption("Choose a format — the full list is exported, not just the preview.")
             st.download_button(
@@ -826,7 +826,7 @@ def _download_header(title: str, count: int, file_base: str, items: list[str],
                 file_name=f"{file_base}.txt",
                 mime="text/plain",
                 icon=":material/description:",
-                use_container_width=True,
+                width="stretch",
                 key=_next_key("dl"),
             )
             if include_json:
@@ -836,7 +836,7 @@ def _download_header(title: str, count: int, file_base: str, items: list[str],
                     file_name=f"{file_base}.json",
                     mime="application/json",
                     icon=":material/data_object:",
-                    use_container_width=True,
+                    width="stretch",
                     key=_next_key("dl"),
                 )
 
@@ -868,30 +868,30 @@ def _render_overview(reports: dict) -> None:
     cols = st.columns(4)
     with cols[0]:
         sui.metric_card(
-            title="Duplicate reports",
-            content=f"{len(reports['duplicates'])}",
+            label="Duplicate reports",
+            value=f"{len(reports['duplicates'])}",
             description="product(s) with duplicate analysis",
             key=_next_key("m"),
         )
     with cols[1]:
         sui.metric_card(
-            title="Total granules analyzed",
-            content=f"{total_granules:,}",
+            label="Total granules analyzed",
+            value=f"{total_granules:,}",
             description="across all duplicate reports",
             key=_next_key("m"),
         )
     with cols[2]:
         dup_rate = (total_duplicates / total_granules * 100) if total_granules else 0.0
         sui.metric_card(
-            title="Total duplicates",
-            content=f"{total_duplicates:,}",
+            label="Total duplicates",
+            value=f"{total_duplicates:,}",
             description=f"{dup_rate:.2f}% of granules",
             key=_next_key("m"),
         )
     with cols[3]:
         sui.metric_card(
-            title="Accountability reports",
-            content=f"{total_accountability_products}",
+            label="Accountability reports",
+            value=f"{total_accountability_products}",
             description="product(s) with accountability analysis",
             key=_next_key("m"),
         )
@@ -923,7 +923,7 @@ def _render_overview(reports: dict) -> None:
             .configure(**_altair_theme()["config"])
             .properties(height=220)
         )
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width="stretch")
 
     # Per-product duplicate summary with freshness + status columns.
     if reports['duplicates']:
@@ -1007,17 +1007,17 @@ def _render_duplicates(reports: dict) -> None:
 
     cols = st.columns(4)
     with cols[0]:
-        sui.metric_card(title="Total granules", content=f"{results['total']:,}",
+        sui.metric_card(label="Total granules", value=f"{results['total']:,}",
                         description="in selected window", key=_next_key("m"))
     with cols[1]:
-        sui.metric_card(title="Unique granules", content=f"{results['unique']:,}",
+        sui.metric_card(label="Unique granules", value=f"{results['unique']:,}",
                         description="after dedup", key=_next_key("m"))
     with cols[2]:
-        sui.metric_card(title="Duplicates", content=f"{results['duplicates']:,}",
+        sui.metric_card(label="Duplicates", value=f"{results['duplicates']:,}",
                         description="older copies superseded", key=_next_key("m"))
     with cols[3]:
         rate = (results['duplicates'] / results['total'] * 100) if results['total'] else 0.0
-        sui.metric_card(title="Duplicate rate", content=f"{rate:.2f}%",
+        sui.metric_card(label="Duplicate rate", value=f"{rate:.2f}%",
                         description="duplicates ÷ total", key=_next_key("m"))
 
     # Altair bar chart — one bar per date, two layers (total vs duplicates).
@@ -1042,7 +1042,7 @@ def _render_duplicates(reports: dict) -> None:
             .configure(**_altair_theme()["config"])
             .properties(height=260)
         )
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width="stretch")
 
     dup_list = results.get('duplicate_list') or []
     if dup_list:
@@ -1059,7 +1059,7 @@ def _render_duplicates(reports: dict) -> None:
                 st.code(granule_id, language=None)
             if len(dup_list) > 100:
                 sui.badges(
-                    badge_list=[(f"+{len(dup_list) - 100:,} more", "outline")],
+                    items=[(f"+{len(dup_list) - 100:,} more", "outline")],
                     key=_next_key("badge"),
                 )
 
@@ -1095,24 +1095,24 @@ def _render_dswx_hls_panel(product: str, report: dict) -> None:
     results = _unwrap_accountability_results(report)
     cols = st.columns(4)
     with cols[0]:
-        sui.metric_card(title="Expected HLS granules",
-                        content=f"{results['expected']:,}",
+        sui.metric_card(label="Expected HLS granules",
+                        value=f"{results['expected']:,}",
                         description="after L9 cutoff filter",
                         key=_next_key("m"))
     with cols[1]:
-        sui.metric_card(title="Matched DSWx outputs",
-                        content=f"{results['actual']:,}",
+        sui.metric_card(label="Matched DSWx outputs",
+                        value=f"{results['actual']:,}",
                         description="HLS inputs with a DSWx",
                         key=_next_key("m"))
     with cols[2]:
-        sui.metric_card(title="Missing outputs",
-                        content=f"{results['missing_count']:,}",
+        sui.metric_card(label="Missing outputs",
+                        value=f"{results['missing_count']:,}",
                         description="HLS without DSWx",
                         key=_next_key("m"))
     with cols[3]:
         rate = (results['actual'] / results['expected'] * 100) if results['expected'] else 0.0
-        sui.metric_card(title="Accountability rate",
-                        content=f"{rate:.2f}%",
+        sui.metric_card(label="Accountability rate",
+                        value=f"{rate:.2f}%",
                         description="matched ÷ expected",
                         key=_next_key("m"))
 
@@ -1143,49 +1143,49 @@ def _render_dswx_s1_panel(product: str, report: dict) -> None:
 
     cols = st.columns(4)
     with cols[0]:
-        sui.metric_card(title="RTCs (after sensor filter)",
-                        content=f"{filtered:,}",
+        sui.metric_card(label="RTCs (after sensor filter)",
+                        value=f"{filtered:,}",
                         description="within S1A/B/C windows",
                         key=_next_key("m"))
     with cols[1]:
-        sui.metric_card(title="RTCs used in DSWx-S1",
-                        content=f"{used:,}",
+        sui.metric_card(label="RTCs used in DSWx-S1",
+                        value=f"{used:,}",
                         description="appear as inputs",
                         key=_next_key("m"))
     with cols[2]:
-        sui.metric_card(title="Missing RTCs",
-                        content=f"{missing:,}",
+        sui.metric_card(label="Missing RTCs",
+                        value=f"{missing:,}",
                         description="filtered − used",
                         key=_next_key("m"))
     with cols[3]:
         # actual / expected stays within [0, 100]; used / filtered can exceed
         # 100% when DSWx references RTCs outside the surveyed window.
         rate = (actual / expected * 100) if expected else 0.0
-        sui.metric_card(title="Accountability rate",
-                        content=f"{rate:.2f}%",
+        sui.metric_card(label="Accountability rate",
+                        value=f"{rate:.2f}%",
                         description="matched ÷ expected",
                         key=_next_key("m"))
 
     _section_label("Pipeline breakdown")
     cols = st.columns(4)
     with cols[0]:
-        sui.metric_card(title="RTC-S1 surveyed",
-                        content=f"{report.get('rtc_surveyed', 0):,}",
+        sui.metric_card(label="RTC-S1 surveyed",
+                        value=f"{report.get('rtc_surveyed', 0):,}",
                         description="raw CMR → deduped",
                         key=_next_key("m"))
     with cols[1]:
-        sui.metric_card(title="DSWx-S1 surveyed",
-                        content=f"{report.get('dswx_surveyed', 0):,}",
+        sui.metric_card(label="DSWx-S1 surveyed",
+                        value=f"{report.get('dswx_surveyed', 0):,}",
                         description="raw CMR → deduped",
                         key=_next_key("m"))
     with cols[2]:
-        sui.metric_card(title="MGRS tile sets affected",
-                        content=f"{report.get('tile_set_count', 0):,}",
+        sui.metric_card(label="MGRS tile sets affected",
+                        value=f"{report.get('tile_set_count', 0):,}",
                         description="land tile sets (water dropped)",
                         key=_next_key("m"))
     with cols[3]:
-        sui.metric_card(title="Cycle / sensor buckets",
-                        content=f"{report.get('cycle_bucket_count', 0):,}",
+        sui.metric_card(label="Cycle / sensor buckets",
+                        value=f"{report.get('cycle_bucket_count', 0):,}",
                         description="unique (tile-set, 12-day cycle, sensor) groups",
                         key=_next_key("m"))
 
@@ -1226,7 +1226,7 @@ def _render_dswx_s1_panel(product: str, report: dict) -> None:
             sui.table(data=pd.DataFrame(rows), key=_next_key("tbl"))
             if len(cycle_map) > 200:
                 sui.badges(
-                    badge_list=[(f"+{len(cycle_map) - 200:,} more buckets", "outline")],
+                    items=[(f"+{len(cycle_map) - 200:,} more buckets", "outline")],
                     key=_next_key("badge"),
                 )
 
@@ -1273,7 +1273,7 @@ def main():
     # Navigation — shadcn tabs.
     tab = sui.tabs(
         options=["Overview", "Duplicates", "Accountability"],
-        default_value="Overview",
+        value="Overview",
         key="nav_tabs",
     )
 
