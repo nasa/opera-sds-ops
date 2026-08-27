@@ -11,24 +11,26 @@ times are sourced from ``config.yaml`` rather than hardcoded.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
 from ... import CONFIG
+from ...checkpoint import CheckpointStore
 from .rtc_utils import rtc_to_id_tuple
 
 logger = logging.getLogger(__name__)
 
-_GRANULE_TIME_FMT = '%Y%m%dT%H%M%SZ'
+_GRANULE_TIME_FMT = "%Y%m%dT%H%M%SZ"
 
 
 def _parse_iso(ts: str) -> datetime:
     """Parse an ISO-8601 timestamp (e.g. ``"2024-08-21T00:11:56Z"``)."""
-    return datetime.strptime(ts.replace('Z', '+0000'), '%Y-%m-%dT%H:%M:%S%z').replace(tzinfo=None)
+    return datetime.strptime(ts.replace("Z", "+0000"), "%Y-%m-%dT%H:%M:%S%z").replace(tzinfo=None)
 
 
 def _load_sensor_start_dates() -> dict[str, datetime]:
-    raw = CONFIG['products']['DSWX_S1']['accountability']['sensor_start_dates']
+    raw = CONFIG["products"]["DSWX_S1"]["accountability"]["sensor_start_dates"]
     return {sensor: _parse_iso(ts) for sensor, ts in raw.items()}
 
 
@@ -99,7 +101,7 @@ def analyze(
     _warned_sensors.clear()
 
     logger.info("Loaded RTC survey with %d products", len(rtc_products))
-    rtc_filtered = [rtc for rtc in rtc_products if should_include_rtc(rtc['id'], sensor_start_dates)]
+    rtc_filtered = [rtc for rtc in rtc_products if should_include_rtc(rtc["id"], sensor_start_dates)]
     logger.info(
         "Filtered RTC products from %d to %d using sensor start dates",
         len(rtc_products), len(rtc_filtered),
@@ -110,9 +112,16 @@ def analyze(
 
     # (burst_id, acq_ts, sensor) -> [dswx_granule_id, ...]
     rtc_to_dswx_map: dict[tuple[str, str, str], list[str]] = {}
-    for dswx in dswx_products:
-        dswx_id = dswx['id']
-        for rtc_in in dswx['input_rtcs']:
+    total_dswx = len(dswx_products)
+    dswx_map_progress = max(50_000, total_dswx // 10)
+    for idx, dswx in enumerate(dswx_products):
+        if idx > 0 and idx % dswx_map_progress == 0:
+            logger.info(
+                "  ... DSWx-S1 input mapping: %d / %d products (%d unique RTCs so far)",
+                idx, total_dswx, len(rtc_to_dswx_map),
+            )
+        dswx_id = dswx["id"]
+        for rtc_in in dswx["input_rtcs"]:
             try:
                 key = rtc_to_id_tuple(rtc_in)
             except ValueError:
@@ -124,8 +133,13 @@ def analyze(
 
     # Build latest-ID lookup from surveyed (filtered) RTCs.
     rtc_id_to_latest: dict[tuple[str, str, str], str] = {}
-    for rec in rtc_filtered:
-        rtc_id_to_latest[rtc_to_id_tuple(rec['id'])] = rec['id']
+    total_filtered = len(rtc_filtered)
+    latest_progress = max(100_000, total_filtered // 10)
+    for idx, rec in enumerate(rtc_filtered):
+        rtc_id_to_latest[rtc_to_id_tuple(rec["id"])] = rec["id"]
+        if idx > 0 and idx % latest_progress == 0:
+            logger.info("  ... built latest-ID lookup: %d / %d RTCs", idx, total_filtered)
+    logger.info("Built latest-ID lookup for %d filtered RTCs", total_filtered)
 
     used_rtc_ids = set(rtc_to_dswx_map.keys())
     avail_rtc_ids = set(rtc_id_to_latest.keys())
@@ -145,17 +159,217 @@ def analyze(
     logger.info("Unused (missing) RTC count: %d", len(missing_rtc_products))
 
     # Serializable form of the mapping (str keys).
-    rtc_to_dswx_map_serializable = {
-        '$'.join(key): sorted(set(dswx_ids))
-        for key, dswx_ids in rtc_to_dswx_map.items()
-    }
+    logger.info("Serializing RTC → DSWx-S1 map (%d entries)", len(rtc_to_dswx_map))
+    rtc_to_dswx_map_serializable = {}
+    total_map_entries = len(rtc_to_dswx_map)
+    serialize_progress = max(100_000, total_map_entries // 10)
+    for idx, (key, dswx_ids) in enumerate(rtc_to_dswx_map.items()):
+        rtc_to_dswx_map_serializable["$".join(key)] = sorted(set(dswx_ids))
+        if idx > 0 and idx % serialize_progress == 0:
+            logger.info("  ... serialized %d / %d map entries", idx, total_map_entries)
+    logger.info("Serialization complete (%d entries)", total_map_entries)
 
     return {
-        'expected': len(avail_rtc_ids),
-        'actual': len(used_rtc_ids & avail_rtc_ids),
-        'missing_count': len(missing_rtc_products),
-        'used_rtc_count': len(used_rtc_ids),
-        'filtered_rtc_count': len(avail_rtc_ids),
-        'missing': missing_rtc_products,
-        'rtc_to_dswx_map': rtc_to_dswx_map_serializable,
+        "expected": len(avail_rtc_ids),
+        "actual": len(used_rtc_ids & avail_rtc_ids),
+        "missing_count": len(missing_rtc_products),
+        "used_rtc_count": len(used_rtc_ids),
+        "filtered_rtc_count": len(avail_rtc_ids),
+        "missing": missing_rtc_products,
+        "rtc_to_dswx_map": rtc_to_dswx_map_serializable,
+    }
+
+
+def _batches(values, size: int = 10000):
+    batch = []
+    for value in values:
+        batch.append(value)
+        if len(batch) >= size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def analyze_checkpoint(
+    checkpoint: CheckpointStore,
+    sensor_start_dates: dict[str, datetime] | None = None,
+) -> dict[str, Any]:
+    """Run the DSWx-S1 global reducer directly against checkpointed records.
+
+    The full RTC and DSWx surveys never coexist as Python lists. Latest-revision
+    deduplication, expected/used membership, and set difference remain in
+    SQLite; only the final missing RTC list is materialized for recovery work.
+    """
+    if sensor_start_dates is None:
+        sensor_start_dates = _load_sensor_start_dates()
+    _warned_sensors.clear()
+
+    rtc_pattern = re.compile(CONFIG["products"]["RTC_S1"]["pattern"])
+    rtc_unique_fields = tuple(CONFIG["products"]["RTC_S1"]["unique_fields"])
+    dswx_pattern = re.compile(CONFIG["products"]["DSWX_S1"]["pattern"])
+    dswx_unique_fields = tuple(CONFIG["products"]["DSWX_S1"]["unique_fields"])
+
+    derived_namespaces = (
+        "rtc_unique",
+        "dswx_unique",
+        "available_rtcs",
+        "used_rtcs",
+        "rtc_to_dswx_pairs",
+    )
+    total_namespaces = len(derived_namespaces)
+    logger.info("Checkpoint reducer: clearing %d derived namespaces", total_namespaces)
+    for ns_idx, namespace in enumerate(derived_namespaces, start=1):
+        logger.info(
+            "  ... clearing namespace %d/%d: %s", ns_idx, total_namespaces, namespace
+        )
+        checkpoint.clear_namespace(namespace)
+    logger.info("Checkpoint reducer: cleared %d derived namespaces", total_namespaces)
+
+    logger.info("Checkpoint reducer: deduplicating RTC-S1 survey records")
+    rtc_failures = 0
+    rtc_batch_count = 0
+    rtc_record_count = 0
+    for batch in _batches(checkpoint.iter_payloads("rtc_survey")):
+        reduced = []
+        for product in batch:
+            match = rtc_pattern.match(product["id"])
+            if match is None:
+                rtc_failures += 1
+                continue
+            groups = match.groupdict()
+            stable_key = "$".join(groups[field] for field in rtc_unique_fields)
+            reduced.append(
+                (stable_key, groups["creation_ts"], product)
+            )
+        checkpoint.upsert_reduced_records("rtc_unique", reduced)
+        rtc_batch_count += 1
+        rtc_record_count += len(batch)
+        if rtc_batch_count % 10 == 0:
+            logger.info(
+                "  ... deduplicated %d RTC-S1 batches (%d records processed)",
+                rtc_batch_count, rtc_record_count,
+            )
+    logger.info(
+        "Checkpoint reducer: RTC-S1 dedup done (%d batches, %d records)",
+        rtc_batch_count, rtc_record_count,
+    )
+
+    logger.info("Checkpoint reducer: deduplicating DSWx-S1 survey records")
+    dswx_failures = 0
+    dswx_batch_count = 0
+    dswx_record_count = 0
+    for batch in _batches(checkpoint.iter_payloads("dswx_survey")):
+        reduced = []
+        for product in batch:
+            match = dswx_pattern.match(product["id"])
+            if match is None:
+                dswx_failures += 1
+                continue
+            groups = match.groupdict()
+            stable_key = "$".join(groups[field] for field in dswx_unique_fields)
+            reduced.append(
+                (stable_key, groups["creation_ts"], product)
+            )
+        checkpoint.upsert_reduced_records("dswx_unique", reduced)
+        dswx_batch_count += 1
+        dswx_record_count += len(batch)
+        if dswx_batch_count % 10 == 0:
+            logger.info(
+                "  ... deduplicated %d DSWx-S1 batches (%d records processed)",
+                dswx_batch_count, dswx_record_count,
+            )
+    logger.info(
+        "Checkpoint reducer: DSWx-S1 dedup done (%d batches, %d records)",
+        dswx_batch_count, dswx_record_count,
+    )
+
+    if rtc_failures:
+        logger.error("Skipped %d non-conformant RTC-S1 records", rtc_failures)
+    if dswx_failures:
+        logger.error("Skipped %d non-conformant DSWx-S1 records", dswx_failures)
+
+    logger.info("Checkpoint reducer: filtering RTCs by sensor start dates")
+    filter_batch_count = 0
+    filter_record_count = 0
+    filter_available_count = 0
+    for batch in _batches(checkpoint.iter_reduced_payloads("rtc_unique")):
+        available = []
+        for product in batch:
+            if should_include_rtc(product["id"], sensor_start_dates):
+                key = "$".join(rtc_to_id_tuple(product["id"]))
+                available.append((key, product["id"], product))
+        checkpoint.upsert_reduced_records("available_rtcs", available)
+        filter_batch_count += 1
+        filter_record_count += len(batch)
+        filter_available_count += len(available)
+        if filter_batch_count % 10 == 0:
+            logger.info(
+                "  ... filtered %d RTC-S1 batches by sensor start dates "
+                "(%d records checked, %d retained)",
+                filter_batch_count, filter_record_count, filter_available_count,
+            )
+    logger.info(
+        "Checkpoint reducer: sensor-date filtering done (%d batches, %d records, %d retained)",
+        filter_batch_count, filter_record_count, filter_available_count,
+    )
+
+    logger.info("Checkpoint reducer: building RTC → DSWx-S1 usage map")
+    usage_batch_count = 0
+    usage_record_count = 0
+    usage_pair_count = 0
+    for batch in _batches(checkpoint.iter_reduced_payloads("dswx_unique")):
+        used = []
+        pairs = []
+        for product in batch:
+            dswx_id = product["id"]
+            for rtc_id in product.get("input_rtcs", []):
+                try:
+                    stable_key = "$".join(rtc_to_id_tuple(rtc_id))
+                except ValueError:
+                    continue
+                used.append((stable_key, rtc_id, {"id": rtc_id}))
+                pair_key = f"{stable_key}\u0000{dswx_id}"
+                pairs.append(
+                    (
+                        pair_key,
+                        {"rtc_key": stable_key, "dswx_id": dswx_id},
+                    )
+                )
+        checkpoint.upsert_reduced_records("used_rtcs", used)
+        checkpoint.upsert_records("rtc_to_dswx_pairs", pairs)
+        usage_batch_count += 1
+        usage_record_count += len(batch)
+        usage_pair_count += len(pairs)
+        if usage_batch_count % 10 == 0:
+            logger.info(
+                "  ... processed %d DSWx-S1 usage-map batches "
+                "(%d DSWx records, %d RTC→DSWx pairs)",
+                usage_batch_count, usage_record_count, usage_pair_count,
+            )
+    logger.info(
+        "Checkpoint reducer: usage map done (%d batches, %d records, %d pairs)",
+        usage_batch_count, usage_record_count, usage_pair_count,
+    )
+
+    logger.info("Checkpoint reducer: computing final set differences")
+    expected = checkpoint.count_reduced_records("available_rtcs")
+    used_count = checkpoint.count_reduced_records("used_rtcs")
+    actual = checkpoint.count_reduced_intersection("available_rtcs", "used_rtcs")
+    missing = sorted(
+        payload["id"]
+        for payload in checkpoint.iter_reduced_difference_payloads(
+            "available_rtcs", "used_rtcs"
+        )
+    )
+
+    return {
+        "expected": expected,
+        "actual": actual,
+        "missing_count": len(missing),
+        "used_rtc_count": used_count,
+        "filtered_rtc_count": expected,
+        "missing": missing,
+        "rtc_surveyed": checkpoint.count_reduced_records("rtc_unique"),
+        "dswx_surveyed": checkpoint.count_reduced_records("dswx_unique"),
     }

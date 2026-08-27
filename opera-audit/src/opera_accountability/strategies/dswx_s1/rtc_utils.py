@@ -45,20 +45,20 @@ def has_known_epoch(sensor: str) -> bool:
 
 
 RTC_GRANULE_REGEX = (
-    r'(?P<id>'
-    r'(?P<project>OPERA)_'
-    r'(?P<level>L2)_'
-    r'(?P<product_type>RTC)-'
-    r'(?P<source>S1)_'
-    r'(?P<burst_id>\w{4}-\w{6}-\w{3})_'
-    r'(?P<acquisition_ts>(?P<acq_year>\d{4})(?P<acq_month>\d{2})(?P<acq_day>\d{2})'
-    r'T(?P<acq_hour>\d{2})(?P<acq_minute>\d{2})(?P<acq_second>\d{2})Z)_'
-    r'(?P<creation_ts>(?P<cre_year>\d{4})(?P<cre_month>\d{2})(?P<cre_day>\d{2})'
-    r'T(?P<cre_hour>\d{2})(?P<cre_minute>\d{2})(?P<cre_second>\d{2})Z)_'
-    r'(?P<sensor>S1A|S1B|S1C|S1D)_'
-    r'(?P<spacing>30)_'
-    r'(?P<product_version>v\d+[.]\d+)'
-    r')'
+    r"(?P<id>"
+    r"(?P<project>OPERA)_"
+    r"(?P<level>L2)_"
+    r"(?P<product_type>RTC)-"
+    r"(?P<source>S1)_"
+    r"(?P<burst_id>\w{4}-\w{6}-\w{3})_"
+    r"(?P<acquisition_ts>(?P<acq_year>\d{4})(?P<acq_month>\d{2})(?P<acq_day>\d{2})"
+    r"T(?P<acq_hour>\d{2})(?P<acq_minute>\d{2})(?P<acq_second>\d{2})Z)_"
+    r"(?P<creation_ts>(?P<cre_year>\d{4})(?P<cre_month>\d{2})(?P<cre_day>\d{2})"
+    r"T(?P<cre_hour>\d{2})(?P<cre_minute>\d{2})(?P<cre_second>\d{2})Z)_"
+    r"(?P<sensor>S1A|S1B|S1C|S1D)_"
+    r"(?P<spacing>30)_"
+    r"(?P<product_version>v\d+[.]\d+)"
+    r")"
 )
 """Full-granule RTC-S1 ID regex.
 
@@ -75,50 +75,27 @@ _RTC_GRANULE_PATTERN = re.compile(RTC_GRANULE_REGEX)
 # polarization / product tags (also stripped once each). Combined pol tags
 # like ``_VV+VH`` are listed before their single-pol components so we don't
 # leave a trailing ``+VH`` behind.
-_INPUT_EXT_SUFFIXES = ('.h5', '.tif', '.tiff')
+_INPUT_EXT_SUFFIXES = (".h5", ".tif", ".tiff")
 _INPUT_TAG_SUFFIXES = (
-    '_VV+VH', '_HH+HV',
-    '_VH', '_HV', '_VV', '_HH',
-    '_mask',
+    "_VV+VH", "_HH+HV",
+    "_VH", "_HV", "_VV", "_HH",
+    "_mask",
 )
 
 
 def reduce_input_rtc_list(input_files: Iterable[str]) -> list[str]:
     """Normalize DSWx-S1 ``InputGranules`` entries to unique RTC granule IDs.
 
-    DSWx-S1 CMR records list their inputs as per-band / per-polarization files
-    (e.g. ``...S1A_30_v1.0_VV.tif``). This helper:
-
-    1. Strips one known file extension (``.tif`` / ``.tiff`` / ``.h5``).
-    2. Strips one known product/polarization tag (``_VV``, ``_HH+HV``,
-       ``_mask``, etc.).
-    3. Validates the result against the RTC granule regex; unrecognized
-       entries (e.g. DEM tiles) are preserved as-is so that downstream code
-       (``mapping.analyze``'s ``rtc_to_id_tuple`` try/except) can filter them.
-    4. Dedupes so there is one entry per input RTC granule.
-
-    Unrecognized suffixes are logged at DEBUG level to aid future debugging.
+    Exact port of Riley's implementation: chains removesuffix() calls to strip
+    file extensions (.h5, .tif) and polarization/product tags (_VV, _HH, _VH,
+    _HV, _mask), then deduplicates.
     """
-    reduced: set[str] = set()
-    for raw in input_files:
-        name = raw
-        for suffix in _INPUT_EXT_SUFFIXES:
-            if name.endswith(suffix):
-                name = name[: -len(suffix)]
-                break
-        for suffix in _INPUT_TAG_SUFFIXES:
-            if name.endswith(suffix):
-                name = name[: -len(suffix)]
-                break
-        if _RTC_GRANULE_PATTERN.match(name) is None and name != raw:
-            logger.debug(
-                "reduce_input_rtc_list: stripped form %r (from %r) does not "
-                "match RTC regex; keeping raw entry for downstream filtering.",
-                name, raw,
-            )
-            name = raw
-        reduced.add(name)
-    return list(reduced)
+    return list(set(
+        [g.removesuffix(".h5").removesuffix(".tif").removesuffix(".tiff")
+          .removesuffix("_VV+VH").removesuffix("_HH+HV")
+          .removesuffix("_VH").removesuffix("_HV").removesuffix("_VV")
+          .removesuffix("_HH").removesuffix("_mask") for g in input_files]
+    ))
 
 
 @lru_cache(maxsize=1_000_000)
@@ -128,7 +105,7 @@ def rtc_to_id_tuple(rtc_id: str) -> tuple[str, str, str]:
     if match is None:
         raise ValueError(f"Failed to parse RTC granule ID: {rtc_id!r}")
     groups = match.groupdict()
-    return groups['burst_id'], groups['acquisition_ts'], groups['sensor']
+    return groups["burst_id"], groups["acquisition_ts"], groups["sensor"]
 
 
 def determine_acquisition_cycle(burst_id: str, acquisition_dts: str, sensor: str) -> int:
@@ -153,7 +130,7 @@ def determine_acquisition_cycle(burst_id: str, acquisition_dts: str, sensor: str
 
     instrument_epoch = isoparse(epoch)
 
-    burst_identification_number = int(burst_id.split(sep='-')[1])
+    burst_identification_number = int(burst_id.split(sep="-")[1])
     seconds_after_mission_epoch = (isoparse(acquisition_dts) - instrument_epoch).total_seconds()
 
     acquisition_index = (
@@ -175,5 +152,5 @@ def determine_acquisition_cycle_for_rtc_granule(granule_id: str) -> int:
         raise ValueError(f"Failed to parse RTC granule ID: {granule_id!r}")
     groups = match.groupdict()
     return determine_acquisition_cycle(
-        groups['burst_id'], groups['acquisition_ts'], groups['sensor']
+        groups["burst_id"], groups["acquisition_ts"], groups["sensor"]
     )

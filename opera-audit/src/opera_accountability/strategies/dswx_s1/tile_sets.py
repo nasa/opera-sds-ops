@@ -47,7 +47,7 @@ def resolve_mgrs_tile_db(override: Optional[str] = None) -> Path:
     Raises :class:`FileNotFoundError` with guidance if neither is set or the
     resolved path does not exist.
     """
-    candidate = override or os.environ.get('OPERA_MGRS_DB')
+    candidate = override or os.environ.get("OPERA_MGRS_DB")
     if not candidate:
         raise FileNotFoundError(
             "MGRS tile-collection SQLite path is required. Pass --mgrs-db "
@@ -64,7 +64,7 @@ def resolve_mgrs_tile_db(override: Optional[str] = None) -> Path:
 
 def _burst_id_to_db_key(rtc_id: str) -> str:
     """Turn ``OPERA_L2_RTC-S1_T118-252624-IW1_...`` → ``t118_252624_iw1``."""
-    return rtc_id.split('_')[3].lower().replace('-', '_')
+    return rtc_id.split("_")[3].lower().replace("-", "_")
 
 
 def _worker_init(state: threading.local, db_path: str,
@@ -103,7 +103,7 @@ def map_missing_rtcs_to_tile_sets(
     are logged and counted separately from water-set drops.
     """
     if workers is None:
-        workers = CONFIG['products']['DSWX_S1']['accountability'].get('tile_set_workers', 8)
+        workers = CONFIG["products"]["DSWX_S1"]["accountability"].get("tile_set_workers", 8)
 
     mgrs_db_path = str(mgrs_db_path)
     local = threading.local()
@@ -125,24 +125,34 @@ def map_missing_rtcs_to_tile_sets(
             initializer=_worker_init,
             initargs=(local, mgrs_db_path, conns, conns_lock),
         ) as pool:
-            futures = [pool.submit(_lookup_one, rtc_id, local) for rtc_id in missing_rtcs]
             completed = 0
-            for fut in as_completed(futures):
-                rtc_id, mgrs_sets, flags = fut.result()
-                if not mgrs_sets:
-                    unmatched_bursts += 1
-                    logger.debug(
-                        "No MGRS tile set found for burst in %s (DB lookup empty)",
-                        rtc_id,
-                    )
-                for mgrs_set_id, lof in zip(mgrs_sets, flags):
-                    if lof == 'water':
-                        dropped_water += 1
-                        continue
-                    mgrs_set_to_rtc.setdefault(mgrs_set_id, []).append(rtc_id)
-                completed += 1
-                if completed % 10000 == 0:
-                    logger.info("  ... processed %d / %d missing RTCs", completed, len(missing_rtcs))
+            # Bound pending Future objects. One Future per missing RTC caused
+            # large recovery runs to consume substantial RAM before SQLite
+            # work even began.
+            submit_batch_size = max(1000, workers * 8)
+            for offset in range(0, len(missing_rtcs), submit_batch_size):
+                batch = missing_rtcs[offset:offset + submit_batch_size]
+                futures = [pool.submit(_lookup_one, rtc_id, local) for rtc_id in batch]
+                for fut in as_completed(futures):
+                    rtc_id, mgrs_sets, flags = fut.result()
+                    if not mgrs_sets:
+                        unmatched_bursts += 1
+                        logger.debug(
+                            "No MGRS tile set found for burst in %s (DB lookup empty)",
+                            rtc_id,
+                        )
+                    for mgrs_set_id, lof in zip(mgrs_sets, flags):
+                        if lof == "water":
+                            dropped_water += 1
+                            continue
+                        mgrs_set_to_rtc.setdefault(mgrs_set_id, []).append(rtc_id)
+                    completed += 1
+                    if completed % 10000 == 0:
+                        logger.info(
+                            "  ... processed %d / %d missing RTCs",
+                            completed,
+                            len(missing_rtcs),
+                        )
     finally:
         # Close every per-worker sqlite connection; the executor has joined
         # its threads by the time we reach here so this is race-free.

@@ -1,2 +1,5 @@
 *.log
 **/.DS_Store
+.coverage
+.coverage.*
+*/opera-sds-pcm
