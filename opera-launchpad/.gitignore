@@ -1,0 +1,11 @@
+repos/
+output/
+**/venv/
+**/.venv/
+**/__pycache__/
+*.egg-info/
+.ruff_cache/
+*.pyc
+*.pickle
+*.log
+.DS_Store

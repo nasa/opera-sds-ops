@@ -1,0 +1,229 @@
+# opera-launchpad registry
+#
+# Single source of truth: where each product's real tool lives, how to
+# install it, and what parameters it needs. opera-launchpad never owns this
+# logic — it clones the repo (if needed) and shells out to the unmodified
+# tool in its own repo/venv.
+#
+# Two tool "kind"s are supported:
+#   - single:   one command, run once with the collected params.
+#   - pipeline: an ordered list of steps, each run in sequence. Later steps
+#               typically consume files produced by earlier steps.
+#
+# Escape hatches, for when a tool's upstream install isn't quite right and we
+# don't want to fork the tool just to fix its environment:
+#
+#   verify: "venv/bin/python foo.py --help"
+#       Optional smoke test run right after setup. Catches "upstream forgot a
+#       dependency" at install time instead of mid-run. Non-fatal: it reports
+#       the failure and points at `overrides` below.
+#
+#   overrides:
+#       reason: "requirements.txt is missing pandas; urllib3 2.x breaks boto3"
+#       pip_install: ["pandas>=2.0", "urllib3<2"]   # installed after setup
+#       post_setup: ["venv/bin/python -m nltk.downloader punkt"]
+#       Applied on top of `setup`, in order. `pip_install` runs through the
+#       tool's own venv pip, so later specs win over what setup installed --
+#       use it to add missing packages or force a different version.
+#
+#   pip: "venv/bin/pip"
+#       Only needed if a tool lays its venv out differently than the default.
+#
+# One clone per tool, at `repos/<product>/<tool>/`. Several tools may name
+# the same `repo` on different `branch`es — each gets its own clone, so a
+# tool pinned to a feature branch can't drag the others onto it.
+
+products:
+  DSWX_S1:
+    display_name: "Dynamic Surface Water Extent - Sentinel-1"
+    tools:
+      duplicates:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-ops.git"
+        branch: "main"
+        path: "duplicates"
+        setup: "python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+        verify: "venv/bin/python duplicate_check.py --help"
+        # If upstream's requirements.txt ever goes stale, patch it here rather
+        # than forking the tool, e.g.:
+        # overrides:
+        #   reason: "requirements.txt omits <pkg>"
+        #   pip_install: ["<pkg>>=1.2"]
+        entrypoint: "venv/bin/python duplicate_check.py"
+        fixed_args: ["DSWX_S1"]
+        # No `produces` here on purpose: this tool's only output is whatever
+        # `-o` points at, which the `is_output: true` param below already
+        # tracks (including an operator-overridden filename). Listing the
+        # default name here as well would make an overridden run report the
+        # untouched default as a missing output.
+        params:
+          - name: start_date
+            flag: "-s"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime after which data is retrieved, e.g. 2026-01-01T00:00:00Z"
+          - name: end_date
+            flag: "-e"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime before which data is retrieved, e.g. 2026-01-21T00:00:00Z"
+          - name: venue
+            flag: "--venue"
+            type: choice
+            # PROD only: duplicate_check.py's PRODUCTS['DSWX_S1']['CCID'] has
+            # no UAT entry, so passing --venue UAT is a hard KeyError. Add
+            # "UAT" back here once upstream defines a UAT collection ID.
+            choices: ["PROD"]
+            default: "PROD"
+          - name: output
+            flag: "-o"
+            type: path
+            default: "duplicate_report.json"
+            # Tracks whatever the operator actually typed, so a custom
+            # filename still gets collected.
+            is_output: true
+          - name: facet
+            flag: "--facet"
+            type: choice
+            choices: ["months", "dates", "both"]
+            default: "months"
+          - name: use_revision
+            flag: "--use-revision"
+            type: bool
+            default: false
+            help: "Use revision date range instead of temporal range"
+
+      accountability:
+        kind: pipeline
+        repo: "https://github.com/nasa/opera-sds-ops.git"
+        branch: "main"
+        path: "accountability_tools/dswx_s1"
+        setup: "python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+        # Imports rtc_utils too: that's what pulls in dateutil, and importing
+        # it here is what catches the missing dependency patched below.
+        verify: "venv/bin/python -c 'import requests, backoff, tqdm, rtc_utils'"
+        overrides:
+          reason: >
+            rtc_utils.py imports dateutil (used by add_cycle_indices.py, step 4)
+            but upstream requirements.txt only lists requests/backoff/tqdm.
+            Remove this once upstream adds python-dateutil.
+          pip_install: ["python-dateutil"]
+        notes: >
+          Requires MGRS_tile_collection_v0.3.sqlite in this directory
+          (bundled in-repo). Confirm freshness with a PGE/PCM developer
+          before long runs. Some steps can take hours; consider running
+          inside tmux/screen.
+        steps:
+          - name: survey
+            entrypoint: "venv/bin/python survey.py"
+            params:
+              - name: start_date
+                flag: "-s"
+                type: datetime_iso
+                required: true
+                help: "Suggested: 2024-08-21T00:11:56Z (DSWx-S1 earliest sensing time)"
+              - name: end_date
+                flag: "-e"
+                type: datetime_iso
+                required: true
+                help: "Suggested: last second of the month prior to running"
+            requires: []
+            produces: ["rtc_products.json", "dswx_products.json"]
+
+          - name: accountability
+            entrypoint: "venv/bin/python accountability.py"
+            params: []
+            requires: ["rtc_products.json", "dswx_products.json"]
+            produces: ["missing_rtc_products.json"]
+
+          # The three steps below take --no-tqdm, which swaps the progress
+          # bar for periodic log lines. Worth saying yes to when running
+          # detached under tmux/screen, where a redrawing bar just fills
+          # the scrollback with control characters.
+          - name: tile_sets
+            entrypoint: "venv/bin/python missing_rtcs_to_tile_sets.py"
+            params:
+              - &no_tqdm_param
+                name: no_tqdm
+                flag: "--no-tqdm"
+                type: bool
+                default: false
+                help: "Log progress periodically instead of drawing a progress bar"
+            requires: ["missing_rtc_products.json"]
+            produces: ["missing_rtcs_to_tile_sets.pickle"]
+
+          - name: cycle_indices
+            entrypoint: "venv/bin/python add_cycle_indices.py"
+            params:
+              - *no_tqdm_param
+            requires: ["missing_rtcs_to_tile_sets.pickle"]
+            produces: ["missing_mgrs_set_cycle_indices.json"]
+
+          - name: burst_coverage
+            entrypoint: "venv/bin/python check_burst_coverage.py"
+            params:
+              - *no_tqdm_param
+            requires: ["missing_mgrs_set_cycle_indices.json"]
+            # ..._reduced.json is the actual deliverable: the final, reduced
+            # set of valid RTC native IDs to trigger.
+            produces:
+              - "missing_mgrs_sets_by_coverage.json"
+              - "missing_rtc_mgrs_set_mappings_with_sufficient_coverage_reduced.json"
+
+  # --- Stubs below: same shape, to be filled in as each product/tool is ---
+  # --- wired up. Empty `tools` entries are skipped by the CLI and shown  ---
+  # --- as "not yet configured".                                         ---
+
+  DSWX_HLS:
+    display_name: "Dynamic Surface Water Extent - HLS"
+    tools:
+      duplicates: {}
+      accountability: {}
+
+  RTC_S1:
+    display_name: "Radiometric Terrain Corrected - Sentinel-1"
+    tools:
+      duplicates: {}
+
+  CSLC_S1:
+    display_name: "Coregistered Single Look Complex - Sentinel-1"
+    tools:
+      duplicates: {}
+
+  DIST_S1:
+    display_name: "Disturbance - Sentinel-1"
+    tools:
+      duplicates: {}
+      accountability: {}
+
+  DISP_S1:
+    display_name: "Displacement - Sentinel-1"
+    tools:
+      duplicates: {}
+      accountability: {}
+
+  TROPO:
+    display_name: "Troposphere Zenith Delay"
+    tools:
+      accountability: {}
+
+  DIST_ALERT_HLS:
+    display_name: "Disturbance Alert - HLS"
+    tools:
+      duplicates: {}
+
+  CSLC_S1_STATIC:
+    display_name: "Coregistered Single Look Complex Static Layers - Sentinel-1"
+    tools:
+      duplicates: {}
+
+  RTC_S1_STATIC:
+    display_name: "Radiometric Terrain Corrected Static Layers - Sentinel-1"
+    tools:
+      duplicates: {}
+
+  DISP_S1_STATIC:
+    display_name: "Displacement Static Layers - Sentinel-1"
+    tools:
+      duplicates: {}
+      accountability: {}
