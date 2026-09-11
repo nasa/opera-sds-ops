@@ -1,0 +1,1180 @@
+# opera-launchpad registry
+#
+# Single source of truth: where each product's real tool lives, how to
+# install it, and what parameters it needs. opera-launchpad never owns this
+# logic — it clones the repo (if needed) and shells out to the unmodified
+# tool in its own repo/venv.
+#
+# Two tool "kind"s are supported:
+#   - single:   one command, run once with the collected params.
+#   - pipeline: an ordered list of steps, each run in sequence. Later steps
+#               typically consume files produced by earlier steps.
+#
+# Escape hatches, for when a tool's upstream install isn't quite right and we
+# don't want to fork the tool just to fix its environment:
+#
+#   verify: "venv/bin/python foo.py --help"
+#       Optional smoke test run right after setup. Catches "upstream forgot a
+#       dependency" at install time instead of mid-run. Non-fatal: it reports
+#       the failure and points at `overrides` below.
+#
+#   overrides:
+#       reason: "requirements.txt is missing pandas; urllib3 2.x breaks boto3"
+#       pip_install: ["pandas>=2.0", "urllib3<2"]   # installed after setup
+#       post_setup: ["venv/bin/python -m nltk.downloader punkt"]
+#       Applied on top of `setup`, in order. `pip_install` runs through the
+#       tool's own venv pip, so later specs win over what setup installed --
+#       use it to add missing packages or force a different version.
+#
+#   pip: "venv/bin/pip"
+#       Only needed if a tool lays its venv out differently than the default.
+#
+# One clone per tool, at `repos/<product>/<tool>/`. Several tools may name
+# the same `repo` on different `branch`es — each gets its own clone, so a
+# tool pinned to a feature branch can't drag the others onto it.
+
+products:
+  DSWX_S1:
+    display_name: "Dynamic Surface Water Extent - Sentinel-1"
+    tools:
+      duplicates:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-ops.git"
+        branch: "main"
+        path: "duplicates"
+        setup: "python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+        verify: "venv/bin/python duplicate_check.py --help"
+        entrypoint: "venv/bin/python duplicate_check.py"
+        fixed_args: ["DSWX_S1"]
+        params:
+          - name: start_date
+            flag: "-s"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime after which data is retrieved, e.g. 2026-01-01T00:00:00Z"
+          - name: end_date
+            flag: "-e"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime before which data is retrieved, e.g. 2026-01-21T00:00:00Z"
+          - name: venue
+            flag: "--venue"
+            type: choice
+            choices: ["PROD"]
+            default: "PROD"
+          - name: output
+            flag: "-o"
+            type: path
+            default: "duplicate_report.json"
+            is_output: true
+          - name: facet
+            flag: "--facet"
+            type: choice
+            choices: ["months", "dates", "both"]
+            default: "months"
+          - name: use_revision
+            flag: "--use-revision"
+            type: bool
+            default: false
+            help: "Use revision date range instead of temporal range"
+
+      accountability:
+        kind: pipeline
+        repo: "https://github.com/nasa/opera-sds-ops.git"
+        branch: "main"
+        path: "accountability_tools/dswx_s1"
+        setup: "python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+        verify: "venv/bin/python -c 'import requests, backoff, tqdm, rtc_utils'"
+        overrides:
+          reason: >
+            rtc_utils.py imports dateutil (used by add_cycle_indices.py, step 4)
+            but upstream requirements.txt only lists requests/backoff/tqdm.
+            Remove this once upstream adds python-dateutil.
+          pip_install: ["python-dateutil"]
+        notes: >
+          Requires MGRS_tile_collection_v0.3.sqlite in this directory
+          (bundled in-repo). Confirm freshness with a PGE/PCM developer
+          before long runs. Some steps can take hours; consider running
+          inside tmux/screen.
+        steps:
+          - name: survey
+            entrypoint: "venv/bin/python survey.py"
+            params:
+              - name: start_date
+                flag: "-s"
+                type: datetime_iso
+                required: true
+                help: "Suggested: 2024-08-21T00:11:56Z (DSWx-S1 earliest sensing time)"
+              - name: end_date
+                flag: "-e"
+                type: datetime_iso
+                required: true
+                help: "Suggested: last second of the month prior to running"
+            requires: []
+            produces: ["rtc_products.json", "dswx_products.json"]
+
+          - name: accountability
+            entrypoint: "venv/bin/python accountability.py"
+            params: []
+            requires: ["rtc_products.json", "dswx_products.json"]
+            produces: ["missing_rtc_products.json"]
+
+          - name: tile_sets
+            entrypoint: "venv/bin/python missing_rtcs_to_tile_sets.py"
+            params:
+              - &no_tqdm_param
+                name: no_tqdm
+                flag: "--no-tqdm"
+                type: bool
+                default: false
+                help: "Log progress periodically instead of drawing a progress bar"
+            requires: ["missing_rtc_products.json"]
+            produces: ["missing_rtcs_to_tile_sets.pickle"]
+
+          - name: cycle_indices
+            entrypoint: "venv/bin/python add_cycle_indices.py"
+            params:
+              - *no_tqdm_param
+            requires: ["missing_rtcs_to_tile_sets.pickle"]
+            produces: ["missing_mgrs_set_cycle_indices.json"]
+
+          - name: burst_coverage
+            entrypoint: "venv/bin/python check_burst_coverage.py"
+            params:
+              - *no_tqdm_param
+            requires: ["missing_mgrs_set_cycle_indices.json"]
+            produces:
+              - "missing_mgrs_sets_by_coverage.json"
+              - "missing_rtc_mgrs_set_mappings_with_sufficient_coverage_reduced.json"
+
+      audit:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-pcm.git"
+        branch: "develop"
+        path: "tools/ops/cmr_audit"
+        setup: "python3 -m venv venv && venv/bin/pip install -e '../../..[cmr_audit]'"
+        verify: "venv/bin/python cmr_audit_dswx_s1.py --help"
+        overrides:
+          reason: >
+            cmr_audit_dswx_s1.py imports from data_subscriber and rtc_utils
+            which are part of the opera-sds-pcm package. Full PCM install
+            with [cmr_audit] extras required. geopandas is needed by
+            rtc.mgrs_bursts_collection_db_client.
+          pip_install: ["geopandas"]
+        # rtc.mgrs_bursts_collection_db_client falls back to an AWS S3
+        # download if it can't find the DB locally; bootstrap.py instead
+        # copies opera-sds-ops's bundled copy in and cli.py points
+        # MGRS_TILE_COLLECTION_DB_FILEPATH at it, so no AWS credentials
+        # are needed.
+        requires_mgrs_db: true
+        entrypoint: "venv/bin/python cmr_audit_dswx_s1.py"
+        params:
+          - name: start_datetime
+            flag: "--start-datetime"
+            type: datetime_iso
+            required: true
+            help: "ISO datetime with timezone, e.g. 2026-01-01T00:00:00+00:00"
+          - name: end_datetime
+            flag: "--end-datetime"
+            type: datetime_iso
+            required: true
+            help: "ISO datetime with timezone (script requires this despite defaulting it internally)"
+          - name: output
+            flag: "-o"
+            type: path
+            is_output: true
+          - name: format
+            flag: "--format"
+            type: choice
+            choices: ["txt", "json"]
+            default: "txt"
+          - name: log_level
+            flag: "--log-level"
+            type: choice
+            choices: ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+            default: "INFO"
+
+  DSWX_HLS:
+    display_name: "Dynamic Surface Water Extent - HLS"
+    tools:
+      duplicates:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-ops.git"
+        branch: "main"
+        path: "duplicates"
+        setup: "python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+        verify: "venv/bin/python duplicate_check.py --help"
+        entrypoint: "venv/bin/python duplicate_check.py"
+        fixed_args: ["DSWX_HLS"]
+        params:
+          - name: start_date
+            flag: "-s"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime after which data is retrieved"
+          - name: end_date
+            flag: "-e"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime before which data is retrieved"
+          - name: venue
+            flag: "--venue"
+            type: choice
+            choices: ["PROD"]
+            default: "PROD"
+          - name: output
+            flag: "-o"
+            type: path
+            default: "duplicate_report.json"
+            is_output: true
+          - name: facet
+            flag: "--facet"
+            type: choice
+            choices: ["months", "dates", "both"]
+            default: "months"
+          - name: use_revision
+            flag: "--use-revision"
+            type: bool
+            default: false
+            help: "Use revision date range instead of temporal range"
+
+      accountability:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-ops.git"
+        branch: "main"
+        path: "duplicates/dswx-hls"
+        setup: "python3 -m venv venv && venv/bin/pip install -r ../requirements.txt"
+        verify: "venv/bin/python dswx-hls-input-map.py --help"
+        entrypoint: "venv/bin/python dswx-hls-input-map.py"
+        params:
+          - name: start_date
+            flag: "-s"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime after which data is retrieved"
+          - name: end_date
+            flag: "-e"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime before which data is retrieved"
+          - name: output
+            flag: "-o"
+            type: path
+            default: "dswx_hls_report.json"
+            is_output: true
+          - name: histogram_dir
+            flag: "-d"
+            type: path
+            required: false
+            help: "Optional directory to save histogram plots to"
+          - name: full_report
+            flag: "--full-report"
+            type: bool
+            default: false
+            help: "Include 1-to-1 HLS to OPERA mappings in the report"
+
+      audit:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-pcm.git"
+        branch: "develop"
+        path: "tools/ops/cmr_audit"
+        setup: "python3 -m venv venv && venv/bin/pip install -e '../../..[cmr_audit]'"
+        verify: "venv/bin/python cmr_audit_hls.py --help"
+        overrides:
+          reason: >
+            All cmr_audit scripts use absolute imports from the opera-sds-pcm
+            package. Full PCM install with [cmr_audit] extras required.
+        entrypoint: "venv/bin/python cmr_audit_hls.py"
+        params:
+          - name: start_datetime
+            flag: "--start-datetime"
+            type: datetime_iso
+            required: true
+            help: "ISO datetime with timezone, e.g. 2026-01-01T00:00:00+00:00"
+          - name: end_datetime
+            flag: "--end-datetime"
+            type: datetime_iso
+            required: true
+            help: "ISO datetime with timezone (script requires this despite defaulting it internally)"
+          - name: output
+            flag: "-o"
+            type: path
+            is_output: true
+          - name: format
+            flag: "--format"
+            type: choice
+            choices: ["txt", "json"]
+            default: "txt"
+          - name: log_level
+            flag: "--log-level"
+            type: choice
+            choices: ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+            default: "INFO"
+
+  RTC_S1:
+    display_name: "Radiometric Terrain Corrected - Sentinel-1"
+    tools:
+      duplicates:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-ops.git"
+        branch: "main"
+        path: "duplicates"
+        setup: "python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+        verify: "venv/bin/python duplicate_check.py --help"
+        entrypoint: "venv/bin/python duplicate_check.py"
+        fixed_args: ["RTC_S1"]
+        params:
+          - name: start_date
+            flag: "-s"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime after which data is retrieved"
+          - name: end_date
+            flag: "-e"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime before which data is retrieved"
+          - name: venue
+            flag: "--venue"
+            type: choice
+            choices: ["PROD", "UAT"]
+            default: "PROD"
+          - name: output
+            flag: "-o"
+            type: path
+            default: "duplicate_report.json"
+            is_output: true
+          - name: facet
+            flag: "--facet"
+            type: choice
+            choices: ["months", "dates", "both"]
+            default: "months"
+          - name: use_revision
+            flag: "--use-revision"
+            type: bool
+            default: false
+            help: "Use revision date range instead of temporal range"
+
+      audit:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-pcm.git"
+        branch: "develop"
+        path: "tools/ops/cmr_audit"
+        setup: "python3 -m venv venv && venv/bin/pip install -e '../../..[cmr_audit]'"
+        verify: "venv/bin/python cmr_audit_burst_coverage.py --help"
+        overrides:
+          reason: >
+            All cmr_audit scripts use absolute imports from the opera-sds-pcm
+            package. Full PCM install with [cmr_audit] extras required.
+            Shapely needed for GeoJSON polygon intersection filtering.
+          pip_install: ["shapely"]
+        # Burst-ID derivation downloads SLC annotation metadata using an EDL
+        # Bearer token from ~/.netrc; without it, that step silently fails
+        # per-SLC (logs a warning, contributes an empty burst list) instead
+        # of erroring outright, so results end up degraded rather than
+        # bad-request-failing. `./setup.sh` prompts for EDL credentials once.
+        requires_edl: true
+        entrypoint: "venv/bin/python cmr_audit_burst_coverage.py"
+        # --do-rtc/--do-cslc are value-taking ("true"/"false"), not store_true
+        # flags, so a bare "--do-rtc" (no value) is a hard argparse error.
+        fixed_args: ["--do-rtc", "true"]
+        params:
+          - name: start_datetime
+            flag: "--start-datetime"
+            type: datetime_iso
+            required: true
+            help: "ISO datetime with timezone"
+          - name: end_datetime
+            flag: "--end-datetime"
+            type: datetime_iso
+            required: true
+            help: "ISO datetime with timezone"
+          - name: geojson
+            flag: "-g"
+            type: path
+            required: true
+            help: "Path or URL to GeoJSON file defining region of interest"
+          - name: do_cslc
+            flag: "--do-cslc"
+            type: choice
+            choices: ["false", "true"]
+            default: "false"
+            help: "Also check CSLC-S1 coverage"
+          - name: output
+            flag: "-o"
+            type: path
+            is_output: true
+          - name: format
+            flag: "--format"
+            type: choice
+            choices: ["json", "txt"]
+            default: "json"
+          - name: log_level
+            flag: "--log-level"
+            type: choice
+            choices: ["DEBUG", "INFO", "WARNING", "ERROR"]
+            default: "INFO"
+
+  CSLC_S1:
+    display_name: "Coregistered Single Look Complex - Sentinel-1"
+    tools:
+      duplicates:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-ops.git"
+        branch: "main"
+        path: "duplicates"
+        setup: "python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+        verify: "venv/bin/python duplicate_check.py --help"
+        entrypoint: "venv/bin/python duplicate_check.py"
+        fixed_args: ["CSLC_S1"]
+        params:
+          - name: start_date
+            flag: "-s"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime after which data is retrieved"
+          - name: end_date
+            flag: "-e"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime before which data is retrieved"
+          - name: venue
+            flag: "--venue"
+            type: choice
+            choices: ["PROD"]
+            default: "PROD"
+          - name: output
+            flag: "-o"
+            type: path
+            default: "duplicate_report.json"
+            is_output: true
+          - name: facet
+            flag: "--facet"
+            type: choice
+            choices: ["months", "dates", "both"]
+            default: "months"
+          - name: use_revision
+            flag: "--use-revision"
+            type: bool
+            default: false
+            help: "Use revision date range instead of temporal range"
+
+      audit:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-pcm.git"
+        branch: "develop"
+        path: "tools/ops/cmr_audit"
+        setup: "python3 -m venv venv && venv/bin/pip install -e '../../..[cmr_audit]'"
+        verify: "venv/bin/python cmr_audit_burst_coverage.py --help"
+        overrides:
+          reason: >
+            All cmr_audit scripts use absolute imports from the opera-sds-pcm
+            package. Full PCM install with [cmr_audit] extras required.
+            Shapely needed for GeoJSON polygon intersection filtering.
+          pip_install: ["shapely"]
+        # Burst-ID derivation downloads SLC annotation metadata using an EDL
+        # Bearer token from ~/.netrc; without it, that step silently fails
+        # per-SLC (logs a warning, contributes an empty burst list) instead
+        # of erroring outright, so results end up degraded rather than
+        # bad-request-failing. `./setup.sh` prompts for EDL credentials once.
+        requires_edl: true
+        entrypoint: "venv/bin/python cmr_audit_burst_coverage.py"
+        # --do-rtc/--do-cslc are value-taking ("true"/"false"), not store_true
+        # flags, so a bare "--do-cslc" (no value) is a hard argparse error.
+        fixed_args: ["--do-cslc", "true"]
+        params:
+          - name: start_datetime
+            flag: "--start-datetime"
+            type: datetime_iso
+            required: true
+            help: "ISO datetime with timezone"
+          - name: end_datetime
+            flag: "--end-datetime"
+            type: datetime_iso
+            required: true
+            help: "ISO datetime with timezone"
+          - name: geojson
+            flag: "-g"
+            type: path
+            required: true
+            help: "Path or URL to GeoJSON file defining region of interest"
+          - name: do_rtc
+            flag: "--do-rtc"
+            type: choice
+            choices: ["false", "true"]
+            default: "false"
+            help: "Also check RTC-S1 coverage"
+          - name: output
+            flag: "-o"
+            type: path
+            is_output: true
+          - name: format
+            flag: "--format"
+            type: choice
+            choices: ["json", "txt"]
+            default: "json"
+          - name: log_level
+            flag: "--log-level"
+            type: choice
+            choices: ["DEBUG", "INFO", "WARNING", "ERROR"]
+            default: "INFO"
+
+  DIST_S1:
+    display_name: "Disturbance - Sentinel-1"
+    tools:
+
+      input_selection:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-pcm.git"
+        branch: "develop"
+        path: "tools"
+        setup: "python3 -m venv venv && venv/bin/pip install -e '..[cmr_audit]'"
+        verify: "venv/bin/python dist_s1_input_tool.py --help"
+        overrides:
+          reason: >
+            dist_s1_input_tool.py imports from data_subscriber, tools.dist_s1_input_formatters,
+            and tools.ops.cmr_audit.cmr_audit_utils. Full PCM install with
+            [cmr_audit] extras required. geopandas is needed by
+            data_subscriber.rtc.mgrs_bursts_collection_db_client.
+          pip_install: ["geopandas"]
+        requires_mgrs_db: true
+        entrypoint: "venv/bin/python dist_s1_input_tool.py"
+        params:
+          - name: native_id
+            flag: "--native-id"
+            type: str
+            required: false
+            help: "DIST-S1 native ID to parse for tile ID and time"
+          - name: temporal_window
+            flag: "--temporal-window"
+            type: bool
+            default: false
+            help: "Enable temporal window analysis mode"
+          - name: start_date
+            flag: "--start-date"
+            type: datetime_iso
+            required: false
+            help: "Start date for temporal window analysis"
+          - name: end_date
+            flag: "--end-date"
+            type: datetime_iso
+            required: false
+            help: "End date for temporal window analysis"
+          - name: window_size
+            flag: "--window-size"
+            type: int
+            default: 60
+            help: "Size of backward-looking window in days"
+          - name: output_format
+            flag: "--output"
+            type: choice
+            choices: ["text", "json", "ids"]
+            default: "text"
+          - name: output_file
+            flag: "--output-file"
+            type: path
+            is_output: true
+            help: "Output file path for JSON format"
+
+      audit:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-pcm.git"
+        branch: "develop"
+        path: "tools/ops/cmr_audit"
+        setup: "python3 -m venv venv && venv/bin/pip install -e '../../..[cmr_audit]'"
+        verify: "venv/bin/python cmr_audit_dist_s1.py --help"
+        overrides:
+          reason: >
+            cmr_audit_dist_s1.py imports from data_subscriber and uses boto3,
+            pandas from the opera-sds-pcm package tree. Full PCM install with
+            [cmr_audit] extras required. geopandas is needed by
+            data_subscriber.rtc.mgrs_bursts_collection_db_client.
+          pip_install: ["geopandas"]
+        requires_mgrs_db: true
+        entrypoint: "venv/bin/python cmr_audit_dist_s1.py"
+        params:
+          - name: start_datetime
+            flag: "--start-datetime"
+            type: datetime_iso
+            required: true
+            help: "ISO datetime with timezone"
+          - name: end_datetime
+            flag: "--end-datetime"
+            type: datetime_iso
+            required: true
+            help: "ISO datetime with timezone"
+          - name: cmr_environment
+            flag: "--cmr-environment"
+            type: choice
+            choices: ["PROD", "UAT"]
+            default: "PROD"
+          - name: output
+            flag: "-o"
+            type: path
+            is_output: true
+          - name: format
+            flag: "--format"
+            type: choice
+            choices: ["txt", "json"]
+            default: "txt"
+          - name: log_level
+            flag: "--log-level"
+            type: choice
+            choices: ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+            default: "INFO"
+
+      validity:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-pcm.git"
+        branch: "develop"
+        path: "tools/ops/dist_s1_confirmation"
+        setup: "python3 -m venv venv && venv/bin/pip install backoff boto3 rasterio requests tqdm"
+        verify: "venv/bin/python dist_s1_confirmation.py --help"
+        overrides:
+          reason: >
+            Standalone script with no requirements.txt; deps from environment.yaml.
+            rasterio bundles GDAL via pip wheels on macOS. On Linux, native GDAL
+            libraries may be required.
+        # get_token below opts into fetching an EDL Bearer token via
+        # ~/.netrc — only needed while the DIST-S1 collection is non-public.
+        # `./setup.sh` prompts for EDL credentials once.
+        requires_edl: true
+        entrypoint: "venv/bin/python dist_s1_confirmation.py"
+        params:
+          - name: start_date
+            flag: "-s"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime after which data should be retrieved (e.g. 2026-01-01T00:00:00Z)"
+          - name: end_date
+            flag: "-e"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime before which data should be retrieved"
+          - name: tiles
+            flag: "-t"
+            # nargs='+' on the script side: needs each tile as its own argv
+            # token, not one space-separated string.
+            type: str_list
+            required: false
+            help: "MGRS tile IDs to restrict survey to (space-separated, e.g. 10SGD 11SLT)"
+          - name: production_start_date
+            flag: "--production-start-date"
+            type: datetime_iso
+            required: false
+            help: "Filter by production time start"
+          - name: production_end_date
+            flag: "--production-end-date"
+            type: datetime_iso
+            required: false
+            help: "Filter by production time end"
+          - name: pge_versions
+            flag: "--pge-versions"
+            type: str_list
+            required: false
+            help: "PGE version number(s) to filter to (space-separated)"
+          - name: output
+            flag: "-o"
+            type: path
+            default: "dist_s1_confirmation_report.json"
+            is_output: true
+            help: "Output JSON filename (script default is a timestamped name if omitted)"
+          - name: venue
+            flag: "--venue"
+            type: choice
+            choices: ["PROD", "UAT"]
+            default: "PROD"
+          - name: ignore_first_null
+            flag: "--ignore-first-null"
+            type: bool
+            default: false
+            help: "Suppress warnings when first product in a chain has no predecessor"
+          - name: get_token
+            flag: "--get-token"
+            type: bool
+            default: false
+            help: "Fetch an EDL token from ~/.netrc for the CMR queries (needed while DIST-S1 is non-public)"
+
+  DISP_S1:
+    display_name: "Displacement - Sentinel-1"
+    tools:
+      duplicate_detection:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-pcm.git"
+        branch: "develop"
+        path: "tools/ops/cmr_audit"
+        setup: "python3 -m venv venv && venv/bin/pip install -e '../../..[cmr_audit]'"
+        verify: "venv/bin/python detect_cmr_duplicates_for_disp_s1.py --help"
+        overrides:
+          reason: >
+            detect_cmr_duplicates_for_disp_s1.py imports
+            report.opera_validator.opv_util from the opera-sds-pcm package.
+            Full PCM install with [cmr_audit] extras required. tqdm is an
+            additional dependency. report/ is not discovered by find_packages()
+            (missing __init__.py), so we create them in post_setup.
+          pip_install: ["tqdm"]
+          post_setup:
+            - "touch ../../../report/__init__.py ../../../report/opera_validator/__init__.py && venv/bin/pip install -e ../../.."
+        entrypoint: "venv/bin/python detect_cmr_duplicates_for_disp_s1.py"
+        params:
+          - name: product_type
+            flag: "--product-type"
+            type: choice
+            choices: ["CSLC", "DISP-S1", "both"]
+            required: true
+            help: "Product type to check for duplicates"
+          - name: start
+            flag: "--start"
+            type: datetime_iso
+            required: true
+            help: "Start datetime (e.g. 2024-01-01T00:00:00Z)"
+          - name: end
+            flag: "--end"
+            type: datetime_iso
+            required: true
+            help: "End datetime (e.g. 2024-12-31T23:59:59Z)"
+          - name: endpoint
+            flag: "--endpoint"
+            type: choice
+            choices: ["OPS", "UAT"]
+            default: "OPS"
+          - name: frames
+            flag: "--frames"
+            type: str
+            required: false
+            help: "Comma-separated list of frame IDs for DISP-S1"
+          - name: burst_ids
+            flag: "--burst-ids"
+            type: str
+            required: false
+            help: "Comma-separated list of burst IDs for CSLC"
+          - name: output
+            flag: "--output"
+            type: path
+            is_output: true
+          - name: debug
+            flag: "--debug"
+            type: bool
+            default: false
+            help: "Enable debug logging"
+
+      duplicates:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-ops.git"
+        branch: "main"
+        path: "duplicates"
+        setup: "python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+        verify: "venv/bin/python duplicate_check.py --help"
+        entrypoint: "venv/bin/python duplicate_check.py"
+        fixed_args: ["DISP_S1"]
+        params:
+          - name: start_date
+            flag: "-s"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime after which data is retrieved"
+          - name: end_date
+            flag: "-e"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime before which data is retrieved"
+          - name: venue
+            flag: "--venue"
+            type: choice
+            choices: ["PROD"]
+            default: "PROD"
+          - name: output
+            flag: "-o"
+            type: path
+            default: "duplicate_report.json"
+            is_output: true
+          - name: facet
+            flag: "--facet"
+            type: choice
+            choices: ["months", "dates", "both"]
+            default: "months"
+          - name: use_revision
+            flag: "--use-revision"
+            type: bool
+            default: false
+            help: "Use revision date range instead of temporal range"
+
+      audit:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-pcm.git"
+        branch: "develop"
+        path: "tools/ops/cmr_audit"
+        # This venv is built with Python 3.12 specifically (found via
+        # scripts/pick_legacy_python.sh, rather than plain `python3` which
+        # could resolve to anything on PATH): opera-sds-pcm's setup.py
+        # requires >=3.12, while hysds's pins (lxml<5.0.0, gevent, etc. —
+        # see overrides.reason below) have no prebuilt wheels for 3.13+ and
+        # fail to compile from source there. 3.12 is the version that
+        # satisfies both constraints at once.
+        setup: "PYBIN=$($OPERA_LAUNCHPAD_ROOT/scripts/pick_legacy_python.sh) && \"$PYBIN\" -m venv venv && venv/bin/pip install -e '../../..[cmr_audit]'"
+        verify: "venv/bin/python cmr_audit_disp_s1.py --help"
+        overrides:
+          reason: >
+            cmr_audit_disp_s1.py imports data_subscriber.cslc_utils and
+            report.opera_validator modules from the opera-sds-pcm package.
+            Full PCM install with [cmr_audit] extras required. tabulate,
+            geopandas, and GDAL (osgeo) are additional dependencies (via
+            cmr_audit_slc.py -> geo.geo_util -> `from osgeo import ogr`).
+            GDAL's Python bindings must match whatever native GDAL version
+            ends up installed, so scripts/ensure_gdal.sh installs a native
+            GDAL first (if missing: brew/apt/dnf/yum/pacman/conda/choco,
+            whichever fits the OS) and then pip-installs the matching
+            version — rather than assuming one's already present.
+
+            Beyond that, report.opera_validator.opv_disp_s1 (imported by
+            cmr_audit_disp_s1.py for the actual DISP-S1 validator) pulls in
+            data_subscriber.es_conn_util, which needs the internal HySDS
+            stack (hysds, hysds-commons, osaka, prov-es, chimera — public,
+            installed below from their GitHub release tarballs, exactly as
+            opera-sds-pcm's own setup.py [test] extra pins them) AND the
+            *private* JPL GitHub Enterprise repo `pcm_commons`
+            (github.jpl.nasa.gov/IEMS-SDS/pcm_commons), which
+            scripts/ensure_pcm_commons.sh clones + installs the same way
+            opera-sds-pcm's own docker/Dockerfile does.
+
+            REQUIRED before running setup for this tool:
+              export GIT_OAUTH_TOKEN=<JPL GHE personal access token with
+                read access to IEMS-SDS/pcm_commons — generate one at
+                https://github.jpl.nasa.gov/settings/tokens>
+              export PCM_COMMONS_BRANCH=<optional, defaults to 3.1.2>
+            Without GIT_OAUTH_TOKEN set, ensure_pcm_commons.sh fails setup
+            for this one tool with a clear error (other tools are unaffected).
+
+            Once installed, `es_conn_util.get_es_connection()` still needs
+            live network access to the OPERA SDS's internal
+            Elasticsearch/GRQ cluster (GRQ_ES_URL etc., via HySDS's Celery
+            config) to actually run — i.e. this tool only works from an SDS
+            cluster node/VM with that access, not an arbitrary laptop.
+
+            Also note: hysds-commons pins numpy<2.0.0, and some of its other
+            pins (lxml<5.0.0, gevent) have no prebuilt wheels for very new
+            Python and fail to compile from source there (their C
+            extensions use CPython internal APIs removed in newer
+            versions) — hence the pick_legacy_python.sh venv above, rather
+            than relying on whatever `python3` resolves to on PATH.
+          pip_install:
+            - "tabulate"
+            - "geopandas"
+            - "prov-es@https://github.com/hysds/prov_es/archive/refs/tags/v0.3.0.tar.gz"
+            - "osaka@https://github.com/hysds/osaka/archive/refs/tags/v1.3.2.tar.gz"
+            - "hysds-commons@https://github.com/hysds/hysds_commons/archive/refs/tags/v2.4.1.tar.gz"
+            - "hysds@https://github.com/hysds/hysds/archive/refs/tags/v3.3.2.tar.gz"
+            - "chimera@https://github.com/hysds/chimera/archive/refs/tags/v3.0.0.tar.gz"
+            - "tqdm"
+          post_setup:
+            - "touch ../../../report/__init__.py ../../../report/opera_validator/__init__.py && venv/bin/pip install -e ../../.."
+            - "$OPERA_LAUNCHPAD_ROOT/scripts/ensure_gdal.sh"
+            - "$OPERA_LAUNCHPAD_ROOT/scripts/ensure_pcm_commons.sh"
+        # Surfaced by cli.py before an operator runs this tool: it needs
+        # live network access to the OPERA SDS's internal Elasticsearch/GRQ
+        # cluster (via data_subscriber.es_conn_util / HySDS's Celery config),
+        # so it only actually works from an SDS cluster node/VM — not a
+        # personal laptop, regardless of whether setup itself succeeds.
+        requires_vm: true
+        # bootstrap.py's ensure_git_oauth_token() prompts for this once, up
+        # front, for scripts/ensure_pcm_commons.sh's post_setup step to use.
+        requires_git_oauth_token: true
+        vm_note: >
+          Needs live network access to the OPERA SDS's internal
+          Elasticsearch/GRQ cluster (data_subscriber.es_conn_util, via
+          HySDS's Celery config) to actually run — only works from an SDS
+          cluster node/VM, not a personal laptop. Setup also needs a
+          GIT_OAUTH_TOKEN (private pcm_commons repo) — setup.sh prompts for
+          it, or export it yourself beforehand. See
+          overrides.reason above.
+        entrypoint: "venv/bin/python cmr_audit_disp_s1.py"
+        params:
+          - name: start_datetime
+            flag: "--start-datetime"
+            type: datetime_iso
+            required: true
+            help: "ISO datetime with timezone"
+          - name: end_datetime
+            flag: "--end-datetime"
+            type: datetime_iso
+            required: true
+            help: "ISO datetime with timezone"
+          - name: processing_mode
+            flag: "--processing-mode"
+            type: choice
+            choices: ["forward", "reprocessing", "historical"]
+            required: true
+            help: "Processing mode for DISP-S1 validation"
+          - name: output
+            flag: "-o"
+            type: path
+            is_output: true
+          - name: format
+            flag: "--format"
+            type: choice
+            choices: ["txt", "json"]
+            default: "txt"
+          - name: log_level
+            flag: "--log-level"
+            type: choice
+            choices: ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+            default: "INFO"
+
+  TROPO:
+    display_name: "Troposphere Zenith Delay"
+    tools:
+      duplicates:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-ops.git"
+        branch: "main"
+        path: "duplicates"
+        setup: "python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+        verify: "venv/bin/python duplicate_check.py --help"
+        entrypoint: "venv/bin/python duplicate_check.py"
+        fixed_args: ["TROPO"]
+        params:
+          - name: start_date
+            flag: "-s"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime after which data is retrieved"
+          - name: end_date
+            flag: "-e"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime before which data is retrieved"
+          - name: venue
+            flag: "--venue"
+            type: choice
+            choices: ["PROD"]
+            default: "PROD"
+          - name: output
+            flag: "-o"
+            type: path
+            default: "duplicate_report.json"
+            is_output: true
+          - name: facet
+            flag: "--facet"
+            type: choice
+            choices: ["months", "dates", "both"]
+            default: "months"
+          - name: use_revision
+            flag: "--use-revision"
+            type: bool
+            default: false
+            help: "Use revision date range instead of temporal range"
+
+      audit:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-pcm.git"
+        branch: "develop"
+        path: "tools/ops/cmr_audit"
+        setup: "python3 -m venv venv && venv/bin/pip install -e '../../..[cmr_audit]'"
+        verify: "venv/bin/python cmr_audit_tropo.py --help"
+        overrides:
+          reason: >
+            cmr_audit_tropo.py uses absolute imports from the opera-sds-pcm
+            package. Full PCM install with [cmr_audit] extras required.
+        entrypoint: "venv/bin/python cmr_audit_tropo.py"
+        produces: ["tropo_granule_counts.csv", "tropo_missing_dates.csv"]
+        params:
+          - name: start
+            flag: "--start"
+            type: str
+            required: false
+            default: "2016-01-01"
+            help: "Start date YYYY-MM-DD (default: 2016-01-01)"
+          - name: end
+            flag: "--end"
+            type: str
+            required: false
+            help: "End date YYYY-MM-DD (default: today minus 2 days)"
+          - name: provider
+            flag: "--provider"
+            type: str
+            default: "ASF"
+            help: "CMR data provider"
+          - name: short_name
+            flag: "--short_name"
+            type: str
+            default: "OPERA_L4_TROPO-ZENITH_V1"
+            help: "Granule short name"
+
+  DIST_ALERT_HLS:
+    display_name: "Disturbance Alert - HLS"
+    tools:
+      duplicates:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-ops.git"
+        branch: "main"
+        path: "duplicates"
+        setup: "python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+        verify: "venv/bin/python duplicate_check.py --help"
+        entrypoint: "venv/bin/python duplicate_check.py"
+        fixed_args: ["DIST_ALERT_HLS"]
+        params:
+          - name: start_date
+            flag: "-s"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime after which data is retrieved"
+          - name: end_date
+            flag: "-e"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime before which data is retrieved"
+          - name: venue
+            flag: "--venue"
+            type: choice
+            choices: ["PROD"]
+            default: "PROD"
+          - name: output
+            flag: "-o"
+            type: path
+            default: "duplicate_report.json"
+            is_output: true
+          - name: facet
+            flag: "--facet"
+            type: choice
+            choices: ["months", "dates", "both"]
+            default: "months"
+          - name: use_revision
+            flag: "--use-revision"
+            type: bool
+            default: false
+            help: "Use revision date range instead of temporal range"
+
+  CSLC_S1_STATIC:
+    display_name: "Coregistered Single Look Complex Static Layers - Sentinel-1"
+    tools:
+      duplicates:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-ops.git"
+        branch: "main"
+        path: "duplicates"
+        setup: "python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+        verify: "venv/bin/python duplicate_check.py --help"
+        entrypoint: "venv/bin/python duplicate_check.py"
+        fixed_args: ["CSLC_S1_STATIC"]
+        params:
+          - name: start_date
+            flag: "-s"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime after which data is retrieved"
+          - name: end_date
+            flag: "-e"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime before which data is retrieved"
+          - name: venue
+            flag: "--venue"
+            type: choice
+            choices: ["PROD"]
+            default: "PROD"
+          - name: output
+            flag: "-o"
+            type: path
+            default: "duplicate_report.json"
+            is_output: true
+          - name: facet
+            flag: "--facet"
+            type: choice
+            choices: ["months", "dates", "both"]
+            default: "months"
+          - name: use_revision
+            flag: "--use-revision"
+            type: bool
+            default: false
+            help: "Use revision date range instead of temporal range"
+
+  RTC_S1_STATIC:
+    display_name: "Radiometric Terrain Corrected Static Layers - Sentinel-1"
+    tools:
+      duplicates:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-ops.git"
+        branch: "main"
+        path: "duplicates"
+        setup: "python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+        verify: "venv/bin/python duplicate_check.py --help"
+        entrypoint: "venv/bin/python duplicate_check.py"
+        fixed_args: ["RTC_S1_STATIC"]
+        params:
+          - name: start_date
+            flag: "-s"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime after which data is retrieved"
+          - name: end_date
+            flag: "-e"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime before which data is retrieved"
+          - name: venue
+            flag: "--venue"
+            type: choice
+            choices: ["PROD"]
+            default: "PROD"
+          - name: output
+            flag: "-o"
+            type: path
+            default: "duplicate_report.json"
+            is_output: true
+          - name: facet
+            flag: "--facet"
+            type: choice
+            choices: ["months", "dates", "both"]
+            default: "months"
+          - name: use_revision
+            flag: "--use-revision"
+            type: bool
+            default: false
+            help: "Use revision date range instead of temporal range"
+
+  DISP_S1_STATIC:
+    display_name: "Displacement Static Layers - Sentinel-1"
+    tools:
+      audit:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-pcm.git"
+        branch: "develop"
+        path: "tools/ops/cmr_audit"
+        setup: "python3 -m venv venv && venv/bin/pip install -e '../../..[cmr_audit]'"
+        verify: "venv/bin/python cmr_audit_disp_s1_static.py --help"
+        overrides:
+          reason: >
+            cmr_audit_disp_s1_static.py imports from data_subscriber.cmr
+            and uses boto3/pandas from the opera-sds-pcm package tree.
+            Full PCM install with [cmr_audit] extras required. geopandas
+            is needed by data_subscriber.rtc.mgrs_bursts_collection_db_client.
+          pip_install: ["geopandas"]
+        requires_mgrs_db: true
+        entrypoint: "venv/bin/python cmr_audit_disp_s1_static.py"
+        params:
+          - name: frame_to_burst_db
+            flag: "--frame-to-burst-db"
+            type: path
+            required: true
+            help: "Path to opera-s1-disp-frame-to-burst.json"
+          - name: filter_north_america
+            flag: "--filter-is-north-america"
+            # BooleanOptionalAction: false has to be spelled out as
+            # --no-filter-is-north-america, not just an omitted flag.
+            type: bool_optional
+            default: true
+            help: "Filter to North America frames only"
+          - name: output
+            flag: "-o"
+            type: path
+            is_output: true
+          - name: format
+            flag: "--format"
+            type: choice
+            choices: ["txt", "json"]
+            default: "txt"
+          - name: log_level
+            flag: "--log-level"
+            type: choice
+            choices: ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+            default: "INFO"
