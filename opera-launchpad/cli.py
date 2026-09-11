@@ -9,6 +9,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import shlex
 import shutil
 import subprocess
@@ -25,6 +26,7 @@ from rich.table import Table
 from rich.text import Text
 
 from bootstrap import (
+    MGRS_DB_FILENAME,
     ROOT,
     check_all_out_of_sync,
     is_configured,
@@ -159,6 +161,23 @@ def prompt_param(param: dict) -> str | None:
     if ptype == "bool":
         return "true" if questionary.confirm(label, default=bool(default), style=STYLE).unsafe_ask() else None
 
+    if ptype == "bool_optional":
+        # For argparse.BooleanOptionalAction-style flags, where the *false*
+        # case has to be spelled out as its own "--no-..." flag rather than
+        # simply omitting the flag (unlike plain store_true "bool" above).
+        # Always returns a value — see `_negate_flag` in build_flags.
+        chosen = questionary.confirm(label, default=bool(default), style=STYLE).unsafe_ask()
+        return "true" if chosen else "false"
+
+    if ptype == "str_list":
+        raw = questionary.text(label, default=str(default) if default is not None else "", style=STYLE).unsafe_ask()
+        if not raw:
+            if required:
+                console.print("[red]This field is required, please try again.[/red]")
+                return prompt_param(param)
+            return None
+        return raw
+
     if ptype == "choice":
         choices = param.get("choices", [])
         return questionary.select(label, choices=choices, default=default, style=STYLE).unsafe_ask()
@@ -188,6 +207,15 @@ def prompt_param(param: dict) -> str | None:
     return raw
 
 
+def _negate_flag(flag: str) -> str:
+    """The "--no-..." form argparse.BooleanOptionalAction derives from a flag.
+
+    Only meaningful for "bool_optional" params — plain "bool" params map to
+    store_true flags, which are simply omitted for the false case instead.
+    """
+    return f"--no-{flag[2:]}" if flag.startswith("--") else flag
+
+
 def build_flags(params: list[dict]) -> tuple[list[str], dict[str, str]]:
     """Prompt for each param, returning (cli flags, {param_name: value})
     for every param that produced a value (skips bool flags in the values map
@@ -200,9 +228,20 @@ def build_flags(params: list[dict]) -> tuple[list[str], dict[str, str]]:
         if value is None:
             continue
         values[param["name"]] = value
-        flags.append(param["flag"])
-        # bool params map to store_true flags, which take no value.
-        if param.get("type") != "bool":
+        ptype = param.get("type")
+        if ptype == "bool":
+            # store_true flags take no value; the false case is simply omitted.
+            flags.append(param["flag"])
+        elif ptype == "bool_optional":
+            flags.append(param["flag"] if value == "true" else _negate_flag(param["flag"]))
+        elif ptype == "str_list":
+            # argparse nargs='+' consumes multiple argv tokens after the flag,
+            # so a space-separated entry has to be split into separate list
+            # items rather than passed through as one quoted string.
+            flags.append(param["flag"])
+            flags.extend(shlex.split(value))
+        else:
+            flags.append(param["flag"])
             flags.append(value)
     return flags, values
 
@@ -255,7 +294,7 @@ def command_panel(command: list[str], cwd: Path) -> Panel:
     )
 
 
-def confirm_and_run(command: list[str], cwd: Path) -> bool:
+def confirm_and_run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> bool:
     console.print(command_panel(command, cwd))
     if not questionary.confirm("Run this command?", default=True, style=STYLE, qmark=QMARK).unsafe_ask():
         console.print(f"[{WARN}]\u25cb Skipped.[/{WARN}]\n")
@@ -264,7 +303,7 @@ def confirm_and_run(command: list[str], cwd: Path) -> bool:
     console.print()
     console.rule(f"[{MUTED}]live output[/{MUTED}]", style=MUTED)
     started = datetime.now()
-    result = subprocess.run(command, cwd=cwd)
+    result = subprocess.run(command, cwd=cwd, env=env)
     elapsed = datetime.now() - started
     console.rule(style=MUTED)
 
@@ -409,6 +448,43 @@ def collect_outputs(paths: list[Path], out_dir: Path, since: datetime) -> None:
             console.print(f"  [{OK}]\u2713[/{OK}] collected [bold]{path.name}[/bold]")
 
 
+def tool_run_env(tool_cfg: dict, tool_dir: Path) -> dict[str, str] | None:
+    """Extra environment a tool's subprocess needs beyond inheriting ours.
+
+    `requires_mgrs_db` tools get MGRS_TILE_COLLECTION_DB_FILEPATH pointed at
+    the local copy `bootstrap.py`'s `ensure_mgrs_db` drops into their own
+    directory, so they use that instead of falling back to an S3 download
+    that needs AWS credentials. Returns None (inherit os.environ untouched)
+    when there's nothing to add.
+    """
+    if not tool_cfg.get("requires_mgrs_db"):
+        return None
+    mgrs_db = tool_dir / MGRS_DB_FILENAME
+    if not mgrs_db.exists():
+        return None
+    env = os.environ.copy()
+    env["MGRS_TILE_COLLECTION_DB_FILEPATH"] = str(mgrs_db)
+    return env
+
+
+def requires_vm_panel(tool_cfg: dict) -> Panel | None:
+    """Warning shown before running (and tagged in `select_tool`'s list for)
+    any tool marked `requires_vm: true` — one that needs cluster/VM-only
+    resources (internal ES/GRQ, private-repo credentials, etc.) and won't
+    fully work from an operator's own laptop even if setup succeeds.
+    """
+    if not tool_cfg.get("requires_vm"):
+        return None
+    note = tool_cfg.get("vm_note", "This tool requires running on an SDS cluster node/VM, not a personal laptop.")
+    return Panel(
+        Text(" ".join(note.split()), style="white"),
+        title=f"[bold {BAD}]\u26a0 requires SDS cluster VM[/bold {BAD}]",
+        border_style=BAD,
+        box=box.ROUNDED,
+        padding=(1, 2),
+    )
+
+
 def run_single_tool(product: str, tool_name: str, tool_cfg: dict) -> None:
     tool_dir = tool_dir_for(product, tool_name, tool_cfg)
     if not tool_dir.exists():
@@ -422,6 +498,11 @@ def run_single_tool(product: str, tool_name: str, tool_cfg: dict) -> None:
     out_dir = run_output_dir(product, tool_name)
 
     section_header(product, tool_name)
+
+    if vm_panel := requires_vm_panel(tool_cfg):
+        console.print(vm_panel)
+        console.print()
+
     flags, values = build_flags(params)
 
     if summary := params_summary_panel(params, values):
@@ -432,7 +513,7 @@ def run_single_tool(product: str, tool_name: str, tool_cfg: dict) -> None:
     clean_expected_outputs(expected_outputs)
 
     started_at = datetime.now()
-    ok = confirm_and_run(command, cwd=tool_dir)
+    ok = confirm_and_run(command, cwd=tool_dir, env=tool_run_env(tool_cfg, tool_dir))
 
     if ok:
         collect_outputs(expected_outputs, out_dir, started_at)
@@ -483,6 +564,10 @@ def run_pipeline_tool(product: str, tool_name: str, tool_cfg: dict) -> None:
 
     steps = tool_cfg.get("steps", [])
     section_header(product, tool_name)
+
+    if vm_panel := requires_vm_panel(tool_cfg):
+        console.print(vm_panel)
+        console.print()
 
     if notes := tool_cfg.get("notes"):
         console.print(
@@ -606,6 +691,8 @@ def select_tool(product: str, product_cfg: dict) -> tuple[str, dict] | None:
         blurb = _TOOL_BLURBS.get(name, "")
         kind = cfg.get("kind", "single") if configured else ""
         suffix = f" ({len(cfg.get('steps', []))} steps)" if kind == "pipeline" else ""
+        if configured and cfg.get("requires_vm"):
+            suffix += "  \u26a0 needs SDS cluster VM"
         title = f"{name.ljust(width)}   {blurb}{suffix}" if blurb else name
         choices.append(
             questionary.Choice(title=title, value=name, disabled=None if configured else "not configured yet")

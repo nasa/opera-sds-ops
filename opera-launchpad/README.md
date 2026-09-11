@@ -37,7 +37,17 @@ two tools on different branches either silently run the wrong branch's
 code, or flip-flop the clone back and forth on every `--update`.
 
 So a registry can point three tools at one repo on three different
-branches and each stays put. The cost is a full clone per tool.
+branches and each stays put.
+
+That would normally mean a full network clone per tool, even when several
+tools share a repo — expensive for something like `opera-sds-pcm` (~650MB),
+cloned by seven tools in this registry. Instead, each unique repo URL is
+cloned over the network once into `repos/_cache/<repo-name>/`, and every
+tool's own working tree is a fast, local clone off that cache, checked out
+to its own branch and pointed back at the real remote — so it fetches,
+updates, and reports sync status exactly as if it had been cloned from
+there directly. `./setup.sh --update` refreshes the cache once and then
+each tool's clone as usual.
 
 ## Quick start
 
