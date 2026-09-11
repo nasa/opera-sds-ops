@@ -590,6 +590,7 @@ _TOOL_BLURBS = {
     "duplicates": "find duplicate granules in CMR",
     "accountability": "track expected vs. delivered products",
     "audit": "trace processing steps across the SDS",
+    "validity": "verify product integrity",
 }
 
 

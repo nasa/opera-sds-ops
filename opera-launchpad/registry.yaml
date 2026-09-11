@@ -597,6 +597,61 @@ products:
             choices: ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
             default: "INFO"
 
+      validity:
+        kind: single
+        repo: "https://github.com/nasa/opera-sds-pcm.git"
+        branch: "develop"
+        path: "tools/ops/dist_s1_confirmation"
+        setup: "python3 -m venv venv && venv/bin/pip install backoff boto3 rasterio requests tqdm"
+        verify: "venv/bin/python dist_s1_confirmation.py --help"
+        overrides:
+          reason: >
+            Standalone script with no requirements.txt; deps from environment.yaml.
+            rasterio bundles GDAL via pip wheels on macOS. On Linux, native GDAL
+            libraries may be required.
+        entrypoint: "venv/bin/python dist_s1_confirmation.py"
+        params:
+          - name: start_date
+            flag: "-s"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime after which data should be retrieved (e.g. 2026-01-01T00:00:00Z)"
+          - name: end_date
+            flag: "-e"
+            type: datetime_iso
+            required: false
+            help: "ISO datetime before which data should be retrieved"
+          - name: tiles
+            flag: "-t"
+            type: str
+            required: false
+            help: "MGRS tile IDs to restrict survey to (space-separated, e.g. 10SGD 11SLT)"
+          - name: production_start_date
+            flag: "--production-start-date"
+            type: datetime_iso
+            required: false
+            help: "Filter by production time start"
+          - name: production_end_date
+            flag: "--production-end-date"
+            type: datetime_iso
+            required: false
+            help: "Filter by production time end"
+          - name: pge_versions
+            flag: "--pge-versions"
+            type: str
+            required: false
+            help: "PGE version number(s) to filter to (space-separated)"
+          - name: venue
+            flag: "--venue"
+            type: choice
+            choices: ["PROD", "UAT"]
+            default: "PROD"
+          - name: ignore_first_null
+            flag: "--ignore-first-null"
+            type: bool
+            default: false
+            help: "Suppress warnings when first product in a chain has no predecessor"
+
   DISP_S1:
     display_name: "Displacement - Sentinel-1"
     tools:
