@@ -10,7 +10,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import configparser
 import getpass
+import json
 import netrc
 import os
 import shlex
@@ -49,9 +51,36 @@ MGRS_DB_FILENAME = "MGRS_tile_collection_v0.3.sqlite"
 MGRS_DB_SOURCE_REPO = "https://github.com/nasa/opera-sds-ops.git"
 MGRS_DB_SOURCE_RELPATH = f"accountability_tools/dswx_s1/{MGRS_DB_FILENAME}"
 
+# cmr_audit_disp_s1_static.py's --frame-to-burst-db has no default and no
+# documented canonical download source anywhere in opera-sds-pcm or
+# opera-sds-ops -- operators are expected to already have their own copy
+# from the DISP-S1 processing team. opera-sds-ops does bundle a tiny (5
+# frame) *sample* fixture, though, meant for its own testing; better to
+# hand that to an operator with no file of their own (with results
+# clearly caveated) than leave a required field nobody can ever fill in.
+# See `requires_frame_to_burst_sample: true` / `ensure_frame_to_burst_sample`.
+FRAME_TO_BURST_SAMPLE_FILENAME = "opera-s1-disp-frame-to-burst-sample.json"
+FRAME_TO_BURST_SAMPLE_SOURCE_RELPATH = f"opera-audit/data/{FRAME_TO_BURST_SAMPLE_FILENAME}"
+
 # The EDL host tools authenticate against via ~/.netrc (registry:
 # `requires_edl: true`). See `ensure_edl_credentials`.
 EDL_HOST = "urs.earthdata.nasa.gov"
+
+# Dedicated profile name for the s3://opera-ancillaries AWS credentials some
+# tools need (registry: `requires_aws_ancillaries: true`), written to
+# ~/.aws/credentials under this name rather than [default] so operators who
+# already have their own AWS setup for other work aren't affected — cli.py
+# only passes AWS_PROFILE=this to the tool's own subprocess, not the
+# operator's shell. See `ensure_aws_credentials`.
+AWS_ANCILLARIES_PROFILE = "opera-ancillaries"
+
+# Dropped into a tool's own directory once its repo is cloned, recording
+# whether setup (run_setup/apply_overrides/run_verify) actually finished
+# clean. tool_dir existing on its own only means "cloned"; a tool whose
+# setup died partway (e.g. a missing credential) still has a tool_dir, so
+# cli.py needs this to tell the two apart. See `write_setup_status` /
+# `read_setup_status`.
+SETUP_STATUS_FILENAME = ".launchpad_setup_status.json"
 
 console = Console()
 
@@ -185,6 +214,26 @@ def ensure_mgrs_db(tool_dir: Path) -> None:
     console.print(f"  [dim]copied {MGRS_DB_FILENAME} -> {dest.relative_to(ROOT)}[/dim]")
 
 
+def ensure_frame_to_burst_sample(tool_dir: Path) -> None:
+    """Drop opera-sds-ops's tiny (5 frame) sample frame-to-burst fixture into
+    a tool's dir, purely so `--frame-to-burst-db` has *something* usable as
+    a registry default instead of leaving operators stuck on a required
+    field with no file of their own and nowhere to get one. cli.py's help
+    text for that param spells out clearly that this is only a sample.
+    """
+    cache_dir = ensure_repo_cache(MGRS_DB_SOURCE_REPO, update=False)
+    source = cache_dir / FRAME_TO_BURST_SAMPLE_SOURCE_RELPATH
+    if not source.exists():
+        console.print(
+            f"  [yellow]warning:[/yellow] {source.relative_to(ROOT)} not found, "
+            "skipping frame-to-burst sample copy"
+        )
+        return
+    dest = tool_dir / FRAME_TO_BURST_SAMPLE_FILENAME
+    shutil.copy2(source, dest)
+    console.print(f"  [dim]copied {FRAME_TO_BURST_SAMPLE_FILENAME} -> {dest.relative_to(ROOT)}[/dim]")
+
+
 def _read_netrc_hosts() -> dict:
     """All entries currently in ~/.netrc, keyed by host: {host: (login, account, password)}."""
     netrc_path = Path.home() / ".netrc"
@@ -268,6 +317,73 @@ def ensure_edl_credentials(targets: list[tuple[str, str, dict]]) -> None:
         prompt_and_save_edl_credentials()
     except (EOFError, KeyboardInterrupt):
         console.print("\n[yellow]Skipped EDL setup (non-interactive or cancelled).[/yellow]")
+
+
+def prompt_and_save_aws_credentials() -> None:
+    """Show whether ~/.aws/credentials already has an AWS_ANCILLARIES_PROFILE
+    entry, let the operator keep or replace it, and save there — the
+    standard place boto3's default credential chain looks for a named
+    profile (via AWS_PROFILE, which cli.py sets for the tool's subprocess
+    only). Written under its own profile rather than [default] so this
+    never touches credentials an operator already has configured for
+    other, unrelated AWS work.
+    """
+    console.print(
+        "\n[bold]Some selected tools fetch ancillary data (e.g. the DIST-S1 burst lookup\n"
+        "table) from a private s3://opera-ancillaries/... bucket.[/bold]\n"
+        "[dim]Without credentials for it, they either crash outright or silently\n"
+        "degrade to an empty result after ~40s of doomed retries.[/dim]"
+    )
+
+    aws_creds_path = Path.home() / ".aws" / "credentials"
+    parser = configparser.ConfigParser()
+    if aws_creds_path.exists():
+        parser.read(aws_creds_path)
+    if parser.has_section(AWS_ANCILLARIES_PROFILE):
+        console.print(f"[dim]~/.aws/credentials already has a '{AWS_ANCILLARIES_PROFILE}' profile.[/dim]")
+        try:
+            answer = input("Replace it with new credentials? [y/N]: ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer not in ("y", "yes"):
+            console.print("[dim]Keeping existing AWS credentials.[/dim]\n")
+            return
+    else:
+        console.print(f"[dim]No existing '{AWS_ANCILLARIES_PROFILE}' profile in ~/.aws/credentials.[/dim]")
+
+    console.print("[dim]Leave the access key blank to skip (those tools will crash/degrade instead).[/dim]")
+    try:
+        access_key_id = input("AWS access key ID: ").strip()
+    except EOFError:
+        access_key_id = ""
+    if not access_key_id:
+        console.print("[yellow]Skipped AWS credentials setup.[/yellow]\n")
+        return
+    secret_access_key = getpass.getpass("AWS secret access key: ")
+    if not secret_access_key:
+        console.print("[yellow]Skipped AWS credentials setup (no secret key entered).[/yellow]\n")
+        return
+    session_token = getpass.getpass("AWS session token (optional, for temporary credentials, Enter to skip): ")
+
+    parser[AWS_ANCILLARIES_PROFILE] = {
+        "aws_access_key_id": access_key_id,
+        "aws_secret_access_key": secret_access_key,
+        **({"aws_session_token": session_token} if session_token else {}),
+    }
+    aws_creds_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(aws_creds_path, "w") as fp:
+        parser.write(fp)
+    aws_creds_path.chmod(0o600)
+    console.print(f"[green]Saved AWS credentials to {aws_creds_path} under '{AWS_ANCILLARIES_PROFILE}'.[/green]\n")
+
+
+def ensure_aws_credentials(targets: list[tuple[str, str, dict]]) -> None:
+    if not any(tool_cfg.get("requires_aws_ancillaries") for _, _, tool_cfg in targets):
+        return
+    try:
+        prompt_and_save_aws_credentials()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n[yellow]Skipped AWS credentials setup (non-interactive or cancelled).[/yellow]")
 
 
 def ensure_git_oauth_token(targets: list[tuple[str, str, dict]]) -> None:
@@ -482,6 +598,26 @@ def select_targets(registry: dict, product: str | None, tool: str | None) -> lis
     return targets
 
 
+def write_setup_status(tool_dir: Path, ok: bool, detail: str) -> None:
+    """Best-effort; a missing/stale status file just means cli.py falls
+    back to assuming setup finished fine (matching pre-existing behavior).
+    """
+    try:
+        (tool_dir / SETUP_STATUS_FILENAME).write_text(json.dumps({"ok": ok, "detail": detail}))
+    except OSError:
+        pass
+
+
+def read_setup_status(tool_dir: Path) -> dict | None:
+    path = tool_dir / SETUP_STATUS_FILENAME
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def bootstrap_tool(product: str, tool_name: str, tool_cfg: dict, update: bool) -> None:
     console.rule(f"[bold]{product} / {tool_name}[/bold]")
     repo_url = tool_cfg["repo"]
@@ -492,12 +628,25 @@ def bootstrap_tool(product: str, tool_name: str, tool_cfg: dict, update: bool) -
     repo_root = clone_or_update_repo(repo_url, branch, dest, update)
     tool_dir = repo_root / path if path else repo_root
 
-    setup_cmd = tool_cfg.get("setup")
-    run_setup(setup_cmd, tool_dir)
-    apply_overrides(tool_cfg, tool_dir)
-    if tool_cfg.get("requires_mgrs_db"):
-        ensure_mgrs_db(tool_dir)
-    run_verify(tool_cfg, tool_dir)
+    try:
+        setup_cmd = tool_cfg.get("setup")
+        run_setup(setup_cmd, tool_dir)
+        apply_overrides(tool_cfg, tool_dir)
+        if tool_cfg.get("requires_mgrs_db"):
+            ensure_mgrs_db(tool_dir)
+        if tool_cfg.get("requires_frame_to_burst_sample"):
+            ensure_frame_to_burst_sample(tool_dir)
+        # run_verify is intentionally non-fatal (returns bool, doesn't
+        # raise) -- setup/apply_overrides having succeeded is still worth
+        # recording even if the smoke test itself failed.
+        verify_ok = run_verify(tool_cfg, tool_dir)
+    except RuntimeError as exc:
+        write_setup_status(tool_dir, ok=False, detail=str(exc))
+        raise
+    else:
+        write_setup_status(
+            tool_dir, ok=verify_ok, detail="" if verify_ok else "verify failed after setup — see verify: above"
+        )
 
 
 def setup_summary_table(results: list[tuple[str, str, bool, str]]) -> Table:
@@ -560,6 +709,7 @@ def main() -> int:
 
     ensure_edl_credentials(targets)
     ensure_git_oauth_token(targets)
+    ensure_aws_credentials(targets)
 
     # One tool's setup failing (e.g. a private-repo credential missing, a
     # transient network blip) shouldn't block every other tool from getting

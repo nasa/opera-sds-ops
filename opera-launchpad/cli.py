@@ -9,6 +9,7 @@ Usage:
 
 from __future__ import annotations
 
+import configparser
 import os
 import shlex
 import shutil
@@ -26,11 +27,14 @@ from rich.table import Table
 from rich.text import Text
 
 from bootstrap import (
+    AWS_ANCILLARIES_PROFILE,
     MGRS_DB_FILENAME,
     ROOT,
     check_all_out_of_sync,
+    edl_netrc_login,
     is_configured,
     load_registry,
+    read_setup_status,
     tool_clone_dir,
 )
 
@@ -448,37 +452,118 @@ def collect_outputs(paths: list[Path], out_dir: Path, since: datetime) -> None:
             console.print(f"  [{OK}]\u2713[/{OK}] collected [bold]{path.name}[/bold]")
 
 
+def discover_glob_outputs(tool_cfg: dict, tool_dir: Path, since: datetime) -> list[Path]:
+    """Files matching `produces_glob` patterns that this run actually wrote.
+
+    Some tools generate their own timestamped output filename whenever no
+    explicit path is given (e.g. cmr_audit_dswx_s1.py's own
+    `missing_granules_RTC-DSWx_<start>_<end>_<now>.txt`), so unlike
+    `produces`/`is_output` there's no fixed name to know ahead of the run.
+    `produces_glob` instead names a glob pattern (relative to `tool_dir`)
+    to search for afterward, keeping only files newer than `since` (the
+    run's start) so a same-shaped leftover from an earlier run isn't
+    mistaken for this run's own.
+    """
+    cutoff = since.timestamp()
+    found: list[Path] = []
+    for pattern in tool_cfg.get("produces_glob", []):
+        for path in tool_dir.glob(pattern):
+            if path.is_file() and path.stat().st_mtime >= cutoff:
+                found.append(path)
+    return found
+
+
+def _has_aws_ancillaries_profile() -> bool:
+    """Whether `bootstrap.py`'s ensure_aws_credentials() saved a profile."""
+    creds_path = Path.home() / ".aws" / "credentials"
+    if not creds_path.exists():
+        return False
+    parser = configparser.ConfigParser()
+    parser.read(creds_path)
+    return parser.has_section(AWS_ANCILLARIES_PROFILE)
+
+
 def tool_run_env(tool_cfg: dict, tool_dir: Path) -> dict[str, str] | None:
     """Extra environment a tool's subprocess needs beyond inheriting ours.
 
-    `requires_mgrs_db` tools get MGRS_TILE_COLLECTION_DB_FILEPATH pointed at
-    the local copy `bootstrap.py`'s `ensure_mgrs_db` drops into their own
-    directory, so they use that instead of falling back to an S3 download
-    that needs AWS credentials. Returns None (inherit os.environ untouched)
-    when there's nothing to add.
+    - `requires_mgrs_db` tools get MGRS_TILE_COLLECTION_DB_FILEPATH pointed
+      at the local copy `bootstrap.py`'s `ensure_mgrs_db` drops into their
+      own directory, so they use that instead of falling back to an S3
+      download that needs AWS credentials.
+    - `requires_aws_ancillaries` tools get AWS_PROFILE pointed at the
+      dedicated profile `bootstrap.py`'s ensure_aws_credentials() may have
+      saved to ~/.aws/credentials, so boto3's default credential chain
+      picks it up for their own s3://opera-ancillaries/... calls without
+      touching the operator's own default AWS credentials/profile.
+
+    Returns None (inherit os.environ untouched) when there's nothing to add.
     """
-    if not tool_cfg.get("requires_mgrs_db"):
-        return None
-    mgrs_db = tool_dir / MGRS_DB_FILENAME
-    if not mgrs_db.exists():
-        return None
-    env = os.environ.copy()
-    env["MGRS_TILE_COLLECTION_DB_FILEPATH"] = str(mgrs_db)
+    env: dict[str, str] | None = None
+
+    if tool_cfg.get("requires_mgrs_db"):
+        mgrs_db = tool_dir / MGRS_DB_FILENAME
+        if mgrs_db.exists():
+            env = (env or os.environ.copy())
+            env["MGRS_TILE_COLLECTION_DB_FILEPATH"] = str(mgrs_db)
+
+    if tool_cfg.get("requires_aws_ancillaries") and _has_aws_ancillaries_profile():
+        env = (env or os.environ.copy())
+        env["AWS_PROFILE"] = AWS_ANCILLARIES_PROFILE
+
     return env
 
 
-def requires_vm_panel(tool_cfg: dict) -> Panel | None:
-    """Warning shown before running (and tagged in `select_tool`'s list for)
-    any tool marked `requires_vm: true` — one that needs cluster/VM-only
-    resources (internal ES/GRQ, private-repo credentials, etc.) and won't
-    fully work from an operator's own laptop even if setup succeeds.
+def tool_caveats(tool_cfg: dict, tool_dir: Path | None = None) -> list[str]:
+    """Every reason this tool might not fully work as-is, checked fresh each
+    call (credentials can be added via `./setup.sh` between runs without
+    restarting the CLI):
+
+    - Setup itself never finished cleanly (`bootstrap.py`'s
+      `write_setup_status`) — a tool_dir existing on its own only means
+      "cloned", not "fully set up"; something like a missing credential
+      partway through `./setup.sh` still leaves a tool_dir behind. Only
+      checked when `tool_dir` is given (the caller already knows it).
+    - `requires_vm: true` — needs cluster/VM-only resources (internal
+      ES/GRQ, private-repo access, etc.); no amount of local credential
+      setup fixes this one, hence always listed if present.
+    - `requires_edl: true` with no ~/.netrc entry — EDL-gated queries will
+      run degraded/incomplete rather than fail outright.
+    - `requires_aws_ancillaries: true` with no saved profile — the tool
+      will crash or silently degrade fetching its S3 ancillary data.
+
+    Used both for the startup-wide summary table and the inline suffix on
+    each tool in `select_tool`'s list, so both stay in sync automatically.
     """
-    if not tool_cfg.get("requires_vm"):
+    caveats: list[str] = []
+    if tool_dir is not None:
+        status = read_setup_status(tool_dir)
+        if status is not None and not status.get("ok", True):
+            detail = status.get("detail") or "did not finish successfully"
+            caveats.append(f"Setup failed: {detail}")
+    if note := tool_cfg.get("vm_note") if tool_cfg.get("requires_vm") else None:
+        caveats.append(" ".join(note.split()))
+    elif tool_cfg.get("requires_vm"):
+        caveats.append("Needs an SDS cluster node/VM, not a personal laptop.")
+    if tool_cfg.get("requires_edl") and not edl_netrc_login():
+        caveats.append("Missing EDL credentials (~/.netrc) — run ./setup.sh to add them.")
+    if tool_cfg.get("requires_aws_ancillaries") and not _has_aws_ancillaries_profile():
+        caveats.append("Missing AWS credentials (~/.aws/credentials) — run ./setup.sh to add them.")
+    return caveats
+
+
+def requires_vm_panel(tool_cfg: dict, tool_dir: Path | None = None) -> Panel | None:
+    """Warning shown before running any tool with one or more `tool_caveats`."""
+    caveats = tool_caveats(tool_cfg, tool_dir)
+    if not caveats:
         return None
-    note = tool_cfg.get("vm_note", "This tool requires running on an SDS cluster node/VM, not a personal laptop.")
+    body = Text()
+    for i, caveat in enumerate(caveats):
+        if i:
+            body.append("\n\n")
+        body.append(caveat, style="white")
     return Panel(
-        Text(" ".join(note.split()), style="white"),
-        title=f"[bold {BAD}]\u26a0 requires SDS cluster VM[/bold {BAD}]",
+        body,
+        title=f"[bold {BAD}]\u26a0 may not fully work here[/bold {BAD}]",
         border_style=BAD,
         box=box.ROUNDED,
         padding=(1, 2),
@@ -499,7 +584,7 @@ def run_single_tool(product: str, tool_name: str, tool_cfg: dict) -> None:
 
     section_header(product, tool_name)
 
-    if vm_panel := requires_vm_panel(tool_cfg):
+    if vm_panel := requires_vm_panel(tool_cfg, tool_dir):
         console.print(vm_panel)
         console.print()
 
@@ -517,6 +602,7 @@ def run_single_tool(product: str, tool_name: str, tool_cfg: dict) -> None:
 
     if ok:
         collect_outputs(expected_outputs, out_dir, started_at)
+        collect_outputs(discover_glob_outputs(tool_cfg, tool_dir, started_at), out_dir, started_at)
         clean_expected_outputs(expected_outputs)
         console.print()
 
@@ -565,7 +651,7 @@ def run_pipeline_tool(product: str, tool_name: str, tool_cfg: dict) -> None:
     steps = tool_cfg.get("steps", [])
     section_header(product, tool_name)
 
-    if vm_panel := requires_vm_panel(tool_cfg):
+    if vm_panel := requires_vm_panel(tool_cfg, tool_dir):
         console.print(vm_panel)
         console.print()
 
@@ -691,8 +777,8 @@ def select_tool(product: str, product_cfg: dict) -> tuple[str, dict] | None:
         blurb = _TOOL_BLURBS.get(name, "")
         kind = cfg.get("kind", "single") if configured else ""
         suffix = f" ({len(cfg.get('steps', []))} steps)" if kind == "pipeline" else ""
-        if configured and cfg.get("requires_vm"):
-            suffix += "  \u26a0 needs SDS cluster VM"
+        if configured and tool_caveats(cfg, tool_dir_for(product, name, cfg)):
+            suffix += "  \u26a0 needs attention"
         title = f"{name.ljust(width)}   {blurb}{suffix}" if blurb else name
         choices.append(
             questionary.Choice(title=title, value=name, disabled=None if configured else "not configured yet")
@@ -756,6 +842,53 @@ def warn_if_out_of_sync(registry: dict) -> None:
             padding=(1, 2),
         )
     )
+    console.print()
+
+
+def warn_about_limited_tools(registry: dict) -> None:
+    """One table, up front, listing every configured tool with a
+    `tool_caveats` reason it may not fully work here — VM/cluster-only
+    resources, or credentials `./setup.sh` never got (or that expired) —
+    instead of an operator only discovering that tool-by-tool once they've
+    already navigated into it and filled out its params.
+    """
+    rows: list[tuple[str, str, list[str]]] = []
+    for product, product_cfg in (registry.get("products") or {}).items():
+        for tool_name, tool_cfg in (product_cfg.get("tools") or {}).items():
+            if not is_configured(tool_cfg):
+                continue
+            tool_dir = tool_dir_for(product, tool_name, tool_cfg)
+            if caveats := tool_caveats(tool_cfg, tool_dir if tool_dir.exists() else None):
+                rows.append((product, tool_name, caveats))
+
+    if not rows:
+        return
+
+    table = Table(
+        title=f"[bold {WARN}]\u26a0 tools needing attention[/bold {WARN}]",
+        title_justify="left",
+        box=box.SIMPLE_HEAVY,
+        border_style=WARN,
+        header_style=f"bold {MUTED}",
+        padding=(0, 2),
+        show_lines=True,
+    )
+    table.add_column("product", style="bold", no_wrap=True)
+    table.add_column("tool", no_wrap=True)
+    table.add_column("why")
+
+    for product, tool_name, caveats in rows:
+        # Text (not an f-string) so caveat text is never mistaken for rich
+        # markup, however it happens to be punctuated.
+        why = Text(style=WARN)
+        for i, caveat in enumerate(caveats):
+            if i:
+                why.append("\n\n")
+            why.append(caveat)
+        table.add_row(product, tool_name, why)
+
+    console.print(table)
+    console.print()
     console.print()
 
 
@@ -826,6 +959,7 @@ def main() -> None:
     registry = load_registry()
 
     warn_if_out_of_sync(registry)
+    warn_about_limited_tools(registry)
 
     product = select_product(registry)
     if product is None:

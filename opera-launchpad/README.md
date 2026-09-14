@@ -9,18 +9,22 @@ they already use; this just orchestrates discovery + invocation.
 ## How it works
 
 1. `registry.yaml` is the single source of truth: for each product (e.g.
-   `DSWX_S1`) and operation (`duplicates`, `accountability`, ...), it records:
+   `DSWX_S1`) and operation (`duplicates`, `accountability`, `audit`, ...), it
+   records:
    - the git repo + branch the tool lives in
    - the subdirectory of that repo
    - the native setup command (e.g. `pip install -r requirements.txt`)
    - the command to run it, and what parameters it takes
+   - any extra credentials/ancillary files/environment it needs (see
+     [Credentials](#credentials) and [Registry schema](#registry-schema))
 2. `bootstrap.py` clones (or updates) each tool into its own directory under
-   `./repos/<product>/<tool>/`, and runs that tool's setup command in place.
+   `./repos/<product>/<tool>/`, runs that tool's setup command in place, and
+   prompts once for any credentials the selected tools need.
 3. `cli.py` is the interactive launcher: pick a product, pick an operation,
    fill in the prompted parameters, and it runs the real tool's command in
    its own directory/venv. On startup it checks every configured tool's
-   clone against its remote branch and warns you (with instructions) if
-   anything is out of date or not yet cloned.
+   clone against its remote branch, and separately flags every tool that may
+   not fully work here (see [Tools needing attention](#tools-needing-attention)).
 
 Nothing about the underlying tool's code changes. Repos are cloned
 workspace-locally under `./repos/` (gitignored) — no shared venv, each tool
@@ -41,7 +45,7 @@ branches and each stays put.
 
 That would normally mean a full network clone per tool, even when several
 tools share a repo — expensive for something like `opera-sds-pcm` (~650MB),
-cloned by seven tools in this registry. Instead, each unique repo URL is
+cloned by several tools in this registry. Instead, each unique repo URL is
 cloned over the network once into `repos/_cache/<repo-name>/`, and every
 tool's own working tree is a fast, local clone off that cache, checked out
 to its own branch and pointed back at the real remote — so it fetches,
@@ -53,7 +57,8 @@ each tool's clone as usual.
 
 ```bash
 # One-time (or after registry changes): creates .venv, installs
-# opera-launchpad's own deps, clones + installs every configured tool
+# opera-launchpad's own deps, clones + installs every configured tool.
+# Prompts once for any credentials the configured tools need (see below).
 ./setup.sh
 
 # Every day: launch the interactive menu
@@ -65,16 +70,64 @@ each tool's clone as usual.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e .
-.venv/bin/python bootstrap.py
+.venv/bin/python bootstrap.py "$@"   # forwards all of setup.sh's own args
 ```
 
 `start.sh` just runs `.venv/bin/python cli.py` (after checking `.venv`
-exists). It's the one you'll run most often.
+exists). It's the one you'll run most often; it takes no arguments — every
+choice (product, operation, parameters) is made interactively.
 
-### Setup for just one product/tool
+### `setup.sh` / `bootstrap.py` command line options
+
+`setup.sh` forwards every argument straight to `bootstrap.py`, so all of
+these work with either:
+
+| Flag | Effect |
+| --- | --- |
+| *(none)* | Clone (if missing) + run native setup for every tool configured in `registry.yaml`. |
+| `--update` | Also `git fetch` + hard-reset every **already-cloned** repo to its configured branch before rerunning setup. Without this, an existing clone is left as-is and only its setup/overrides are (re-)run. |
+| `--product PRODUCT` | Only bootstrap this product's tools, e.g. `--product DSWX_S1`. |
+| `--tool TOOL` | Only bootstrap this one tool (requires `--product`), e.g. `--product DSWX_S1 --tool audit`. |
+| `--check` | Don't clone or install anything — just report which configured tools are out of sync with their remote branch (missing clone, behind, or a check error). Exits non-zero if anything is out of sync; this is what `./start.sh` runs automatically on every launch. |
+
+Examples:
 
 ```bash
-./setup.sh --product DSWX_S1 --tool accountability
+./setup.sh                                          # everything
+./setup.sh --update                                 # everything, resyncing existing clones
+./setup.sh --product DSWX_S1 --tool accountability  # just one tool
+./setup.sh --product RTC_S1 --tool audit --update   # just one tool, resyncing it first
+.venv/bin/python bootstrap.py --check                # sync check only, no install
+```
+
+One tool's setup failing (e.g. a missing credential) never blocks the rest —
+`bootstrap.py` keeps going through every remaining target and prints a
+summary table of what succeeded/failed at the end, with the tail of each
+failure's own output. It exits `1` if anything failed, `0` otherwise.
+
+## Credentials
+
+Some tools need credentials or tokens beyond what `pip install` can set up.
+`bootstrap.py` prompts for each of these **once**, up front, only if a
+selected tool's registry entry actually needs it — never unconditionally.
+Skipping a prompt (leaving it blank) is always fine: the affected tool just
+runs in a degraded/crashing state later, exactly as if you'd never set up
+`opera-launchpad` credential support at all.
+
+| Credential | Registry flag | Stored at | Used for |
+| --- | --- | --- | --- |
+| NASA Earthdata Login (EDL) | `requires_edl: true` | `~/.netrc` (`urs.earthdata.nasa.gov`) | Tools that fetch an EDL Bearer token for CMR/DAAC queries (e.g. burst-ID derivation from SLC annotations). Only that one host's entry is touched; every other `~/.netrc` entry is preserved. |
+| AWS (ancillary S3 data) | `requires_aws_ancillaries: true` | `~/.aws/credentials`, under a dedicated `[opera-ancillaries]` profile (**not** `[default]`) | Tools that fetch ancillary data from a private `s3://opera-ancillaries/...` bucket (e.g. the DIST-S1 burst lookup table). Written under its own profile so this never touches AWS credentials you already have configured for other work; `cli.py` only sets `AWS_PROFILE=opera-ancillaries` for that tool's own subprocess, not your shell. |
+| JPL GitHub Enterprise token | `requires_git_oauth_token: true` | Kept in memory for the current `bootstrap.py` run only (`GIT_OAUTH_TOKEN` env var) — **not** written to disk | Cloning a private JPL GHE repo a tool's setup needs (e.g. `pcm_commons`). If you already have `GIT_OAUTH_TOKEN` exported in your shell, that's reused and you won't be prompted. |
+
+All three prompts happen right after the "tools out of sync" check and
+before any cloning/setup starts, so you only get asked once even if several
+selected tools need the same kind of credential.
+
+To add/replace a credential later without re-running everything:
+
+```bash
+./setup.sh --product <PRODUCT> --tool <TOOL>   # re-prompts for just what that tool needs
 ```
 
 ## Updating after a developer pushes changes
@@ -83,11 +136,11 @@ exists). It's the one you'll run most often.
 behind its remote branch, e.g.:
 
 ```
-┏━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ Product ┃ Tool           ┃ Status                     ┃
-┡━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ DSWX_S1 │ duplicates     │ 31 commit(s) behind remote │
-└─────────┴────────────────┴────────────────────────────┘
+⚠ tools out of sync
+
+   product   tool          status
+ ─────────────────────────────────────────
+   DSWX_S1   duplicates    31 commit(s) behind
 ```
 
 To sync:
@@ -107,6 +160,45 @@ You can also check sync status without cloning/installing anything:
 .venv/bin/python bootstrap.py --check
 ```
 
+## Tools needing attention
+
+Right after the sync check, `start.sh` also prints a table of every
+configured tool that may not fully work here, and why — so you find out
+*before* filling in parameters and running it, not partway through:
+
+```
+⚠ tools needing attention
+
+   product   tool     why
+ ──────────────────────────────────────────────────────────────────────
+   DISP_S1   audit    Setup failed: Command failed (1): .../ensure_pcm_commons.sh
+                       ERROR: GIT_OAUTH_TOKEN is not set.
+
+                       Needs live network access to the OPERA SDS's internal
+                       Elasticsearch/GRQ cluster ... only works from an SDS
+                       cluster node/VM, not a personal laptop.
+```
+
+A tool can show up here for any combination of:
+
+- **Setup never finished cleanly.** `bootstrap.py` drops a small
+  `.launchpad_setup_status.json` marker in a tool's own directory recording
+  whether its last setup run actually succeeded (a cloned repo on its own
+  only means "cloned", not "fully set up" — something like a missing
+  credential partway through `./setup.sh` still leaves a tool directory
+  behind). Fix the underlying cause and rerun `./setup.sh --product ... --tool ...`.
+- **`requires_vm: true`** — needs cluster/VM-only resources (internal ES/GRQ
+  access, etc.) that no amount of local credential setup fixes; only really
+  usable from an actual SDS node. The specific reason is in the tool's
+  `vm_note`.
+- **Missing EDL or AWS credentials** — the tool is configured to use them
+  (`requires_edl`/`requires_aws_ancillaries`) but `./setup.sh` was never run
+  with them provided; see [Credentials](#credentials).
+
+The same reasons appear as a `⚠ needs attention` suffix next to the tool
+once you've navigated into its product, and again as a panel right before
+you're asked to confirm running it.
+
 ## Output
 
 Every run that writes something gets its own timestamped directory under
@@ -124,19 +216,26 @@ e.g. `output/DSWX_S1/duplicates/20260827_182637/duplicate_report.json`.
 Tools always run unmodified, in their own repo directory, using their own
 native defaults — `opera-launchpad` never rewrites a tool's CLI flags. Instead,
 the registry records where each tool's output *natively* lands, and
-`opera-launchpad` copies it into the run's output directory afterward:
+`opera-launchpad` copies it into the run's output directory afterward, via
+whichever of these fit the tool:
 
-- For `single` tools, the tool's `produces` list names the native relative
-  filenames it writes in its own directory; those are copied out after the
-  run. A param marked `is_output: true` also works, and additionally tracks a
-  path the user overrode at the prompt. Use one or the other for a given
-  file, not both: if `produces` names `report.json` *and* an `is_output`
-  param defaults to it, overriding that param at the prompt leaves the
-  untouched default listed as a missing output.
-- For `pipeline` tools, each step's `produces` list names the native relative
-  filenames that step writes in the tool's directory; those are copied into
-  the run's output directory after the step completes (originals stay in
-  place too, since later steps still need to read them).
+- **`produces: [...]`** on a `single` tool, or on a `pipeline` step — fixed
+  native filenames the tool/step always writes in its own directory. Copied
+  out after the run (or, for pipeline steps, after that step completes;
+  originals stay in place too, since later steps still need to read them).
+- **`is_output: true`** on a param — the output location is whatever value
+  that param ended up with (its registry `default`, or whatever the operator
+  typed at the prompt), so an overridden path is still found and collected.
+- **`produces_glob: [...]`** on a tool — a glob pattern (relative to the
+  tool's own directory) to search for *after* the run, for tools that name
+  their own output file dynamically (e.g. with a timestamp baked in) when no
+  explicit path is given, so there's no fixed name to know ahead of time.
+  Only files newer than the run's start are collected, so a same-shaped
+  leftover from an earlier run is never mistaken for this run's own.
+
+Use only one mechanism for a given file: if `produces` names `report.json`
+*and* an `is_output` param also defaults to it, overriding that param at the
+prompt leaves the untouched default listed as a missing output.
 
 At the end of a run, `cli.py` prints an **Output** panel showing the run's
 directory and the files found in it.
@@ -153,9 +252,45 @@ Two tool "kinds" are supported:
   `missing_rtcs_to_tile_sets.py` → `add_cycle_indices.py` →
   `check_burst_coverage.py` pipeline).
 
-See `registry.yaml` for the full schema and the fully-specified `DSWX_S1`
-entry. Other products are stubbed with empty `tools: {}` entries — the CLI
-will show them as "not configured" until filled in.
+See `registry.yaml` for the full schema and its many fully-specified
+entries — it's heavily commented with the specific reasons behind each
+tool's overrides/flags, which are usually more informative than this README
+for any one tool's quirks.
+
+### Core fields (every tool)
+
+```yaml
+      duplicates:
+        kind: single                    # or `pipeline` (see `steps:` below)
+        repo: "https://github.com/..."
+        branch: "main"
+        path: "duplicates"               # subdirectory of the repo the tool lives in
+        setup: "python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+        verify: "venv/bin/python duplicate_check.py --help"
+        entrypoint: "venv/bin/python duplicate_check.py"
+        fixed_args: ["DSWX_S1"]          # always-present positional/flag args
+        params: [ ... ]                  # see below
+```
+
+### Param fields
+
+```yaml
+          - name: output               # key into the collected values dict
+            flag: "-o"                 # CLI flag passed with the value
+            type: path                 # str | path | datetime_iso | int | bool |
+                                        # bool_optional | choice | str_list
+            required: false            # re-prompts until a value is given if true
+            default: "duplicate_report.json"
+            choices: ["a", "b"]        # required for type: choice
+            is_output: true            # see Output, above
+            help: "shown under the prompt label"
+```
+
+- **`type: bool_optional`** is for `argparse.BooleanOptionalAction`-style
+  flags, where "false" has to be spelled out as `--no-foo`, not just an
+  omitted flag.
+- **`type: str_list`** is for `nargs='+'`-style flags that need each value as
+  its own argv token, not one space-separated string.
 
 ### Environment overrides
 
@@ -176,7 +311,8 @@ forking the tool:
 - **`verify`** — optional smoke test run right after setup, so a missing
   dependency surfaces at install time instead of halfway through an
   operator's run. On failure it prints the error and points at `overrides`.
-  It's a warning, not a hard stop.
+  It's a warning, not a hard stop — but is recorded in the tool's setup
+  status (see [Tools needing attention](#tools-needing-attention)).
 - **`overrides.reason`** — printed during setup, so the next person knows why
   the patch exists.
 - **`overrides.pip_install`** — installed through the tool's own venv pip
@@ -188,8 +324,44 @@ forking the tool:
 Overrides are meant to be temporary. When upstream fixes its `requirements.txt`,
 delete the block.
 
+### Credential/ancillary-data flags
+
+See [Credentials](#credentials) for `requires_edl`, `requires_aws_ancillaries`,
+and `requires_git_oauth_token` in detail. A few more, narrower flags exist
+for specific ancillary files some tools need and can't otherwise get without
+AWS credentials most operators don't have:
+
+- **`requires_mgrs_db: true`** — the tool imports opera-sds-pcm's
+  `rtc.mgrs_bursts_collection_db_client`, which falls back to an S3 download
+  needing AWS credentials if it can't find its DB locally. `opera-sds-ops`
+  bundles the real DB (not just opera-sds-pcm's small test fixture), so
+  `bootstrap.py` copies that in locally instead, and `cli.py` points
+  `MGRS_TILE_COLLECTION_DB_FILEPATH` at it when running the tool.
+- **`requires_frame_to_burst_sample: true`** — narrower still: one tool's
+  `--frame-to-burst-db` has no default and no documented download source
+  anywhere, so `bootstrap.py` instead copies in `opera-sds-ops`'s own tiny
+  (5-frame) *sample* fixture as a registry default, so the field isn't a
+  dead end for anyone without their own copy from the DISP-S1 processing
+  team. Results against it only ever cover those 5 frames — the param's
+  `help` text says so explicitly.
+
+### VM/cluster-only flags
+
+- **`requires_vm: true`** — this tool needs cluster/VM-only resources
+  (internal Elasticsearch/GRQ access, live network paths only available on
+  an SDS node, etc.) that no amount of local setup fixes. Surfaced in the
+  ["tools needing attention"](#tools-needing-attention) table and as a
+  warning panel before running.
+- **`vm_note: >`** — the specific reason, shown verbatim in both of those
+  places. Write it assuming the reader has never seen the tool before.
+
 ## Status
 
-`DSWX_S1` (`duplicates` + `accountability`) is fully wired up as the
-reference implementation. All other products are placeholders in
-`registry.yaml` pending migration.
+Most products in `registry.yaml` are now fully wired up, spanning
+`duplicates`/`accountability`/`audit`/`validity`/`input_selection`-style
+tools across `DSWX_S1`, `DSWX_HLS`, `RTC_S1`, `CSLC_S1`, `DIST_S1`, `DISP_S1`,
+`TROPO`, `DIST_ALERT_HLS`, `CSLC_S1_STATIC`, `RTC_S1_STATIC`, and
+`DISP_S1_STATIC`. Check `./start.sh`'s startup output (or
+`.venv/bin/python bootstrap.py --check`) for the current, authoritative
+state of any given tool — this README won't always be perfectly in sync
+with fast-moving registry changes.

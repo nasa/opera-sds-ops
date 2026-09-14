@@ -167,6 +167,11 @@ products:
         # MGRS_TILE_COLLECTION_DB_FILEPATH at it, so no AWS credentials
         # are needed.
         requires_mgrs_db: true
+        # No --output given -> the script names its own file:
+        # missing_granules_RTC-DSWx_<start>_<end>_<now>.{txt,json}. Rather
+        # than force a fixed name, let it use its own and pick up whatever
+        # it actually wrote via produces_glob.
+        produces_glob: ["missing_granules_RTC-DSWx_*"]
         entrypoint: "venv/bin/python cmr_audit_dswx_s1.py"
         params:
           - name: start_datetime
@@ -183,6 +188,7 @@ products:
             flag: "-o"
             type: path
             is_output: true
+            help: "Optional; if left blank, the script names its own timestamped file"
           - name: format
             flag: "--format"
             type: choice
@@ -284,6 +290,9 @@ products:
           reason: >
             All cmr_audit scripts use absolute imports from the opera-sds-pcm
             package. Full PCM install with [cmr_audit] extras required.
+        # No --output given -> the script names its own file:
+        # missing_granules_HLS-DSWx_<start>_<end>_<now>.{txt,json}.
+        produces_glob: ["missing_granules_HLS-DSWx_*"]
         entrypoint: "venv/bin/python cmr_audit_hls.py"
         params:
           - name: start_datetime
@@ -300,6 +309,7 @@ products:
             flag: "-o"
             type: path
             is_output: true
+            help: "Optional; if left blank, the script names its own timestamped file"
           - name: format
             flag: "--format"
             type: choice
@@ -393,7 +403,8 @@ products:
             flag: "-g"
             type: path
             required: true
-            help: "Path or URL to GeoJSON file defining region of interest"
+            default: "../../../geo/north_america_opera.geojson"
+            help: "Path or URL to GeoJSON file defining region of interest (bundled default: North America)"
           - name: do_cslc
             flag: "--do-cslc"
             type: choice
@@ -403,6 +414,7 @@ products:
           - name: output
             flag: "-o"
             type: path
+            default: "rtc_s1_burst_coverage.json"
             is_output: true
           - name: format
             flag: "--format"
@@ -497,7 +509,8 @@ products:
             flag: "-g"
             type: path
             required: true
-            help: "Path or URL to GeoJSON file defining region of interest"
+            default: "../../../geo/north_america_opera.geojson"
+            help: "Path or URL to GeoJSON file defining region of interest (bundled default: North America)"
           - name: do_rtc
             flag: "--do-rtc"
             type: choice
@@ -507,6 +520,7 @@ products:
           - name: output
             flag: "-o"
             type: path
+            default: "cslc_s1_burst_coverage.json"
             is_output: true
           - name: format
             flag: "--format"
@@ -538,6 +552,28 @@ products:
             data_subscriber.rtc.mgrs_bursts_collection_db_client.
           pip_install: ["geopandas"]
         requires_mgrs_db: true
+        # data_subscriber.dist_s1_utils.localize_dist_burst_db falls back to
+        # S3 (settings.yaml's DIST_S1_BURST_DB_S3PATH, a private
+        # s3://opera-ancillaries/... path) for the DIST-S1 burst lookup
+        # table if no local mgrs_burst_lookup_table.parquet/.pickle is
+        # found -- unlike the MGRS tile DB above, there's no public/bundled
+        # copy of this one anywhere in opera-sds-ops or opera-sds-pcm to
+        # substitute, so without AWS credentials for that bucket this just
+        # burns ~40s on doomed retries (NoCredentialsError) before falling
+        # back to an empty result. Needs either those credentials or to run
+        # from an SDS node/VM where the file's already cached locally.
+        # `./setup.sh` prompts for those credentials once (see
+        # bootstrap.py's ensure_aws_credentials) and cli.py points
+        # AWS_PROFILE at them for this tool's subprocess specifically.
+        requires_aws_ancillaries: true
+        requires_vm: true
+        vm_note: >
+          Falls back to S3 (a private s3://opera-ancillaries/... path) for
+          the DIST-S1 burst lookup table if no local copy is cached; with no
+          AWS credentials for that bucket, wastes ~40s on retries before
+          continuing with an empty result. setup.sh prompts for those
+          credentials, or run from an SDS node/VM where the file's already
+          cached locally.
         entrypoint: "venv/bin/python dist_s1_input_tool.py"
         params:
           - name: native_id
@@ -545,21 +581,28 @@ products:
             type: str
             required: false
             help: "DIST-S1 native ID to parse for tile ID and time"
+          # Script requires --temporal-window to actually be passed for
+          # --start-date/--end-date to take effect at all -- without it,
+          # main() rejects a date range with "Must provide either
+          # --temporal-window, --input-file, --native-id, or both tile_id
+          # and time arguments", even though start/end dates were given.
+          # Defaults to true since a date-range query is this launchpad's
+          # primary use case for this tool.
           - name: temporal_window
             flag: "--temporal-window"
             type: bool
-            default: false
-            help: "Enable temporal window analysis mode"
+            default: true
+            help: "Enable temporal window analysis mode (required for start/end date range queries)"
           - name: start_date
             flag: "--start-date"
             type: datetime_iso
             required: false
-            help: "Start date for temporal window analysis"
+            help: "Start date for temporal window analysis, e.g. 2026-01-01T00:00:00Z"
           - name: end_date
             flag: "--end-date"
             type: datetime_iso
             required: false
-            help: "End date for temporal window analysis"
+            help: "End date for temporal window analysis, e.g. 2026-01-02T00:00:00Z"
           - name: window_size
             flag: "--window-size"
             type: int
@@ -574,7 +617,11 @@ products:
             flag: "--output-file"
             type: path
             is_output: true
-            help: "Output file path for JSON format"
+            help: >-
+              Only used when output_format is json/ids; ignored for text.
+              Leave blank and results just print to console -- despite the
+              script's own --help text, there's no auto-generated fallback
+              filename; nothing is written to disk unless you set this.
 
       audit:
         kind: single
@@ -591,6 +638,33 @@ products:
             data_subscriber.rtc.mgrs_bursts_collection_db_client.
           pip_install: ["geopandas"]
         requires_mgrs_db: true
+        # cmr_audit_dist_s1.py also independently calls
+        # data_subscriber.dist_s1_utils.localize_dist_burst_db() for the
+        # *separate* DIST-S1 burst lookup table (mgrs_burst_lookup_table.
+        # parquet) -- unrelated to the MGRS tile DB above / requires_mgrs_db.
+        # That falls back to S3 (settings.yaml's DIST_S1_BURST_DB_S3PATH, a
+        # private s3://opera-ancillaries/... path) if no local copy is
+        # cached, and there's no public/bundled copy anywhere in
+        # opera-sds-ops or opera-sds-pcm to substitute. Without AWS
+        # credentials for that bucket this is a hard crash here (unlike
+        # input_selection below, which degrades to an empty result instead):
+        # ~40s of doomed retries (NoCredentialsError), then
+        # FileNotFoundError: 'mgrs_burst_lookup_table.parquet'.
+        # `./setup.sh` prompts for those credentials once (see
+        # bootstrap.py's ensure_aws_credentials) and cli.py points
+        # AWS_PROFILE at them for this tool's subprocess specifically.
+        requires_aws_ancillaries: true
+        requires_vm: true
+        vm_note: >
+          Falls back to S3 (a private s3://opera-ancillaries/... path) for
+          the DIST-S1 burst lookup table if no local copy is cached; with no
+          AWS credentials for that bucket, this crashes after ~40s of
+          doomed retries (FileNotFoundError: mgrs_burst_lookup_table.parquet).
+          setup.sh prompts for those credentials, or run from an SDS
+          node/VM where the file's already cached locally.
+        # No --output given -> the script names its own file:
+        # DIST_S1_potential_missing_products_<start>_<end>_<now>.{txt,json}.
+        produces_glob: ["DIST_S1_potential_missing_products_*"]
         entrypoint: "venv/bin/python cmr_audit_dist_s1.py"
         params:
           - name: start_datetime
@@ -612,6 +686,7 @@ products:
             flag: "-o"
             type: path
             is_output: true
+            help: "Optional; if left blank, the script names its own timestamped file"
           - name: format
             flag: "--format"
             type: choice
@@ -662,17 +737,17 @@ products:
             flag: "--production-start-date"
             type: datetime_iso
             required: false
-            help: "Filter by production time start"
+            help: "Filter by production time start, e.g. 2026-01-01T00:00:00Z"
           - name: production_end_date
             flag: "--production-end-date"
             type: datetime_iso
             required: false
-            help: "Filter by production time end"
+            help: "Filter by production time end, e.g. 2026-01-02T00:00:00Z"
           - name: pge_versions
             flag: "--pge-versions"
             type: str_list
             required: false
-            help: "PGE version number(s) to filter to (space-separated)"
+            help: "PGE version number(s) to filter to (space-separated, e.g. 3.0.4 3.0.5)"
           - name: output
             flag: "-o"
             type: path
@@ -751,7 +826,9 @@ products:
           - name: output
             flag: "--output"
             type: path
+            default: "disp_s1_duplicate_detection_report.json"
             is_output: true
+            help: "Script only writes a file / prints results if this is set"
           - name: debug
             flag: "--debug"
             type: bool
@@ -887,6 +964,9 @@ products:
           GIT_OAUTH_TOKEN (private pcm_commons repo) — setup.sh prompts for
           it, or export it yourself beforehand. See
           overrides.reason above.
+        # No --output given -> the script names its own file:
+        # missing_granules_CSLC-DISP-S1_<start>_<end>_<now>.{txt,json}.
+        produces_glob: ["missing_granules_CSLC-DISP-S1_*"]
         entrypoint: "venv/bin/python cmr_audit_disp_s1.py"
         params:
           - name: start_datetime
@@ -909,6 +989,7 @@ products:
             flag: "-o"
             type: path
             is_output: true
+            help: "Optional; if left blank, the script names its own timestamped file"
           - name: format
             flag: "--format"
             type: choice
@@ -1150,13 +1231,30 @@ products:
             is needed by data_subscriber.rtc.mgrs_bursts_collection_db_client.
           pip_install: ["geopandas"]
         requires_mgrs_db: true
+        # No --output given -> the script names its own file:
+        # missing_frames_DISP-S1-STATIC_<now>.{txt,json}.
+        produces_glob: ["missing_frames_DISP-S1-STATIC_*"]
+        # --frame-to-burst-db has no default and no documented canonical
+        # download source anywhere in opera-sds-pcm/opera-sds-ops --
+        # operators are expected to already have their own copy from the
+        # DISP-S1 processing team. bootstrap.py's ensure_frame_to_burst_sample
+        # instead copies in opera-sds-ops's own tiny (5 frame) *sample*
+        # fixture as a default, so this field isn't a dead end for anyone
+        # without their own file -- but results against it only ever cover
+        # those 5 frames, never real coverage.
+        requires_frame_to_burst_sample: true
         entrypoint: "venv/bin/python cmr_audit_disp_s1_static.py"
         params:
           - name: frame_to_burst_db
             flag: "--frame-to-burst-db"
             type: path
             required: true
-            help: "Path to opera-s1-disp-frame-to-burst.json"
+            default: "opera-s1-disp-frame-to-burst-sample.json"
+            help: >-
+              Path to opera-s1-disp-frame-to-burst.json. Default is a
+              bundled 5-frame SAMPLE fixture only (not the real DB) --
+              provide your own full copy from the DISP-S1 processing team
+              for a real coverage check.
           - name: filter_north_america
             flag: "--filter-is-north-america"
             # BooleanOptionalAction: false has to be spelled out as
@@ -1168,6 +1266,7 @@ products:
             flag: "-o"
             type: path
             is_output: true
+            help: "Optional; if left blank, the script names its own timestamped file"
           - name: format
             flag: "--format"
             type: choice
