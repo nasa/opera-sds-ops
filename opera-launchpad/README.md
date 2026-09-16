@@ -130,6 +130,19 @@ To add/replace a credential later without re-running everything:
 ./setup.sh --product <PRODUCT> --tool <TOOL>   # re-prompts for just what that tool needs
 ```
 
+### Which tools need which credential
+
+| Credential | Tools | Without it |
+| --- | --- | --- |
+| EDL username/password | `RTC_S1.audit`, `CSLC_S1.audit`, `DIST_S1.validity` | Runs, but degraded/incomplete results (EDL-gated queries silently skip/fail per-item). |
+| AWS (S3 ancillary bucket) | `DIST_S1.input_selection`, `DIST_S1.audit` | `input_selection` silently returns an empty/wrong result; `audit` hard-crashes. |
+| `GIT_OAUTH_TOKEN` (JPL GHE PAT) | `DISP_S1.audit` | Setup fails outright for this one tool with a clear error (others unaffected). No unauthenticated path works for this repo — plain clone, zip download, and the GHE API were all tested and all require it. |
+
+Tools that also need live network access to the OPERA SDS's internal
+Elasticsearch/GRQ cluster (won't fully work from a personal laptop even with
+every credential above set): `DIST_S1.input_selection`, `DIST_S1.audit`,
+`DISP_S1.audit`.
+
 ## Updating after a developer pushes changes
 
 `start.sh` / `cli.py` automatically warn you at startup if a tool's clone is
