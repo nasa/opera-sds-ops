@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opera-launchpad"
+version = "0.1.0"
+description = "Lightweight launcher that clones and runs OPERA operator tools in their own repos, unmodified."
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "pyyaml>=6.0",
+    "questionary>=2.0.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+opera-launchpad = "cli:main"
+
+[tool.setuptools]
+py-modules = ["cli", "bootstrap"]
+
+[tool.ruff]
+line-length = 120
