@@ -235,7 +235,11 @@ def build_flags(params: list[dict]) -> tuple[list[str], dict[str, str]]:
         ptype = param.get("type")
         if ptype == "bool":
             # store_true flags take no value; the false case is simply omitted.
+            # With `value:` the flag carries that fixed value instead (a yes/no
+            # prompt for a flag that takes one argument, e.g. --clear-cache-namespace cmr_slc).
             flags.append(param["flag"])
+            if "value" in param:
+                flags.append(str(param["value"]))
         elif ptype == "bool_optional":
             flags.append(param["flag"] if value == "true" else _negate_flag(param["flag"]))
         elif ptype == "str_list":
@@ -298,7 +302,27 @@ def command_panel(command: list[str], cwd: Path) -> Panel:
     )
 
 
-def confirm_and_run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> bool:
+def exit_code_meanings(tool_cfg: dict) -> dict[int, str]:
+    """Exit codes that mean the tool ran, with what each one means.
+
+    Some tools report through their exit code rather than failing: the CMR
+    burst coverage audit exits 1 when products are missing (its normal result)
+    and 2 when some dates could not be audited. A registry entry lists those
+    under `exit_codes:` ({code: meaning}); anything else is a failure. YAML
+    may hand the keys over as ints or strings.
+    """
+    raw = tool_cfg.get("exit_codes") or {0: "completed"}
+    return {int(code): str(meaning) for code, meaning in raw.items()}
+
+
+def confirm_and_run(
+    command: list[str], cwd: Path, env: dict[str, str] | None = None, exit_codes: dict[int, str] | None = None
+) -> bool:
+    """Run the command after confirmation; True when its exit code is one the tool uses to report a result.
+
+    `exit_codes` comes from `exit_code_meanings`; by default only 0 counts.
+    """
+    exit_codes = exit_codes or {0: "completed"}
     console.print(command_panel(command, cwd))
     if not questionary.confirm("Run this command?", default=True, style=STYLE, qmark=QMARK).unsafe_ask():
         console.print(f"[{WARN}]\u25cb Skipped.[/{WARN}]\n")
@@ -312,14 +336,34 @@ def confirm_and_run(command: list[str], cwd: Path, env: dict[str, str] | None = 
     console.rule(style=MUTED)
 
     duration = f"{elapsed.total_seconds():.1f}s"
-    if result.returncode != 0:
+    if result.returncode not in exit_codes:
         console.print(
             f"[bold {BAD}]\u2717 exited with code {result.returncode}[/bold {BAD}] "
             f"[{MUTED}]after {duration}[/{MUTED}]\n"
         )
         return False
-    console.print(f"[bold {OK}]\u2713 completed[/bold {OK}] [{MUTED}]in {duration}[/{MUTED}]\n")
+    if result.returncode == 0:
+        console.print(f"[bold {OK}]\u2713 completed[/bold {OK}] [{MUTED}]in {duration}[/{MUTED}]\n")
+    else:
+        console.print(
+            f"[bold {WARN}]\u2713 exited with code {result.returncode}: {exit_codes[result.returncode]}[/bold {WARN}] "
+            f"[{MUTED}]in {duration}[/{MUTED}]\n"
+        )
     return True
+
+
+def notes_panel(tool_cfg: dict) -> Panel | None:
+    """The registry's `notes` for a tool, shown before its prompts (single and pipeline tools alike)."""
+    notes = tool_cfg.get("notes")
+    if not notes:
+        return None
+    return Panel(
+        Text(" ".join(notes.split()), style="white"),
+        title=f"[bold {WARN}]heads up[/bold {WARN}]",
+        border_style=WARN,
+        box=box.ROUNDED,
+        padding=(1, 2),
+    )
 
 
 def not_installed_panel(product: str, tool_name: str, tool_dir: Path) -> Panel:
@@ -588,6 +632,10 @@ def run_single_tool(product: str, tool_name: str, tool_cfg: dict) -> None:
         console.print(vm_panel)
         console.print()
 
+    if notes := notes_panel(tool_cfg):
+        console.print(notes)
+        console.print()
+
     flags, values = build_flags(params)
 
     if summary := params_summary_panel(params, values):
@@ -598,7 +646,9 @@ def run_single_tool(product: str, tool_name: str, tool_cfg: dict) -> None:
     clean_expected_outputs(expected_outputs)
 
     started_at = datetime.now()
-    ok = confirm_and_run(command, cwd=tool_dir, env=tool_run_env(tool_cfg, tool_dir))
+    ok = confirm_and_run(
+        command, cwd=tool_dir, env=tool_run_env(tool_cfg, tool_dir), exit_codes=exit_code_meanings(tool_cfg)
+    )
 
     if ok:
         collect_outputs(expected_outputs, out_dir, started_at)
@@ -655,16 +705,8 @@ def run_pipeline_tool(product: str, tool_name: str, tool_cfg: dict) -> None:
         console.print(vm_panel)
         console.print()
 
-    if notes := tool_cfg.get("notes"):
-        console.print(
-            Panel(
-                Text(" ".join(notes.split()), style="white"),
-                title=f"[bold {WARN}]heads up[/bold {WARN}]",
-                border_style=WARN,
-                box=box.ROUNDED,
-                padding=(1, 2),
-            )
-        )
+    if notes := notes_panel(tool_cfg):
+        console.print(notes)
         console.print()
 
     console.print(pipeline_table(steps, statuses={}))

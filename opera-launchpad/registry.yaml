@@ -384,10 +384,27 @@ products:
         # of erroring outright, so results end up degraded rather than
         # bad-request-failing. `./setup.sh` prompts for EDL credentials once.
         requires_edl: true
+        # The audit reports through its exit code: 1 is the normal result of a
+        # run that found gaps, 2 (opera-sds-pcm PR #1541) means some dates could
+        # not be audited and must be re-run. Both are collected like a 0.
+        exit_codes:
+          0: "complete, no missing products"
+          1: "complete, missing products listed in the report"
+          2: "incomplete: some dates were skipped or have unverified bursts; re-run them with recheck_dates"
+        notes: >
+          Runs chunked, one day at a time (--low-memory --chunk-days 1), so a
+          crash or CMR outage loses at most a day; results stream to the .jsonl
+          output (one chunk_result line per day plus a summary). Expect roughly
+          10-15 min per audited day; run inside screen/tmux. Needs the EDL entry
+          in ~/.netrc (burst derivation). Per-burst "no product" answers are
+          cached permanently, so a month audited again after OPS reprocessed it
+          needs recheck_dates for those days. Turn the report into the SLC
+          reprocess list with scripts/extract_slcs.py. Requires opera-sds-pcm
+          PR #1541 or later in the clone (./setup.sh --update).
         entrypoint: "venv/bin/python cmr_audit_burst_coverage.py"
         # --do-rtc/--do-cslc are value-taking ("true"/"false"), not store_true
         # flags, so a bare "--do-rtc" (no value) is a hard argparse error.
-        fixed_args: ["--do-rtc", "true"]
+        fixed_args: ["--do-rtc", "true", "--low-memory", "--chunk-days", "1"]
         params:
           - name: start_datetime
             flag: "--start-datetime"
@@ -403,8 +420,9 @@ products:
             flag: "-g"
             type: path
             required: true
-            default: "../../../geo/north_america_opera.geojson"
-            help: "Path or URL to GeoJSON file defining region of interest (bundled default: North America)"
+            # RTC-S1 is produced globally; the land-only file keeps ocean-only SLCs from showing up as gaps.
+            default: "../../../geo/data/global_land_no_antarctica.geojson"
+            help: "Path or URL to GeoJSON file defining region of interest (bundled default: global land, no Antarctica)"
           - name: do_cslc
             flag: "--do-cslc"
             type: choice
@@ -414,13 +432,20 @@ products:
           - name: output
             flag: "-o"
             type: path
-            default: "rtc_s1_burst_coverage.json"
+            default: "rtc_s1_burst_coverage.jsonl"
             is_output: true
-          - name: format
-            flag: "--format"
-            type: choice
-            choices: ["json", "txt"]
-            default: "json"
+            help: "JSONL report (chunked mode writes JSONL whatever the extension)"
+          - name: recheck_dates
+            flag: "--recheck-dates"
+            type: str
+            required: false
+            help: "Comma-separated YYYY-MM-DD dates to query CMR afresh: days OPS reprocessed, or days the last run reported as skipped/unverified. Blank = use the cache"
+          - name: fresh_slc_listing
+            flag: "--clear-cache-namespace"
+            value: "cmr_slc"
+            type: bool
+            default: false
+            help: "Drop the cached CMR SLC listings before the run (cheap to rebuild; use when a listing is suspect)"
           - name: log_level
             flag: "--log-level"
             type: choice
@@ -490,10 +515,27 @@ products:
         # of erroring outright, so results end up degraded rather than
         # bad-request-failing. `./setup.sh` prompts for EDL credentials once.
         requires_edl: true
+        # The audit reports through its exit code: 1 is the normal result of a
+        # run that found gaps, 2 (opera-sds-pcm PR #1541) means some dates could
+        # not be audited and must be re-run. Both are collected like a 0.
+        exit_codes:
+          0: "complete, no missing products"
+          1: "complete, missing products listed in the report"
+          2: "incomplete: some dates were skipped or have unverified bursts; re-run them with recheck_dates"
+        notes: >
+          Runs chunked, one day at a time (--low-memory --chunk-days 1), so a
+          crash or CMR outage loses at most a day; results stream to the .jsonl
+          output (one chunk_result line per day plus a summary). Expect roughly
+          10-15 min per audited day; run inside screen/tmux. Needs the EDL entry
+          in ~/.netrc (burst derivation). Per-burst "no product" answers are
+          cached permanently, so a month audited again after OPS reprocessed it
+          needs recheck_dates for those days. Turn the report into the SLC
+          reprocess list with scripts/extract_slcs.py. Requires opera-sds-pcm
+          PR #1541 or later in the clone (./setup.sh --update).
         entrypoint: "venv/bin/python cmr_audit_burst_coverage.py"
         # --do-rtc/--do-cslc are value-taking ("true"/"false"), not store_true
         # flags, so a bare "--do-cslc" (no value) is a hard argparse error.
-        fixed_args: ["--do-cslc", "true"]
+        fixed_args: ["--do-cslc", "true", "--low-memory", "--chunk-days", "1"]
         params:
           - name: start_datetime
             flag: "--start-datetime"
@@ -520,13 +562,20 @@ products:
           - name: output
             flag: "-o"
             type: path
-            default: "cslc_s1_burst_coverage.json"
+            default: "cslc_s1_burst_coverage.jsonl"
             is_output: true
-          - name: format
-            flag: "--format"
-            type: choice
-            choices: ["json", "txt"]
-            default: "json"
+            help: "JSONL report (chunked mode writes JSONL whatever the extension)"
+          - name: recheck_dates
+            flag: "--recheck-dates"
+            type: str
+            required: false
+            help: "Comma-separated YYYY-MM-DD dates to query CMR afresh: days OPS reprocessed, or days the last run reported as skipped/unverified. Blank = use the cache"
+          - name: fresh_slc_listing
+            flag: "--clear-cache-namespace"
+            value: "cmr_slc"
+            type: bool
+            default: false
+            help: "Drop the cached CMR SLC listings before the run (cheap to rebuild; use when a listing is suspect)"
           - name: log_level
             flag: "--log-level"
             type: choice
