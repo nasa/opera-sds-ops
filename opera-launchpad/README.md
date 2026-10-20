@@ -302,8 +302,48 @@ for any one tool's quirks.
 - **`type: bool_optional`** is for `argparse.BooleanOptionalAction`-style
   flags, where "false" has to be spelled out as `--no-foo`, not just an
   omitted flag.
+- **`type: bool`** with a **`value:`** passes that fixed value after the flag
+  when the operator says yes (`--clear-cache-namespace cmr_slc`), for a flag
+  that takes one argument but only ever one that matters here.
 - **`type: str_list`** is for `nargs='+'`-style flags that need each value as
   its own argv token, not one space-separated string.
+
+### Exit codes and notes
+
+```yaml
+        exit_codes:                     # codes that mean "the tool ran"; default {0: completed}
+          0: "complete, no missing products"
+          1: "complete, missing products listed in the report"
+          2: "incomplete: some dates were skipped; re-run them"
+        notes: >                        # shown before the prompts, single and pipeline tools alike
+          Run inside screen/tmux; a month takes hours.
+```
+
+Some tools report through their exit code instead of failing: the CMR burst
+coverage audits (`CSLC_S1.audit`, `RTC_S1.audit`) exit 1 whenever products
+are missing, which is the normal result of an audit, and 2 when some dates
+could not be audited. Without `exit_codes` any non-zero exit is treated as a
+failure and the run's files are **not** collected into `output/`, so a report
+with findings would be left behind in the tool's own directory. The meaning
+is printed next to the exit code.
+
+### Audit runs (`CSLC_S1.audit`, `RTC_S1.audit`)
+
+- They run chunked (`--low-memory --chunk-days 1`): one day at a time, each
+  day's result written to the `.jsonl` output as it finishes, so a crash or a
+  CMR outage costs a day, not the run. Budget 10-15 minutes per audited day
+  and run inside `screen`/`tmux`.
+- Exit 2 means re-run: the report's `chunk_error` lines name days CMR could
+  not list, `unverified` entries name bursts whose product lookup got no
+  complete answer. Re-run those days with `recheck_dates`.
+- Cached "no product" answers never refresh themselves, so a month audited
+  again after OPS reprocessed it also needs `recheck_dates` for those days.
+- `scripts/extract_slcs.py [report]` turns the report into
+  `slcs-to-reprocess-<product>.txt` (one SLC id per line, what OPS
+  reprocesses from) plus a detail CSV, and lists what still needs a re-run.
+- Needs opera-sds-pcm PR #1541 or later in the clone (it verifies every CMR
+  listing against CMR's own count and refuses to cache a short one;
+  `./setup.sh --update` after a merge).
 
 ### Environment overrides
 
