@@ -13,6 +13,7 @@ Reads the chunked JSONL the registry runs produce (one chunk_result line per
 day) or a whole-run JSON report. Writes, next to the report:
   slcs-to-reprocess-<product>.txt         one SLC id per line (CMR native id without -SLC), sorted
   slcs-to-reprocess-<product>-detail.csv  slc,date,platform,missing_bursts,fully_missing
+                                          (fully_missing=no: some bursts of the scene do have a product)
   slcs-excluded-<product>.csv             the flagged SLCs left off the list, with the reason
 and prints what still needs a re-run (skipped chunks, unverified bursts).
 
@@ -48,7 +49,7 @@ DEFAULT_PLATFORM_START = {"S1D": "2026-06-13"}
 
 def load_report(path):
     """Return (products, meta) with products = {product: {"missing": [...], "unverified": [...]}}."""
-    products = defaultdict(lambda: {"missing": [], "unverified": [], "found_count": 0})
+    products = defaultdict(lambda: {"missing": [], "unverified": [], "found_count": 0, "found_slcs": set()})
     meta = {"failed_chunks": [], "unverified_days": set()}
     with open(path) as f:
         head = f.read(1)
@@ -69,6 +70,7 @@ def load_report(path):
                     p["missing"].extend(rec.get("missing", []))
                     p["unverified"].extend(rec.get("unverified", []))
                     p["found_count"] += rec.get("found_count", 0)
+                    p["found_slcs"].update(m.get("slc_native_id") for m in rec.get("found", []))
                 elif kind == "chunk_error":
                     meta["failed_chunks"].append(rec)
                 elif kind == "summary":
@@ -86,6 +88,7 @@ def load_report(path):
                 products[product]["missing"] = cov.get("missing", [])
                 products[product]["unverified"] = cov.get("unverified", [])
                 products[product]["found_count"] = cov.get("found_count", 0)
+                products[product]["found_slcs"] = {m.get("slc_native_id") for m in cov.get("found", [])}
     return products, meta
 
 
@@ -154,7 +157,7 @@ def main(argv=None):
 
     for product, cov in products.items():
         by_slc = Counter(m["slc_native_id"] for m in cov["missing"])
-        found_slcs = set()  # SLCs with at least one product found are "partial", not fully missing
+        found_slcs = cov["found_slcs"]  # SLCs with at least one product found are "partial", not fully missing
         rows, excluded = [], []
         for sid, n in sorted(by_slc.items()):
             first = next(m for m in cov["missing"] if m["slc_native_id"] == sid)
@@ -171,7 +174,7 @@ def main(argv=None):
             w = csv.writer(f)
             w.writerow(["slc", "date", "platform", "missing_bursts", "fully_missing"])
             for sid, day, plat, n in rows:
-                w.writerow([sid, day, plat, n, "yes" if sid + "-SLC" not in found_slcs else "unknown"])
+                w.writerow([sid, day, plat, n, "no" if sid + "-SLC" in found_slcs else "yes"])
         plats = Counter(r[2] for r in rows)
         print(f"{product}: found {cov['found_count']:,} bursts, missing {len(cov['missing']):,} bursts in "
               f"{len(by_slc)} SLCs; listed {len(rows)} SLCs {dict(plats)} -> {stem}.txt")

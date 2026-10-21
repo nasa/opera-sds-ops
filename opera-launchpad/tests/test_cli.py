@@ -146,3 +146,16 @@ def test_extract_slcs_rejects_a_malformed_platform_start(tmp_path):
         out = subprocess.run([PYTHON, str(HERE / "scripts" / "extract_slcs.py"), str(report), "--platform-start", bad],
                              capture_output=True, text=True)
         assert out.returncode != 0 and "--platform-start" in out.stderr
+
+
+def test_extract_slcs_marks_a_scene_with_some_products_as_not_fully_missing(tmp_path):
+    report = _audit_report(tmp_path, [(S1D_LATE, "S1D", "2026-06-20T23:56:56+00:00"),
+                                      (S1A_EARLY, "S1A", "2026-06-05T01:12:55+00:00")])
+    lines = [json.loads(l) for l in report.read_text().splitlines()]
+    chunk = next(l for l in lines if l["_type"] == "chunk_result")
+    chunk["found"] = [{**chunk["missing"][0], "burst_pattern": "T100-213519-IW1"}]  # one burst of S1D_LATE has a product
+    chunk["found_count"] = 1
+    report.write_text("\n".join(json.dumps(l) for l in lines) + "\n")
+    _extract(report)
+    detail = {r.split(",")[0]: r.split(",")[-1] for r in (report.parent / "slcs-to-reprocess-cslc-s1-detail.csv").read_text().splitlines()[1:]}
+    assert detail == {S1D_LATE[:-4]: "no", S1A_EARLY[:-4]: "yes"}
