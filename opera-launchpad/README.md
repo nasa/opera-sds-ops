@@ -341,6 +341,12 @@ is printed next to the exit code.
 - `scripts/extract_slcs.py [report]` turns the report into
   `slcs-to-reprocess-<product>.txt` (one SLC id per line, what OPS
   reprocesses from) plus a detail CSV, and lists what still needs a re-run.
+  Scenes OPS does not produce on purpose are left off the list and written to
+  `slcs-excluded-<product>.csv` with the reason: by default S1D scenes sensed
+  before 2026-06-13, the agreed start of S1D CSLC production. The audit flags
+  them regardless, because it only knows the polygon. `--platform-start
+  PLATFORM=YYYY-MM-DD` moves or adds such a rule, `--no-platform-start` lists
+  every flagged SLC.
 - Needs opera-sds-pcm PR #1541 or later in the clone (it verifies every CMR
   listing against CMR's own count and refuses to cache a short one;
   `./setup.sh --update` after a merge).

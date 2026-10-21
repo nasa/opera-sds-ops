@@ -399,8 +399,9 @@ products:
           in ~/.netrc (burst derivation). Per-burst "no product" answers are
           cached permanently, so a month audited again after OPS reprocessed it
           needs recheck_dates for those days. Turn the report into the SLC
-          reprocess list with scripts/extract_slcs.py. Requires opera-sds-pcm
-          PR #1541 or later in the clone (./setup.sh --update).
+          reprocess list with scripts/extract_slcs.py (it leaves off scenes OPS
+          does not produce, by default S1D before 2026-06-13). Requires
+          opera-sds-pcm PR #1541 or later in the clone (./setup.sh --update).
         entrypoint: "venv/bin/python cmr_audit_burst_coverage.py"
         # --do-rtc/--do-cslc are value-taking ("true"/"false"), not store_true
         # flags, so a bare "--do-rtc" (no value) is a hard argparse error.
@@ -530,8 +531,9 @@ products:
           in ~/.netrc (burst derivation). Per-burst "no product" answers are
           cached permanently, so a month audited again after OPS reprocessed it
           needs recheck_dates for those days. Turn the report into the SLC
-          reprocess list with scripts/extract_slcs.py. Requires opera-sds-pcm
-          PR #1541 or later in the clone (./setup.sh --update).
+          reprocess list with scripts/extract_slcs.py (it leaves off scenes OPS
+          does not produce, by default S1D before 2026-06-13). Requires
+          opera-sds-pcm PR #1541 or later in the clone (./setup.sh --update).
         entrypoint: "venv/bin/python cmr_audit_burst_coverage.py"
         # --do-rtc/--do-cslc are value-taking ("true"/"false"), not store_true
         # flags, so a bare "--do-cslc" (no value) is a hard argparse error.
