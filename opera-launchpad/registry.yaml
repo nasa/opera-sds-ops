@@ -402,6 +402,8 @@ products:
           reprocess list with scripts/extract_slcs.py (it leaves off scenes OPS
           does not produce, by default S1D before 2026-06-13). Requires
           opera-sds-pcm PR #1541 or later in the clone (./setup.sh --update).
+          buffer_deg keeps the tool's 0.5 deg padding here (RTC production is
+          not gated on the polygon); set it to 0 for parity with the CSLC audit.
         entrypoint: "venv/bin/python cmr_audit_burst_coverage.py"
         # --do-rtc/--do-cslc are value-taking ("true"/"false"), not store_true
         # flags, so a bare "--do-rtc" (no value) is a hard argparse error.
@@ -424,6 +426,14 @@ products:
             # RTC-S1 is produced globally; the land-only file keeps ocean-only SLCs from showing up as gaps.
             default: "../../../geo/data/global_land_no_antarctica.geojson"
             help: "Path or URL to GeoJSON file defining region of interest (bundled default: global land, no Antarctica)"
+          # Kept at the tool's own 0.5 deg: RTC-S1 production is not gated on
+          # this polygon, so there is no evidence yet that 0 is right here. Set
+          # it to 0 for parity with the CSLC audit.
+          - name: buffer_deg
+            flag: "--buffer-deg"
+            type: str
+            default: "0.5"
+            help: "Degrees to pad the region before the footprint test (tool default 0.5, kept here: RTC production is not gated on the polygon; 0 gives parity with the CSLC audit)"
           - name: do_cslc
             flag: "--do-cslc"
             type: choice
@@ -534,6 +544,9 @@ products:
           reprocess list with scripts/extract_slcs.py (it leaves off scenes OPS
           does not produce, by default S1D before 2026-06-13). Requires
           opera-sds-pcm PR #1541 or later in the clone (./setup.sh --update).
+          buffer_deg 0 keeps the list to scenes the PCM actually processes (it
+          gates CSLC production on the unpadded polygon); reports made with the
+          tool's own 0.5 include edge scenes OPERA never produces.
         entrypoint: "venv/bin/python cmr_audit_burst_coverage.py"
         # --do-rtc/--do-cslc are value-taking ("true"/"false"), not store_true
         # flags, so a bare "--do-cslc" (no value) is a hard argparse error.
@@ -555,6 +568,18 @@ products:
             required: true
             default: "../../../geo/north_america_opera.geojson"
             help: "Path or URL to GeoJSON file defining region of interest (bundled default: North America)"
+          # The PCM gates CSLC production on the UNPADDED polygon: slc_query.py
+          # sets intersects_north_america only when the SLC footprint intersects
+          # geo/north_america_opera.geojson as is, and the CSLC trigger rule
+          # requires that flag. A padded audit therefore flags edge scenes OPERA
+          # never produces: with the tool's default of 0.5 deg, 444 of the 1,119
+          # SLCs on the May-Oct 2026 list were such scenes. opera-sds-pcm PR
+          # #1549 changed only the CMR listing box, not this geometry buffer.
+          - name: buffer_deg
+            flag: "--buffer-deg"
+            type: str
+            default: "0"
+            help: "Degrees to pad the region before the footprint test. 0 matches how the PCM gates CSLC production (unpadded intersects_north_america); the tool's own 0.5 adds edge scenes OPERA never produces"
           - name: do_rtc
             flag: "--do-rtc"
             type: choice

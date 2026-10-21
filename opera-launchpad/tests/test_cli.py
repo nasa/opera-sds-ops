@@ -66,6 +66,38 @@ def test_audit_entries_run_chunked_and_report_through_exit_codes():
     assert "global_land_no_antarctica" in registry["products"]["RTC_S1"]["tools"]["audit"]["params"][2]["default"]
 
 
+def test_audit_entries_expose_the_geometry_buffer_right_after_the_geojson():
+    # The PCM gates CSLC production on the unpadded polygon, so the CSLC audit pads nothing;
+    # the RTC audit keeps the tool's own 0.5 deg until there is evidence for 0 there too.
+    registry = yaml.safe_load((HERE / "registry.yaml").read_text())
+    for product, default in (("CSLC_S1", "0"), ("RTC_S1", "0.5")):
+        audit = registry["products"][product]["tools"]["audit"]
+        params = audit["params"]
+        assert params[2]["name"] == "geojson" and params[3]["name"] == "buffer_deg"
+        assert params[3]["flag"] == "--buffer-deg" and params[3]["type"] == "str"
+        assert params[3]["default"] == default
+        assert "buffer_deg" in audit["notes"]
+
+
+def test_a_str_param_prompts_with_its_default_and_passes_it_through():
+    # The registry's default (not the tool's) is what the operator sees and what the flag carries
+    # when they accept it: `--buffer-deg 0` overrides the tool's own 0.5.
+    params = [{"name": "buffer_deg", "flag": "--buffer-deg", "type": "str", "default": "0", "help": "pad"}]
+    seen = {}
+
+    def text(label, default="", **kwargs):
+        seen.update(label=label, default=default)
+        prompt = MagicMock()
+        prompt.unsafe_ask.return_value = default   # the operator presses enter
+        return prompt
+
+    with patch.object(cli.questionary, "text", side_effect=text):
+        flags, values = cli.build_flags(params)
+    assert seen["default"] == "0" and "[default: 0]" in seen["label"]
+    assert flags == ["--buffer-deg", "0"]
+    assert values == {"buffer_deg": "0"}
+
+
 def test_extract_slcs_builds_the_list_from_a_chunked_report(tmp_path):
     report = tmp_path / "cslc_s1_burst_coverage.jsonl"
     miss = {"burst_pattern": "T100-213518-IW2", "acquisition_time": "2026-06-23T13:36:10+00:00", "platform": "S1A",
