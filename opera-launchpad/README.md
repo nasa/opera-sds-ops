@@ -338,6 +338,19 @@ is printed next to the exit code.
   complete answer. Re-run those days with `recheck_dates`.
 - Cached "no product" answers never refresh themselves, so a month audited
   again after OPS reprocessed it also needs `recheck_dates` for those days.
+- `buffer_deg` pads the region before the footprint test. The CSLC audit
+  defaults it to 0 because the PCM gates CSLC production on the unpadded
+  North America polygon: `intersects_north_america` is set only when the SLC
+  footprint intersects `geo/north_america_opera.geojson` as is, and the CSLC
+  trigger rule requires that flag. A padded audit flags edge scenes OPERA
+  never produces: with the tool's own default of 0.5°, 444 of the 1,119 SLCs
+  on the May to October 2026 list were such scenes. The RTC audit keeps the
+  tool's 0.5° (RTC production is not gated on the polygon); set it to 0 for
+  parity. Reports produced with 0.5 before this param existed include those
+  edge scenes and `extract_slcs.py` cannot tell them apart: re-audit the
+  range with `buffer_deg` 0 (the per-burst answers are cached, so mostly the
+  CMR listing runs again) and add `recheck_dates` for days OPS has
+  reprocessed since.
 - `scripts/extract_slcs.py [report]` turns the report into
   `slcs-to-reprocess-<product>.txt` (one SLC id per line, what OPS
   reprocesses from) plus a detail CSV, and lists what still needs a re-run.
