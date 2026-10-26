@@ -46,7 +46,7 @@ def should_include_rtc(rtc_id):
     elif sensor == 'S1C':
         return acquisition_ts >= DSWX_S1C_START_TIME
     elif sensor == 'S1D':
-        raise acquisition_ts >= DSWX_S1D_START_TIME
+        return acquisition_ts >= DSWX_S1D_START_TIME
     else:
         raise ValueError(f'Unknown sensor {sensor}')
 
