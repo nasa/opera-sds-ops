@@ -26,7 +26,7 @@ GRANULE_TIME_FMT = '%Y%m%dT%H%M%SZ'
 #       hist processing before the existing start dates
 DSWX_S1AB_START_TIME = datetime(2024, 8, 21, 0, 11, 56)
 DSWX_S1C_START_TIME = datetime(2025, 5, 20)
-
+DSWX_S1D_START_TIME = datetime(2026, 6, 13)
 
 @cache
 def rtc_to_id_tuple(rtc_id):
@@ -44,6 +44,8 @@ def should_include_rtc(rtc_id):
         return acquisition_ts >= DSWX_S1AB_START_TIME
     elif sensor == 'S1C':
         return acquisition_ts >= DSWX_S1C_START_TIME
+    elif sensor == 'S1D':
+        return acquisition_ts >= DSWX_S1D_START_TIME
     else:
         raise NotImplementedError(f'Do not know the DSWx-S1 processing start time for sensor {sensor} ({rtc_id})')
 
