@@ -399,8 +399,8 @@ products:
           in ~/.netrc (burst derivation). Per-burst "no product" answers are
           cached permanently, so a month audited again after OPS reprocessed it
           needs recheck_dates for those days. Turn the report into the SLC
-          reprocess list with scripts/extract_slcs.py (it leaves off scenes OPS
-          does not produce, by default S1D before 2026-06-13). Requires
+          reprocess list with scripts/extract_slcs.py (scenes sensed before their
+          platform's production start are already left out). Requires
           opera-sds-pcm PR #1541 or later in the clone (./setup.sh --update).
           buffer_deg keeps the tool's 0.5 deg padding here (RTC production is
           not gated on the polygon); set it to 0 for parity with the CSLC audit.
@@ -559,8 +559,8 @@ products:
           in ~/.netrc (burst derivation). Per-burst "no product" answers are
           cached permanently, so a month audited again after OPS reprocessed it
           needs recheck_dates for those days. Turn the report into the SLC
-          reprocess list with scripts/extract_slcs.py (it leaves off scenes OPS
-          does not produce, by default S1D before 2026-06-13). Requires
+          reprocess list with scripts/extract_slcs.py (scenes sensed before their
+          platform's production start are already left out). Requires
           opera-sds-pcm PR #1541 or later in the clone (./setup.sh --update).
           buffer_deg 0 keeps the list to scenes the PCM actually processes (it
           gates CSLC production on the unpadded polygon); reports made with the
