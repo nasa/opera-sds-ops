@@ -47,11 +47,13 @@ That would normally mean a full network clone per tool, even when several
 tools share a repo — expensive for something like `opera-sds-pcm` (~650MB),
 cloned by several tools in this registry. Instead, each unique repo URL is
 cloned over the network once into `repos/_cache/<repo-name>/`, and every
-tool's own working tree is a fast, local clone off that cache, checked out
-to its own branch and pointed back at the real remote — so it fetches,
-updates, and reports sync status exactly as if it had been cloned from
-there directly. `./setup.sh --update` refreshes the cache once and then
-each tool's clone as usual.
+tool's own working tree is a fast, local clone off that cache (hardlinked
+objects), pointed back at the real remote, with its pinned branch fetched
+from there. So any branch works, not just the cache's default one, a new
+clone starts at the remote's current tip, and it fetches, updates, and
+reports sync status exactly as if it had been cloned from there directly.
+`./setup.sh --update` refreshes the cache once and then each tool's clone
+as usual, and moves a clone to a new branch when its registry pin changed.
 
 ## Quick start
 

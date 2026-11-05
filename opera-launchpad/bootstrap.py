@@ -419,15 +419,24 @@ def ensure_git_oauth_token(targets: list[tuple[str, str, dict]]) -> None:
     console.print("[green]GIT_OAUTH_TOKEN set for this run.[/green]\n")
 
 
+def branch_refspec(branch: str) -> str:
+    """The fetch refspec of a tool clone, which only ever tracks the branch its registry entry pins."""
+    return f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
+
+
 def clone_or_update_repo(repo_url: str, branch: str, dest: Path, update: bool) -> Path:
     # Everything below goes through a shell, and the destination is derived
     # from wherever the operator checked opera-launchpad out — a directory
     # with a space in it would otherwise split into two arguments.
     q_branch, q_dest = shlex.quote(branch), shlex.quote(str(dest))
+    q_refspec = shlex.quote(branch_refspec(branch))
     if dest.exists():
         if update:
             console.print(f"[cyan]Updating[/cyan] {dest.relative_to(ROOT)} ({branch})")
-            run(f"git fetch origin {q_branch}", cwd=dest)
+            # The clone tracks only the branch it was made for, so a registry pin that changed would never reach
+            # origin/<branch>. Point it at the pinned branch first.
+            run(f"git config --replace-all remote.origin.fetch {q_refspec}", cwd=dest)
+            run("git fetch origin", cwd=dest)
             run(f"git checkout {q_branch}", cwd=dest)
             run(f"git reset --hard origin/{q_branch}", cwd=dest)
         else:
@@ -440,15 +449,29 @@ def clone_or_update_repo(repo_url: str, branch: str, dest: Path, update: bool) -
         f"[green]Cloning[/green] {repo_url} ({branch}) -> {dest.relative_to(ROOT)} [dim](from local cache)[/dim]"
     )
     dest.parent.mkdir(parents=True, exist_ok=True)
-    # --single-branch is safe now that a clone is never shared: this
-    # directory only ever holds `branch`, so it is never checked out
-    # from under another tool. Cloning from the local cache instead of the
-    # network is fast (same-filesystem hardlinks); the remote is then
-    # repointed at the real repo so future fetches/updates and
-    # `check_repo_sync` behave exactly as if it had been cloned from there
-    # directly.
-    run(f"git clone --branch {q_branch} --single-branch {q_cache} {q_dest}", cwd=dest.parent)
-    run(f"git remote set-url origin {shlex.quote(repo_url)}", cwd=dest)
+    # The objects come from the local cache (a same-filesystem clone hardlinks them, so it is fast), the branch from
+    # the real repo. `git clone --branch` off the cache can't do it: the cache is a plain clone, so only its default
+    # branch is a local branch there (any other is origin/<branch>), and even that is only as new as the cache's
+    # last --update. So: clone the cache without a checkout, repoint origin at the real repo, track only `branch`
+    # (a clone is never shared, so it only ever holds that one), fetch it (just the objects the cache lacks), check
+    # it out, and drop the cache's default branch that came along.
+    run(f"git clone --no-checkout --single-branch {q_cache} {q_dest}", cwd=dest.parent)
+    try:
+        cache_branch = subprocess.run(
+            ["git", "symbolic-ref", "--short", "HEAD"], cwd=dest, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        run(f"git remote set-url origin {shlex.quote(repo_url)}", cwd=dest)
+        run(f"git config --replace-all remote.origin.fetch {q_refspec}", cwd=dest)
+        run("git fetch origin", cwd=dest)
+        run(f"git checkout -B {q_branch} origin/{q_branch}", cwd=dest)
+        if cache_branch != branch:
+            q_cache_branch = shlex.quote(cache_branch)
+            run(f"git branch -D {q_cache_branch}", cwd=dest)
+            run(f"git update-ref -d refs/remotes/origin/{q_cache_branch}", cwd=dest)
+    except Exception:
+        # A half-made clone would read as "Already cloned" on the next run.
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
     return dest
 
 
@@ -461,8 +484,9 @@ def check_repo_sync(repo_dir: Path, branch: str) -> dict:
         return {"cloned": False, "up_to_date": False, "behind": 0, "ahead": 0, "error": None}
 
     try:
+        # An explicit refspec, so origin/<branch> is updated even when the clone was made for another branch.
         subprocess.run(
-            ["git", "fetch", "--quiet", "origin", branch],
+            ["git", "fetch", "--quiet", "origin", branch_refspec(branch)],
             cwd=repo_dir,
             check=True,
             capture_output=True,
