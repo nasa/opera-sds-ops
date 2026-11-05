@@ -399,11 +399,16 @@ products:
           in ~/.netrc (burst derivation). Per-burst "no product" answers are
           cached permanently, so a month audited again after OPS reprocessed it
           needs recheck_dates for those days. Turn the report into the SLC
-          reprocess list with scripts/extract_slcs.py (it leaves off scenes OPS
-          does not produce, by default S1D before 2026-06-13). Requires
+          reprocess list with scripts/extract_slcs.py (scenes sensed before their
+          platform's production start are already left out). Requires
           opera-sds-pcm PR #1541 or later in the clone (./setup.sh --update).
           buffer_deg keeps the tool's 0.5 deg padding here (RTC production is
           not gated on the polygon); set it to 0 for parity with the CSLC audit.
+          polarizations defaults to VV HH: each scene is checked in its own
+          co-polarization. Scenes sensed before a platform's production start
+          are counted as excluded, not missing. Exit 2 also covers SLCs whose
+          bursts could not be derived (report: underived_slcs); a re-run retries
+          them. Requires opera-sds-pcm PR #1564 or later in the clone.
         entrypoint: "venv/bin/python cmr_audit_burst_coverage.py"
         # --do-rtc/--do-cslc are value-taking ("true"/"false"), not store_true
         # flags, so a bare "--do-rtc" (no value) is a hard argparse error.
@@ -434,6 +439,19 @@ products:
             type: str
             default: "0.5"
             help: "Degrees to pad the region before the footprint test (tool default 0.5, kept here: RTC production is not gated on the polygon; 0 gives parity with the CSLC audit)"
+          # HH CSLCs are in production scope (2026-10-28 SDS/ADT tagup). The tool
+          # checks each scene only in the listed polarizations its mode holds
+          # (1SDV -> VV, 1SDH -> HH), so one run covers both.
+          - name: polarizations
+            flag: "--polarizations"
+            type: str_list
+            default: "VV HH"
+            help: "Space-separated. Each scene is checked in the ones its mode holds: VV for 1SDV/1SSV, HH for 1SDH/1SSH (RTC matches by burst, not polarization)"
+          - name: platform_start
+            flag: "--platform-start"
+            type: str_list
+            required: false
+            help: "Space-separated PLATFORM=YYYY-MM-DD overrides of the tool's production start dates (RTC-S1: S1C 2025-05-19, S1D 2026-04-17); PLATFORM=none drops one. Blank = the tool's dates"
           - name: do_cslc
             flag: "--do-cslc"
             type: choice
@@ -541,12 +559,20 @@ products:
           in ~/.netrc (burst derivation). Per-burst "no product" answers are
           cached permanently, so a month audited again after OPS reprocessed it
           needs recheck_dates for those days. Turn the report into the SLC
-          reprocess list with scripts/extract_slcs.py (it leaves off scenes OPS
-          does not produce, by default S1D before 2026-06-13). Requires
+          reprocess list with scripts/extract_slcs.py (scenes sensed before their
+          platform's production start are already left out). Requires
           opera-sds-pcm PR #1541 or later in the clone (./setup.sh --update).
           buffer_deg 0 keeps the list to scenes the PCM actually processes (it
           gates CSLC production on the unpadded polygon); reports made with the
           tool's own 0.5 include edge scenes OPERA never produces.
+          polarizations defaults to VV HH: each scene is checked in its own
+          co-polarization. Scenes sensed before a platform's production start
+          are counted as excluded, not missing. cbdb adds the DISP-S1 frames of
+          each burst to the report. Exit 2 also covers SLCs whose bursts could
+          not be derived (report: underived_slcs); a re-run retries them. Classify
+          the missing scenes from FWD state with tools/ops/cmr_audit/
+          classify_missing_slcs.py on the FWD mozart (this host has no route to
+          FWD). Requires opera-sds-pcm PR #1564 or later in the clone.
         entrypoint: "venv/bin/python cmr_audit_burst_coverage.py"
         # --do-rtc/--do-cslc are value-taking ("true"/"false"), not store_true
         # flags, so a bare "--do-cslc" (no value) is a hard argparse error.
@@ -580,6 +606,27 @@ products:
             type: str
             default: "0"
             help: "Degrees to pad the region before the footprint test. 0 matches how the PCM gates CSLC production (unpadded intersects_north_america); the tool's own 0.5 adds edge scenes OPERA never produces"
+          # HH CSLCs are in production scope (2026-10-28 SDS/ADT tagup). The tool
+          # checks each scene only in the listed polarizations its mode holds
+          # (1SDV -> VV, 1SDH -> HH), so one run covers both.
+          - name: polarizations
+            flag: "--polarizations"
+            type: str_list
+            default: "VV HH"
+            help: "Space-separated. Each scene is checked in the ones its mode holds: VV for 1SDV/1SSV, HH for 1SDH/1SSH"
+          - name: platform_start
+            flag: "--platform-start"
+            type: str_list
+            required: false
+            help: "Space-separated PLATFORM=YYYY-MM-DD overrides of the tool's production start dates (CSLC-S1: S1C 2025-05-20, S1D 2026-04-17); PLATFORM=none drops one. Blank = the tool's dates"
+          # Membership only: every burst in the report gets cbdb_frames, so the
+          # report lines up with PST's products tracker (scoped by the CBDB).
+          # The North America polygon stays the audit's scope.
+          - name: cbdb
+            flag: "--cbdb"
+            type: str
+            default: "settings"
+            help: "Consistent burst database to annotate bursts with: settings (the PCM's DISP_S1_BURST_DB_S3PATH, read with the host's IAM role), an s3:// URI or a local file. Blank = no annotation"
           - name: do_rtc
             flag: "--do-rtc"
             type: choice

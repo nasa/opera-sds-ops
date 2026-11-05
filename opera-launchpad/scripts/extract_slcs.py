@@ -12,17 +12,24 @@ wrote, in either place a report ends up:
 Reads the chunked JSONL the registry runs produce (one chunk_result line per
 day) or a whole-run JSON report. Writes, next to the report:
   slcs-to-reprocess-<product>.txt         one SLC id per line (CMR native id without -SLC), sorted
-  slcs-to-reprocess-<product>-detail.csv  slc,date,platform,missing_bursts,fully_missing
-                                          (fully_missing=no: some bursts of the scene do have a product)
+  slcs-to-reprocess-<product>-detail.csv  slc,date,platform,missing_bursts,fully_missing,cbdb_frames
+                                          (fully_missing=no: some bursts of the scene do have a product;
+                                           cbdb_frames: DISP-S1 frames of the missing bursts, when the
+                                           audit ran with cbdb)
   slcs-excluded-<product>.csv             the flagged SLCs left off the list, with the reason
-and prints what still needs a re-run (skipped chunks, unverified bursts).
+and prints what still needs a re-run (skipped chunks, unverified bursts, SLCs
+whose bursts could not be derived).
 
-Scenes OPS does not produce on purpose are left off the list. The audit flags
-them anyway, because it only knows the North America polygon, not production
-policy. By default that is every S1D scene sensed before 2026-06-13, the
-agreed start of S1D CSLC production (ADT/PST, 2026-10). --platform-start adds
-or replaces such a rule (e.g. --platform-start S1D=2026-06-13), and
---no-platform-start drops them all so every flagged SLC is listed.
+The audit itself leaves out scenes sensed before their platform's production
+start (opera-sds-pcm PR #1564: CSLC-S1 S1C 2025-05-20, S1D 2026-04-17; it
+counts them as excluded_before_start), so by default nothing more is left off
+here. --platform-start PLATFORM=YYYY-MM-DD adds such a rule for a report from
+an older audit or a different policy (e.g. --platform-start S1D=2026-06-13);
+--no-platform-start drops every rule.
+
+To find out why each listed scene is missing and what fixes it, run
+tools/ops/cmr_audit/classify_missing_slcs.py on the report from the FWD
+mozart (this host has no route to FWD).
 
 The txt-format report of older runs has no SLC ids and cannot be used.
 """
@@ -42,15 +49,15 @@ PATTERNS = [
 ]
 
 # Platform -> first sensing date OPS produces CSLCs for. Flagged scenes of that
-# platform sensed earlier are expected to be absent and are left off the list.
-# S1D: CSLC production starts at sensing 2026-06-13 (ADT/PST decision, 2026-10).
-DEFAULT_PLATFORM_START = {"S1D": "2026-06-13"}
+# platform sensed earlier are left off the list. Empty: the audit applies the
+# agreed production start dates (2026-10-28 SDS/ADT tagup) before it reports.
+DEFAULT_PLATFORM_START = {}
 
 
 def load_report(path):
     """Return (products, meta) with products = {product: {"missing": [...], "unverified": [...]}}."""
     products = defaultdict(lambda: {"missing": [], "unverified": [], "found_count": 0, "found_slcs": set()})
-    meta = {"failed_chunks": [], "unverified_days": set()}
+    meta = {"failed_chunks": [], "unverified_days": set(), "underived": {}}
     with open(path) as f:
         head = f.read(1)
         f.seek(0)
@@ -64,7 +71,7 @@ def load_report(path):
                     continue
                 kind = rec.get("_type")
                 if kind == "metadata":
-                    meta.update({k: rec[k] for k in ("start_datetime", "end_datetime") if k in rec})
+                    meta.update({k: rec[k] for k in ("start_datetime", "end_datetime", "production_start") if k in rec})
                 elif kind == "chunk_result":
                     p = products[rec["product_type"]]
                     p["missing"].extend(rec.get("missing", []))
@@ -73,8 +80,11 @@ def load_report(path):
                     p["found_slcs"].update(m.get("slc_native_id") for m in rec.get("found", []))
                 elif kind == "chunk_error":
                     meta["failed_chunks"].append(rec)
+                elif kind == "chunk_underived":
+                    meta["underived"].update((u["slc_native_id"], u) for u in rec.get("slcs", []))
                 elif kind == "summary":
                     meta["unverified_days"].update(rec.get("unverified_days", []))
+                    meta["underived"].update((u["slc_native_id"], u) for u in rec.get("underived_slcs", []))
                     meta["summary"] = rec
             if not products and "summary" not in meta:
                 raise ValueError("no chunk_result records")
@@ -84,6 +94,7 @@ def load_report(path):
                 raise ValueError("no 'products' key")
             meta.update(results.get("metadata", {}))
             meta["unverified_days"] = set(meta.get("unverified_days") or [])
+            meta["underived"] = {u["slc_native_id"]: u for u in meta.pop("underived_slcs", None) or []}
             for product, cov in results["products"].items():
                 products[product]["missing"] = cov.get("missing", [])
                 products[product]["unverified"] = cov.get("unverified", [])
@@ -167,17 +178,25 @@ def main(argv=None):
                 excluded.append(row + (f"{row[2]} sensed before {start}",))
             else:
                 rows.append(row)
+        frames_by_slc = defaultdict(set)
+        for m in cov["missing"]:
+            frames_by_slc[m["slc_native_id"].replace("-SLC", "")].update(m.get("cbdb_frames") or [])
         stem = os.path.join(os.path.dirname(os.path.abspath(path)), f"slcs-to-reprocess-{product.lower()}")
         with open(stem + ".txt", "w") as f:
             f.write("\n".join(r[0] for r in rows) + ("\n" if rows else ""))
         with open(stem + "-detail.csv", "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["slc", "date", "platform", "missing_bursts", "fully_missing"])
+            w.writerow(["slc", "date", "platform", "missing_bursts", "fully_missing", "cbdb_frames"])
             for sid, day, plat, n in rows:
-                w.writerow([sid, day, plat, n, "no" if sid + "-SLC" in found_slcs else "yes"])
+                w.writerow([sid, day, plat, n, "no" if sid + "-SLC" in found_slcs else "yes",
+                            "|".join(map(str, sorted(frames_by_slc.get(sid, ()))))])
         plats = Counter(r[2] for r in rows)
         print(f"{product}: found {cov['found_count']:,} bursts, missing {len(cov['missing']):,} bursts in "
               f"{len(by_slc)} SLCs; listed {len(rows)} SLCs {dict(plats)} -> {stem}.txt")
+        audit_counts = (meta.get("summary") or {}).get("products", {}).get(product) or (meta.get("products") or {}).get(product) or {}
+        if audit_counts.get("excluded_before_start_count"):
+            print(f"  the audit left out {audit_counts['excluded_before_start_count']:,} bursts sensed before their "
+                  f"platform's production start ({meta.get('production_start', {}).get(product) or 'tool defaults'})")
         ex_path = os.path.join(os.path.dirname(stem), f"slcs-excluded-{product.lower()}.csv")
         if not excluded and os.path.exists(ex_path):
             os.remove(ex_path)  # left by an earlier run with other rules; the files always describe this run
@@ -199,6 +218,10 @@ def main(argv=None):
         print(f"{len(days)} day(s) SKIPPED (no complete SLC listing from CMR): {','.join(days)}: re-run with recheck_dates")
     if meta.get("unverified_days"):
         print(f"days with unverified bursts: {','.join(sorted(meta['unverified_days']))}")
+    if meta.get("underived"):
+        days = sorted({u["acquisition_time"][:10] for u in meta["underived"].values()})
+        print(f"{len(meta['underived'])} SLC(s) UNDERIVED (no burst list, so not checked) on {','.join(days)}: "
+              "not in the list; re-run those days (failed derivations are not cached)")
 
 
 if __name__ == "__main__":
