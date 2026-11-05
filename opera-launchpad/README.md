@@ -351,6 +351,13 @@ is printed next to the exit code.
   range with `buffer_deg` 0 (the per-burst answers are cached, so mostly the
   CMR listing runs again) and add `recheck_dates` for days OPS has
   reprocessed since.
+- `polarization` picks which scenes are audited, one value per run: `VV`
+  (the default) covers the 1SDV/1SSV scenes, `HH` the 1SDH/1SSH ones. HH
+  CSLCs are in production scope, so full coverage of a range is a VV run plus
+  an HH run, one after the other, each with its own `output` name. Do not
+  hand the tool `--polarizations VV HH` directly: it expects every burst of
+  every listed scene in both polarizations and reads only the first one's
+  annotations, so each scene's other polarization is reported missing.
 - `scripts/extract_slcs.py [report]` turns the report into
   `slcs-to-reprocess-<product>.txt` (one SLC id per line, what OPS
   reprocesses from) plus a detail CSV, and lists what still needs a re-run.

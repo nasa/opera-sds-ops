@@ -404,6 +404,8 @@ products:
           opera-sds-pcm PR #1541 or later in the clone (./setup.sh --update).
           buffer_deg keeps the tool's 0.5 deg padding here (RTC production is
           not gated on the polygon); set it to 0 for parity with the CSLC audit.
+          polarization takes one value per run: VV audits the 1SDV/1SSV scenes,
+          HH the 1SDH/1SSH ones, so full coverage is a VV run plus an HH run.
         entrypoint: "venv/bin/python cmr_audit_burst_coverage.py"
         # --do-rtc/--do-cslc are value-taking ("true"/"false"), not store_true
         # flags, so a bare "--do-rtc" (no value) is a hard argparse error.
@@ -434,6 +436,17 @@ products:
             type: str
             default: "0.5"
             help: "Degrees to pad the region before the footprint test (tool default 0.5, kept here: RTC production is not gated on the polygon; 0 gives parity with the CSLC audit)"
+          # One polarization per run. The tool accepts several, but it expects
+          # every burst of every listed scene in each of them and reads the
+          # annotations of the first one only, so "VV HH" in one run reports
+          # the other polarization of every scene as missing. HH CSLCs are in
+          # production scope (2026-10-28 tagup): audit HH as its own run.
+          - name: polarization
+            flag: "--polarizations"
+            type: choice
+            choices: ["VV", "HH"]
+            default: "VV"
+            help: "Co-pol of the scenes to audit, one per run: VV covers the 1SDV/1SSV scenes, HH the 1SDH/1SSH ones (RTC matches by burst, not polarization). Run VV and HH separately for full coverage"
           - name: do_cslc
             flag: "--do-cslc"
             type: choice
@@ -547,6 +560,8 @@ products:
           buffer_deg 0 keeps the list to scenes the PCM actually processes (it
           gates CSLC production on the unpadded polygon); reports made with the
           tool's own 0.5 include edge scenes OPERA never produces.
+          polarization takes one value per run: VV audits the 1SDV/1SSV scenes,
+          HH the 1SDH/1SSH ones, so full coverage is a VV run plus an HH run.
         entrypoint: "venv/bin/python cmr_audit_burst_coverage.py"
         # --do-rtc/--do-cslc are value-taking ("true"/"false"), not store_true
         # flags, so a bare "--do-cslc" (no value) is a hard argparse error.
@@ -580,6 +595,17 @@ products:
             type: str
             default: "0"
             help: "Degrees to pad the region before the footprint test. 0 matches how the PCM gates CSLC production (unpadded intersects_north_america); the tool's own 0.5 adds edge scenes OPERA never produces"
+          # One polarization per run. The tool accepts several, but it expects
+          # every burst of every listed scene in each of them and reads the
+          # annotations of the first one only, so "VV HH" in one run reports
+          # the other polarization of every scene as missing. HH CSLCs are in
+          # production scope (2026-10-28 tagup): audit HH as its own run.
+          - name: polarization
+            flag: "--polarizations"
+            type: choice
+            choices: ["VV", "HH"]
+            default: "VV"
+            help: "Co-pol of the scenes to audit, one per run: VV covers the 1SDV/1SSV scenes, HH the 1SDH/1SSH ones. Run VV and HH separately for full coverage"
           - name: do_rtc
             flag: "--do-rtc"
             type: choice

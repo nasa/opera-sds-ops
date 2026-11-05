@@ -79,6 +79,32 @@ def test_audit_entries_expose_the_geometry_buffer_right_after_the_geojson():
         assert "buffer_deg" in audit["notes"]
 
 
+
+def test_audit_entries_take_one_polarization_per_run():
+    # The tool expects every burst in every requested polarization and reads the first one's
+    # annotations only, so a mixed "VV HH" run reports each scene's other polarization missing.
+    # A single-value choice keeps that combination out of the wizard; HH is its own run.
+    registry = yaml.safe_load((HERE / "registry.yaml").read_text())
+    for product in ("CSLC_S1", "RTC_S1"):
+        audit = registry["products"][product]["tools"]["audit"]
+        params = audit["params"]
+        assert params[4]["name"] == "polarization"
+        assert params[4]["flag"] == "--polarizations" and params[4]["type"] == "choice"
+        assert params[4]["choices"] == ["VV", "HH"] and params[4]["default"] == "VV"
+        assert "polarization" in audit["notes"]
+
+
+def test_a_choice_param_passes_one_value_to_a_list_flag():
+    params = [{"name": "polarization", "flag": "--polarizations", "type": "choice",
+               "choices": ["VV", "HH"], "default": "VV"}]
+    prompt = MagicMock()
+    prompt.unsafe_ask.return_value = "HH"
+    with patch.object(cli.questionary, "select", return_value=prompt) as select:
+        flags, values = cli.build_flags(params)
+    assert select.call_args.kwargs["choices"] == ["VV", "HH"] and select.call_args.kwargs["default"] == "VV"
+    assert flags == ["--polarizations", "HH"]
+    assert values == {"polarization": "HH"}
+
 def test_a_str_param_prompts_with_its_default_and_passes_it_through():
     # The registry's default (not the tool's) is what the operator sees and what the flag carries
     # when they accept it: `--buffer-deg 0` overrides the tool's own 0.5.
