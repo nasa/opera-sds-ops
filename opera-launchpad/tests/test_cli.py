@@ -80,30 +80,38 @@ def test_audit_entries_expose_the_geometry_buffer_right_after_the_geojson():
 
 
 
-def test_audit_entries_take_one_polarization_per_run():
-    # The tool expects every burst in every requested polarization and reads the first one's
-    # annotations only, so a mixed "VV HH" run reports each scene's other polarization missing.
-    # A single-value choice keeps that combination out of the wizard; HH is its own run.
+def test_audit_entries_audit_vv_and_hh_with_the_production_start_dates():
+    # HH CSLCs are in production scope; the tool checks each scene only in its own co-polarization, so
+    # one run covers both. platform_start is optional: blank leaves the tool's agreed dates in force.
     registry = yaml.safe_load((HERE / "registry.yaml").read_text())
     for product in ("CSLC_S1", "RTC_S1"):
         audit = registry["products"][product]["tools"]["audit"]
-        params = audit["params"]
-        assert params[4]["name"] == "polarization"
-        assert params[4]["flag"] == "--polarizations" and params[4]["type"] == "choice"
-        assert params[4]["choices"] == ["VV", "HH"] and params[4]["default"] == "VV"
-        assert "polarization" in audit["notes"]
+        names = {p["name"]: p for p in audit["params"]}
+        assert audit["params"][4]["name"] == "polarizations"
+        assert names["polarizations"]["flag"] == "--polarizations" and names["polarizations"]["type"] == "str_list"
+        assert names["polarizations"]["default"] == "VV HH"
+        assert names["platform_start"]["flag"] == "--platform-start" and names["platform_start"]["type"] == "str_list"
+        assert not names["platform_start"].get("required") and "default" not in names["platform_start"]
+        assert "PR #1564" in audit["notes"]
+    cslc = {p["name"]: p for p in registry["products"]["CSLC_S1"]["tools"]["audit"]["params"]}
+    assert cslc["cbdb"]["flag"] == "--cbdb" and cslc["cbdb"]["default"] == "settings"
+    assert "cbdb" not in {p["name"] for p in registry["products"]["RTC_S1"]["tools"]["audit"]["params"]}
 
 
-def test_a_choice_param_passes_one_value_to_a_list_flag():
-    params = [{"name": "polarization", "flag": "--polarizations", "type": "choice",
-               "choices": ["VV", "HH"], "default": "VV"}]
-    prompt = MagicMock()
-    prompt.unsafe_ask.return_value = "HH"
-    with patch.object(cli.questionary, "select", return_value=prompt) as select:
+def test_a_str_list_param_splits_into_separate_arguments():
+    params = [{"name": "polarizations", "flag": "--polarizations", "type": "str_list", "default": "VV HH"},
+              {"name": "platform_start", "flag": "--platform-start", "type": "str_list", "required": False}]
+    answers = iter(["VV HH", ""])
+
+    def text(label, default="", **kwargs):
+        prompt = MagicMock()
+        prompt.unsafe_ask.return_value = next(answers)
+        return prompt
+
+    with patch.object(cli.questionary, "text", side_effect=text):
         flags, values = cli.build_flags(params)
-    assert select.call_args.kwargs["choices"] == ["VV", "HH"] and select.call_args.kwargs["default"] == "VV"
-    assert flags == ["--polarizations", "HH"]
-    assert values == {"polarization": "HH"}
+    assert flags == ["--polarizations", "VV", "HH"]       # blank platform_start passes nothing
+    assert values == {"polarizations": "VV HH"}
 
 def test_a_str_param_prompts_with_its_default_and_passes_it_through():
     # The registry's default (not the tool's) is what the operator sees and what the flag carries
@@ -143,7 +151,8 @@ def test_extract_slcs_builds_the_list_from_a_chunked_report(tmp_path):
         "S1A_IW_SLC__1SDV_20260623T133605_20260623T133632_065097_083497_2D92"]
     assert "UNVERIFIED" in out.stdout and "2026-06-23" in out.stdout
     detail = (tmp_path / "slcs-to-reprocess-cslc-s1-detail.csv").read_text().splitlines()
-    assert detail[1].startswith("S1A_IW_SLC__1SDV_20260623T133605") and detail[1].endswith(",S1A,1,yes")
+    assert detail[0] == "slc,date,platform,missing_bursts,fully_missing,cbdb_frames"
+    assert detail[1].startswith("S1A_IW_SLC__1SDV_20260623T133605") and detail[1].endswith(",S1A,1,yes,")
 
 
 def _audit_report(tmp_path, missing):
@@ -176,15 +185,46 @@ def _extract(report, *flags):
     return out.stdout, listed, excluded
 
 
-def test_extract_slcs_leaves_s1d_before_the_agreed_start_off_the_list(tmp_path):
+def test_extract_slcs_lists_every_flagged_scene_by_default(tmp_path):
+    # The audit already leaves out scenes before their platform's production start (S1D from 2026-04-17),
+    # so S1D scenes from June are owed and listed; nothing else is dropped here.
     report = _audit_report(tmp_path, [(S1D_EARLY, "S1D", "2026-06-05T23:56:56+00:00"),
                                       (S1D_LATE, "S1D", "2026-06-20T23:56:56+00:00"),
                                       (S1A_EARLY, "S1A", "2026-06-05T01:12:55+00:00")])
     stdout, listed, excluded = _extract(report)
-    assert listed == sorted([S1A_EARLY[:-4], S1D_LATE[:-4]])          # the early S1A stays, only S1D has a start date
-    assert len(excluded) == 1 and excluded[0].startswith(S1D_EARLY[:-4]) and excluded[0].endswith("S1D sensed before 2026-06-13")
+    assert listed == sorted([S1A_EARLY[:-4], S1D_EARLY[:-4], S1D_LATE[:-4]]) and excluded == []
+    assert "in 3 SLCs; listed 3 SLCs" in stdout
+
+
+def test_extract_slcs_platform_start_still_applies_a_rule_for_older_reports(tmp_path):
+    report = _audit_report(tmp_path, [(S1D_EARLY, "S1D", "2026-06-05T23:56:56+00:00"),
+                                      (S1D_LATE, "S1D", "2026-06-20T23:56:56+00:00")])
+    stdout, listed, excluded = _extract(report, "--platform-start", "S1D=2026-06-13")
+    assert listed == [S1D_LATE[:-4]]
+    assert len(excluded) == 1 and excluded[0].endswith("S1D sensed before 2026-06-13")
     assert "1 SLCs left off the list (S1D sensed before 2026-06-13: 1)" in stdout
-    assert "in 3 SLCs; listed 2 SLCs" in stdout
+
+
+def test_extract_slcs_reports_underived_scenes_and_the_audits_own_exclusions(tmp_path):
+    report = _audit_report(tmp_path, [(S1D_LATE, "S1D", "2026-06-20T23:56:56+00:00")])
+    lines = [json.loads(l) for l in report.read_text().splitlines()]
+    lines[0]["production_start"] = {"CSLC-S1": {"S1C": "2025-05-20", "S1D": "2026-04-17"}}
+    chunk = next(l for l in lines if l["_type"] == "chunk_result")
+    chunk["missing"][0]["cbdb_frames"] = [10572, 10573]
+    underived = {"slc_native_id": S1A_EARLY, "platform": "S1A", "acquisition_time": "2026-06-05T01:12:55+00:00",
+                 "reason": "no EDL token"}
+    lines.insert(2, {"_type": "chunk_underived", "chunk_start": "2026-06-01T00:00:00+00:00",
+                     "chunk_end": "2026-07-01T00:00:00+00:00", "slcs": [underived]})
+    summary = next(l for l in lines if l["_type"] == "summary")
+    summary.update(underived_slcs=[underived], products={"CSLC-S1": {"excluded_before_start_count": 42}})
+    report.write_text("\n".join(json.dumps(l) for l in lines) + "\n")
+
+    stdout, listed, _ = _extract(report)
+    assert listed == [S1D_LATE[:-4]]
+    assert "1 SLC(s) UNDERIVED" in stdout and "2026-06-05" in stdout
+    assert "the audit left out 42 bursts" in stdout and "S1D" in stdout
+    detail = (report.parent / "slcs-to-reprocess-cslc-s1-detail.csv").read_text().splitlines()
+    assert detail[1].endswith(",yes,10572|10573")
 
 
 def test_extract_slcs_platform_start_can_be_moved_or_switched_off(tmp_path):
@@ -215,5 +255,5 @@ def test_extract_slcs_marks_a_scene_with_some_products_as_not_fully_missing(tmp_
     chunk["found_count"] = 1
     report.write_text("\n".join(json.dumps(l) for l in lines) + "\n")
     _extract(report)
-    detail = {r.split(",")[0]: r.split(",")[-1] for r in (report.parent / "slcs-to-reprocess-cslc-s1-detail.csv").read_text().splitlines()[1:]}
+    detail = {r.split(",")[0]: r.split(",")[4] for r in (report.parent / "slcs-to-reprocess-cslc-s1-detail.csv").read_text().splitlines()[1:]}
     assert detail == {S1D_LATE[:-4]: "no", S1A_EARLY[:-4]: "yes"}
