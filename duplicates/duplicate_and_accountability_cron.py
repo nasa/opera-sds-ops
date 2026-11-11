@@ -446,7 +446,9 @@ def main(args):
         logger.info(f'Invoking duplicate search script for product {product}')
         procs.append(subprocess.Popen(
             [sys.executable, 'duplicate_check.py', product, '-o', report_path, '--venue', args.venue,
-             '--start-date', start_date, '--end-date', end_date, '--facet', 'dates'],
+             '--start-date', start_date, '--end-date', end_date, '--facet', 'dates',
+             # Keep the name-based check here until the input-based DSWX_S1 check is adopted for the cron
+             '--name-only'],
             stdout=subprocess.PIPE
         ))
 
