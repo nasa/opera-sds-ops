@@ -5,7 +5,10 @@ import requests
 from datetime import datetime
 import backoff
 import logging
+import sys
 from itertools import chain
+
+import dswx_s1_inputs as dsi
 
 logging.basicConfig(
     level=logging.INFO,
@@ -93,6 +96,9 @@ PRODUCTS = {
         'AGG_TS_GROUP': 'acquisition_ts',
         'AGG_TS_FORMAT': DEFAULT_GRANULE_TIME_FMT,
         'CREATE_TS_GROUP': 'creation_ts',
+        # Duplicates are detected from RTC-S1 inputs (dswx_s1_inputs.py) unless --name-only; the
+        # acquisition timestamp in the name shifts when the product is rebuilt from different inputs.
+        'STRATEGY': 'dswx_s1_inputs',
     },
     'DISP_S1': {
         'CCID': {
@@ -243,6 +249,12 @@ def main(args):
 
     ccid = PRODUCTS[args.product]['CCID'][args.venue]
     cmr_url = CMR_URLS[args.venue]
+
+    if PRODUCTS[args.product].get('STRATEGY') == 'dswx_s1_inputs' and not args.name_only:
+        logger.info(f'Checking {args.product}({ccid}) from {args.venue} by RTC-S1 inputs')
+        dsi.check(args, ccid)
+        logger.info(f'Done in {datetime.now() - start_time}')
+        return
 
     pattern = PRODUCTS[args.product]['PATTERN']
     unique_groups = PRODUCTS[args.product]['UNIQUE_GROUPS']
@@ -450,9 +462,82 @@ def get_parser():
         help=argparse.SUPPRESS
     )
 
+    # Only used by products with an input-based strategy (DSWX_S1); ignored otherwise
+    inputs = parser.add_argument_group('DSWX_S1 input-based detection')
+
+    inputs.add_argument(
+        '--name-only',
+        action='store_true',
+        help='Use the name-based check (tile, acquisition timestamp, sensor) instead of RTC-S1 inputs.'
+    )
+
+    inputs.add_argument(
+        '--criteria',
+        choices=dsi.CRITERIA,
+        default=dsi.CRITERIA_CORRECTED,
+        help=f'`{dsi.CRITERIA_CORRECTED}`: same tile and pass, intersecting RTC burst sets. '
+             f'`{dsi.CRITERIA_STRICT}`: exact temporal extent and equal burst sets. '
+             f'Default: {dsi.CRITERIA_CORRECTED}'
+    )
+
+    inputs.add_argument(
+        '--keeper',
+        choices=dsi.KEEPER_RULES,
+        default=dsi.KEEPER_LATEST,
+        help=f'Which member of a duplicate set to keep: `{dsi.KEEPER_LATEST}` production time, or '
+             f'`{dsi.KEEPER_MOST_BURSTS}` RTC bursts (then latest). Either way, only members whose bursts '
+             f'the keeper covers are listed for removal. Default: {dsi.KEEPER_LATEST}'
+    )
+
+    inputs.add_argument(
+        '--pass-tolerance-seconds',
+        type=int,
+        default=dsi.DEFAULT_PASS_TOLERANCE_SECONDS,
+        help=f'Coverage starts chained within this many seconds are one acquisition pass (corrected '
+             f'criteria only). Default: {dsi.DEFAULT_PASS_TOLERANCE_SECONDS}'
+    )
+
+    inputs.add_argument(
+        '--generated-after',
+        type=_datetime_arg,
+        default=None,
+        help='Only list duplicates PRODUCED at or after this time for removal. Default: no bound'
+    )
+
+    inputs.add_argument(
+        '--generated-before',
+        type=_datetime_arg,
+        default=None,
+        help='Only list duplicates PRODUCED before this time for removal. Default: no bound'
+    )
+
+    inputs.add_argument(
+        '-l', '--duplicate-list',
+        default='duplicate_removal_list.txt',
+        help='Flat list of granule IDs to remove. Companion <name>.not_covered.txt lists duplicates kept '
+             'because their keeper lacks some of their bursts. Default: duplicate_removal_list.txt'
+    )
+
+    inputs.add_argument(
+        '--cache-dir',
+        default=dsi.DEFAULT_CACHE_DIR,
+        help=f'Inventory and RTC signature cache, reused across runs. Default: {dsi.DEFAULT_CACHE_DIR}'
+    )
+
+    inputs.add_argument(
+        '--reuse-inventory',
+        action='store_true',
+        help='Reuse a complete cached inventory for the same coverage window instead of re-sweeping CMR.'
+    )
+
     return parser
 
 
 if __name__ == '__main__':
     parser = get_parser()
-    main(parser.parse_args())
+
+    try:
+        main(parser.parse_args())
+    except RuntimeError as err:
+        logger.error(str(err))
+        sys.exit(1)
