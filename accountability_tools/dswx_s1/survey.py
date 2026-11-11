@@ -101,7 +101,37 @@ def reduce_input_rtc_list(input_files):
     ))
 
 
-def survey(ccid, pattern, start, end, uniq_groups, fields, func):
+def rtc_burst_set(input_rtcs):
+    """Unique (burst ID, acquisition time, sensor) inputs, ignoring the RTC production time."""
+    burst_set = set()
+
+    for rtc_id in input_rtcs:
+        match = RTC_PATTERN.match(rtc_id)
+        burst_set.add((match['burst_id'], match['acquisition_ts'], match['sensor']) if match else rtc_id)
+
+    return frozenset(burst_set)
+
+
+def dswx_uniqueness_key(group_dict, granule_dict):
+    """Two DSWx-S1 products are duplicates if they share an MGRS tile, sensor, exact temporal extent and
+    the same set of unique RTC bursts. This covers products whose RTC inputs are byte-identical (the same
+    job ran again) and products built from different RTC production runs of the same bursts (upstream RTC
+    reprocessing, or reprocessed RTCs listed alongside the originals). The acquisition time embedded in the
+    granule ID can shift between such products, so it can't be used to identify them.
+
+    Products built from more or fewer bursts (partial vs. more complete coverage) are deliberately kept
+    distinct.
+    """
+    return (group_dict['tile_id'], group_dict['sensor'], granule_dict['time_start'], granule_dict['time_end'],
+            rtc_burst_set(granule_dict['input_rtcs']))
+
+
+def survey(ccid, pattern, start, end, uniq_groups, fields, func, key_func=None, drop_fields=()):
+    """Survey a collection, keeping only the latest-produced product per uniqueness key.
+
+    The key is the tuple of `uniq_groups` from the granule ID unless `key_func(group_dict, granule_dict)` is
+    given. `drop_fields` are removed from the output after grouping.
+    """
     grouping_products_map = {}
 
     granules = query_cmr(CMR_URL, ccid, start, end, func)
@@ -118,17 +148,27 @@ def survey(ccid, pattern, start, end, uniq_groups, fields, func):
 
         group_dict = match.groupdict()
 
-        id_tuple = tuple([group_dict[grp] for grp in uniq_groups])
+        if key_func is not None:
+            id_tuple = key_func(group_dict, granule_dict)
+        else:
+            id_tuple = tuple([group_dict[grp] for grp in uniq_groups])
         granule_dict['_timestamp'] = group_dict['creation_ts']
 
         if id_tuple not in grouping_products_map:
             grouping_products_map[id_tuple] = []
         grouping_products_map[id_tuple].append(granule_dict)
 
+    logger.info(f'Kept {len(grouping_products_map):,} unique products, dropping '
+                f'{len(granules) - len(grouping_products_map):,} duplicates')
+
     for id_tuple in grouping_products_map:
-        grouping_products_map[id_tuple].sort(key=lambda x: x['_timestamp'], reverse=True)
+        # Latest production time wins, granule ID breaks ties so the choice is stable
+        grouping_products_map[id_tuple].sort(key=lambda x: (x['_timestamp'], x[fields[0]]), reverse=True)
         grouping_products_map[id_tuple] = grouping_products_map[id_tuple][0]
         del grouping_products_map[id_tuple]['_timestamp']
+
+        for field in drop_fields:
+            del grouping_products_map[id_tuple][field]
 
     return list(grouping_products_map.values())
 
@@ -185,13 +225,17 @@ dswx_products = survey(
     DSWX_PATTERN,
     args.start_date, args.end_date,
     ('tile_id', 'acquisition_ts', 'sensor'),
-    ('id', 'input_rtcs'),
+    ('id', 'input_rtcs', 'time_start', 'time_end'),
     lambda x: [
         (
             i['umm']['GranuleUR'],
-            reduce_input_rtc_list(i['umm']['InputGranules'])
+            reduce_input_rtc_list(i['umm']['InputGranules']),
+            i['umm']['TemporalExtent']['RangeDateTime']['BeginningDateTime'],
+            i['umm']['TemporalExtent']['RangeDateTime']['EndingDateTime'],
         ) for i in x
-    ]
+    ],
+    key_func=dswx_uniqueness_key,
+    drop_fields=('time_start', 'time_end'),
 )
 
 logger.info('DSWx-S1 survey finished. Writing to "dswx_products.json"')
