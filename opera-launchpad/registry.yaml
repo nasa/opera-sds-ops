@@ -46,17 +46,20 @@ products:
         verify: "venv/bin/python duplicate_check.py --help"
         entrypoint: "venv/bin/python duplicate_check.py"
         fixed_args: ["DSWX_S1"]
+        # Duplicates are detected from RTC-S1 inputs (duplicates/dswx_s1_inputs.py). The RTC signature
+        # cache (duplicates/dswx_s1_cache/) persists in the tool's working tree across runs.
+        produces_glob: ["*.sets.jsonl", "*.not_covered.txt"]
         params:
           - name: start_date
             flag: "-s"
             type: datetime_iso
             required: false
-            help: "ISO datetime after which data is retrieved, e.g. 2026-01-01T00:00:00Z"
+            help: "Data coverage after this ISO datetime, e.g. 2026-01-01T00:00:00Z"
           - name: end_date
             flag: "-e"
             type: datetime_iso
             required: false
-            help: "ISO datetime before which data is retrieved, e.g. 2026-01-21T00:00:00Z"
+            help: "Data coverage before this ISO datetime, e.g. 2026-01-21T00:00:00Z"
           - name: venue
             flag: "--venue"
             type: choice
@@ -67,16 +70,54 @@ products:
             type: path
             default: "duplicate_report.json"
             is_output: true
+          - name: duplicate_list
+            flag: "-l"
+            type: path
+            default: "duplicate_removal_list.txt"
+            is_output: true
+            help: "Granule IDs to remove: duplicates whose RTC bursts the keeper covers"
           - name: facet
             flag: "--facet"
             type: choice
             choices: ["months", "dates", "both"]
             default: "months"
-          - name: use_revision
-            flag: "--use-revision"
+          - name: criteria
+            flag: "--criteria"
+            type: choice
+            choices: ["corrected", "strict"]
+            default: "corrected"
+            help: "corrected: same tile and pass, overlapping RTC bursts. strict: exact extent, equal bursts"
+          - name: keeper
+            flag: "--keeper"
+            type: choice
+            choices: ["latest", "most-bursts"]
+            default: "latest"
+            help: "Keep the latest-produced copy, or the one with most RTC bursts"
+          - name: pass_tolerance_seconds
+            flag: "--pass-tolerance-seconds"
+            type: int
+            default: 60
+            help: "Coverage starts chained within this many seconds are one pass (corrected only)"
+          - name: generated_after
+            flag: "--generated-after"
+            type: datetime_iso
+            required: false
+            help: "Only list duplicates produced at or after this ISO datetime for removal"
+          - name: generated_before
+            flag: "--generated-before"
+            type: datetime_iso
+            required: false
+            help: "Only list duplicates produced before this ISO datetime for removal"
+          - name: reuse_inventory
+            flag: "--reuse-inventory"
             type: bool
             default: false
-            help: "Use revision date range instead of temporal range"
+            help: "Reuse a complete cached CMR listing for the same coverage window"
+          - name: name_only
+            flag: "--name-only"
+            type: bool
+            default: false
+            help: "Use the old name-based check (tile, acquisition timestamp, sensor) instead"
 
       accountability:
         kind: pipeline
