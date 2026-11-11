@@ -47,11 +47,13 @@ That would normally mean a full network clone per tool, even when several
 tools share a repo — expensive for something like `opera-sds-pcm` (~650MB),
 cloned by several tools in this registry. Instead, each unique repo URL is
 cloned over the network once into `repos/_cache/<repo-name>/`, and every
-tool's own working tree is a fast, local clone off that cache, checked out
-to its own branch and pointed back at the real remote — so it fetches,
-updates, and reports sync status exactly as if it had been cloned from
-there directly. `./setup.sh --update` refreshes the cache once and then
-each tool's clone as usual.
+tool's own working tree is a fast, local clone off that cache (hardlinked
+objects), pointed back at the real remote, with its pinned branch fetched
+from there. So any branch works, not just the cache's default one, a new
+clone starts at the remote's current tip, and it fetches, updates, and
+reports sync status exactly as if it had been cloned from there directly.
+`./setup.sh --update` refreshes the cache once and then each tool's clone
+as usual, and moves a clone to a new branch when its registry pin changed.
 
 ## Quick start
 
@@ -351,18 +353,41 @@ is printed next to the exit code.
   range with `buffer_deg` 0 (the per-burst answers are cached, so mostly the
   CMR listing runs again) and add `recheck_dates` for days OPS has
   reprocessed since.
+- `polarizations` defaults to `VV HH`: HH CSLCs are in production scope, and
+  the tool checks each scene only in the listed polarizations its mode holds
+  (VV for 1SDV/1SSV scenes, HH for 1SDH/1SSH), so one run covers both.
+  Needs opera-sds-pcm PR #1564 or later in the tool clone
+  (`./setup.sh --update --product CSLC_S1 --tool audit`); an older clone
+  expects every scene in both polarizations and reports the other one missing.
+- The tool leaves out scenes sensed before their platform's production start
+  (CSLC-S1: S1C 2025-05-20, S1D 2026-04-17; RTC-S1: S1C 2025-05-19, S1D
+  2026-04-17) and counts them as `excluded_before_start`. `platform_start`
+  overrides them (`S1D=2026-06-13`, `S1D=none`); leave it blank for the agreed
+  dates.
+- `cbdb` (CSLC only, default `settings`: the DISP-S1 consistent burst database
+  the PCM is configured with, read with the host's IAM role) adds
+  `cbdb_frames` to every burst of the report, so it can be lined up with PST's
+  products tracker, which scopes by the CBDB. It does not change what is
+  expected; the North America polygon stays the scope.
+- Exit 2 also covers SLCs whose bursts could not be derived (EDL token or
+  annotation download failed): the report lists them as `underived_slcs`, and
+  a re-run of those days retries them.
+- To learn why each missing scene is missing and what fixes it, copy the
+  report to the FWD mozart and run `tools/ops/cmr_audit/classify_missing_slcs.py`
+  there as hysdsops: this host has no route to FWD. It writes one row per scene
+  with its class and fix and one SLC list per class.
 - `scripts/extract_slcs.py [report]` turns the report into
   `slcs-to-reprocess-<product>.txt` (one SLC id per line, what OPS
-  reprocesses from) plus a detail CSV, and lists what still needs a re-run.
-  Scenes OPS does not produce on purpose are left off the list and written to
-  `slcs-excluded-<product>.csv` with the reason: by default S1D scenes sensed
-  before 2026-06-13, the agreed start of S1D CSLC production. The audit flags
-  them regardless, because it only knows the polygon. `--platform-start
-  PLATFORM=YYYY-MM-DD` moves or adds such a rule, `--no-platform-start` lists
-  every flagged SLC.
-- Needs opera-sds-pcm PR #1541 or later in the clone (it verifies every CMR
-  listing against CMR's own count and refuses to cache a short one;
-  `./setup.sh --update` after a merge).
+  reprocesses from) plus a detail CSV (with the scene's CBDB frames when the
+  audit ran with `cbdb`), and lists what still needs a re-run, including
+  underived SLCs. The audit already leaves out scenes before their platform's
+  production start, so by default the script drops nothing more;
+  `--platform-start PLATFORM=YYYY-MM-DD` adds a rule (for a report from an
+  older audit, e.g. `S1D=2026-06-13`) and writes the scenes it drops to
+  `slcs-excluded-<product>.csv` with the reason.
+- Needs opera-sds-pcm PR #1564 or later in the clone (`./setup.sh --update`
+  after a merge); PR #1541, which it includes, verifies every CMR listing
+  against CMR's own count and refuses to cache a short one.
 
 ### Environment overrides
 
