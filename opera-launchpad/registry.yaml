@@ -84,9 +84,9 @@ products:
           - name: criteria
             flag: "--criteria"
             type: choice
-            choices: ["corrected", "strict"]
-            default: "corrected"
-            help: "corrected: same tile and pass, overlapping RTC bursts. strict: exact extent, equal bursts"
+            choices: ["overlap", "exact"]
+            default: "overlap"
+            help: "overlap: same tile and pass, overlapping RTC bursts. exact: same extent, equal bursts"
           - name: keeper
             flag: "--keeper"
             type: choice
@@ -97,7 +97,7 @@ products:
             flag: "--pass-tolerance-seconds"
             type: int
             default: 60
-            help: "Coverage starts chained within this many seconds are one pass (corrected only)"
+            help: "Coverage starts chained within this many seconds are one pass (overlap only)"
           - name: generated_after
             flag: "--generated-after"
             type: datetime_iso

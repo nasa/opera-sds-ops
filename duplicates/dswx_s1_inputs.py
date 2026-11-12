@@ -8,10 +8,10 @@ themselves.
 Two granules are duplicates if they are over the same MGRS tile, in the same acquisition pass, and built
 from overlapping RTC-S1 bursts:
 
-  corrected (default)  same tile and sensor, coverage starts chained within --pass-tolerance-seconds, and
+  overlap (default)    same tile and sensor, coverage starts chained within --pass-tolerance-seconds, and
                        burst sets that intersect. Sets are the connected components of "shares at least
                        one burst", so a product triggered before all of its inputs arrived is found.
-  strict               same tile, exact temporal extent, and equal burst sets.
+  exact                same tile, exact temporal extent, and equal burst sets.
 
 A burst is a unique (RTC burst ID, RTC acquisition time, RTC sensor); the RTC production time and file
 suffix are dropped, so reprocessed RTCs of the same burst count once.
@@ -70,9 +70,9 @@ CMR_TIME_FMT = '%Y-%m-%dT%H:%M:%S.%fZ'
 GRANULE_TIME_FMT = '%Y%m%dT%H%M%SZ'
 QUERY_TIME_FMT = '%Y-%m-%dT%H:%M:%SZ'
 
-CRITERIA_CORRECTED = 'corrected'
-CRITERIA_STRICT = 'strict'
-CRITERIA = [CRITERIA_CORRECTED, CRITERIA_STRICT]
+CRITERIA_OVERLAP = 'overlap'
+CRITERIA_EXACT = 'exact'
+CRITERIA = [CRITERIA_OVERLAP, CRITERIA_EXACT]
 
 KEEPER_LATEST = 'latest'
 KEEPER_MOST_BURSTS = 'most-bursts'
@@ -265,9 +265,9 @@ def read_inventory(inventory_path):
 # Candidate grouping (criteria 1 and 2)
 # ---------------------------------------------------------------------------------------------------------
 
-def find_candidates(granules, criteria=CRITERIA_CORRECTED, pass_tolerance_seconds=DEFAULT_PASS_TOLERANCE_SECONDS):
+def find_candidates(granules, criteria=CRITERIA_OVERLAP, pass_tolerance_seconds=DEFAULT_PASS_TOLERANCE_SECONDS):
     """Groups of more than one granule sharing a tile and pass; only these need the UMM fetch."""
-    if criteria == CRITERIA_STRICT:
+    if criteria == CRITERIA_EXACT:
         groups = _group_by_exact_extent(granules)
     else:
         groups = _group_by_pass(granules, pass_tolerance_seconds)
@@ -492,7 +492,7 @@ def keeper_sort_key(keeper_rule):
 
 def confirm_sets(candidates, signature_map, criteria, keeper_rule):
     """Duplicate sets among the candidates, each ordered keeper first. Also returns uncached URs."""
-    split = split_by_shared_bursts if criteria == CRITERIA_CORRECTED else split_by_equal_bursts
+    split = split_by_shared_bursts if criteria == CRITERIA_OVERLAP else split_by_equal_bursts
     sort_key = keeper_sort_key(keeper_rule)
     confirmed = []
     uncached = set()
@@ -657,7 +657,7 @@ def set_record(group, keeper_rule, generated_after=None, generated_before=None):
 # ---------------------------------------------------------------------------------------------------------
 
 def criteria_description(criteria, pass_tolerance_seconds):
-    if criteria == CRITERIA_STRICT:
+    if criteria == CRITERIA_EXACT:
         return ('same tile ID, same temporal extent (exact match), and the same set of unique '
                 '(RTC burst ID, RTC acquisition time, RTC sensor) inputs')
 
@@ -738,7 +738,7 @@ def build_report(args, ccid, granules, candidates, records, missing, uncached, w
         'detection': 'rtc_inputs',
         'criteria_name': args.criteria,
         'criteria': criteria_description(args.criteria, args.pass_tolerance_seconds),
-        'pass_tolerance_seconds': args.pass_tolerance_seconds if args.criteria == CRITERIA_CORRECTED else None,
+        'pass_tolerance_seconds': args.pass_tolerance_seconds if args.criteria == CRITERIA_OVERLAP else None,
         'keeper_rule': KEEPER_RULE_DESCRIPTIONS[args.keeper],
         'removal_rule': 'non-keepers whose RTC bursts the keeper covers (same or subset), generated inside '
                         'the generation window',

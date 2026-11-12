@@ -37,7 +37,7 @@ def t(seconds):
     return f'2025-01-01T00:{seconds // 60:02d}:{seconds % 60:02d}.000Z'
 
 
-def confirmed(granules, criteria=dsi.CRITERIA_CORRECTED, keeper=dsi.KEEPER_LATEST, tolerance=60):
+def confirmed(granules, criteria=dsi.CRITERIA_OVERLAP, keeper=dsi.KEEPER_LATEST, tolerance=60):
     candidates = dsi.find_candidates(granules, criteria, tolerance)
     sets, uncached = dsi.confirm_sets(candidates, {g['granule_ur']: g for g in granules}, criteria, keeper)
     assert not uncached
@@ -95,12 +95,12 @@ class DuplicateSetTest(unittest.TestCase):
         self.assertEqual(record['duplicate_kind'], 'rtc_relisting')
         self.assertEqual(record['members'][1]['relation_to_keeper'], dsi.RELATION_SAME)
 
-    def test_strict_needs_exact_extent(self):
+    def test_exact_needs_exact_extent(self):
         inputs = [rtc(b) for b in bursts(3)]
         granules = [granule('T01AAA', '20250101T010000Z', t(0), inputs=inputs),
                     granule('T01AAA', '20250102T010000Z', t(1), inputs=inputs)]
 
-        self.assertEqual(confirmed(granules, dsi.CRITERIA_STRICT), [])
+        self.assertEqual(confirmed(granules, dsi.CRITERIA_EXACT), [])
         self.assertEqual(len(confirmed(granules)), 1)
 
     def test_latest_keeper_with_fewer_bursts_keeps_the_more_complete_copy(self):
@@ -172,7 +172,7 @@ class ReportSchemaTest(unittest.TestCase):
         granules = [granule('T01AAA', '20250101T010000Z', t(0), inputs=inputs),
                     granule('T01AAA', '20250102T010000Z', t(0), inputs=inputs),
                     granule('T01AAB', '20250101T010000Z', t(0), inputs=inputs)]
-        args = SimpleNamespace(product='DSWX_S1', venue='PROD', criteria=dsi.CRITERIA_CORRECTED,
+        args = SimpleNamespace(product='DSWX_S1', venue='PROD', criteria=dsi.CRITERIA_OVERLAP,
                                keeper=dsi.KEEPER_LATEST, pass_tolerance_seconds=60, start_date=None,
                                end_date=None, generated_after=None, generated_before=None, facet='both')
         records = confirmed(granules)

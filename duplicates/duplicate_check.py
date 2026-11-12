@@ -474,10 +474,10 @@ def get_parser():
     inputs.add_argument(
         '--criteria',
         choices=dsi.CRITERIA,
-        default=dsi.CRITERIA_CORRECTED,
-        help=f'`{dsi.CRITERIA_CORRECTED}`: same tile and pass, intersecting RTC burst sets. '
-             f'`{dsi.CRITERIA_STRICT}`: exact temporal extent and equal burst sets. '
-             f'Default: {dsi.CRITERIA_CORRECTED}'
+        default=dsi.CRITERIA_OVERLAP,
+        help=f'`{dsi.CRITERIA_OVERLAP}`: same tile and pass, intersecting RTC burst sets. '
+             f'`{dsi.CRITERIA_EXACT}`: same temporal extent and equal burst sets. '
+             f'Default: {dsi.CRITERIA_OVERLAP}'
     )
 
     inputs.add_argument(
@@ -493,7 +493,7 @@ def get_parser():
         '--pass-tolerance-seconds',
         type=int,
         default=dsi.DEFAULT_PASS_TOLERANCE_SECONDS,
-        help=f'Coverage starts chained within this many seconds are one acquisition pass (corrected '
+        help=f'Coverage starts chained within this many seconds are one acquisition pass (overlap '
              f'criteria only). Default: {dsi.DEFAULT_PASS_TOLERANCE_SECONDS}'
     )
 
