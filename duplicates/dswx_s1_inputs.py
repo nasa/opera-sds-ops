@@ -46,6 +46,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from hashlib import sha1
+from itertools import pairwise
 from pathlib import Path
 
 import backoff
@@ -88,7 +89,7 @@ RELATION_SUBSET = 'subset'
 RELATION_NOT_COVERED = 'not_covered'
 REMOVABLE_RELATIONS = {RELATION_SAME, RELATION_SUBSET}
 
-# Measured over the full collection (cache_20261109): consecutive coverage starts within one pass are at
+# Measured over the full collection (as of 2026-11-09): consecutive coverage starts within one pass are at
 # most 24 s apart (high latitude) and separate passes at least 5,884 s apart (adjacent orbits at high
 # latitude), with nothing in between. Over-wide grouping is harmless - different passes share no bursts -
 # so this leaves headroom on the side that matters.
@@ -578,7 +579,7 @@ def duplicate_kind(group):
     if len({m['burst_sig'] for m in group}) > 1:
         ordered = sorted((m['burst_ids'] for m in group), key=len)
 
-        if all(smaller <= larger for smaller, larger in zip(ordered, ordered[1:])):
+        if all(smaller <= larger for smaller, larger in pairwise(ordered)):
             return 'incomplete_inputs'
 
         return 'divergent_inputs'
